@@ -30,14 +30,19 @@
         {
             splitContainer1 = new SplitContainer();
             tree = new TreeView();
+            panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
+            menuStrip1 = new MenuStrip();
+            toolStripMenuItem1 = new ToolStripMenuItem();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
             splitContainer1.SuspendLayout();
+            panelTabs.SuspendLayout();
             statusStrip1.SuspendLayout();
+            menuStrip1.SuspendLayout();
             SuspendLayout();
             // 
             // splitContainer1
@@ -52,6 +57,7 @@
             // 
             // splitContainer1.Panel2
             // 
+            splitContainer1.Panel2.Controls.Add(panelTabs);
             splitContainer1.Panel2.Controls.Add(statusStrip1);
             splitContainer1.Size = new Size(1904, 1001);
             splitContainer1.SplitterDistance = 517;
@@ -60,11 +66,21 @@
             // tree
             // 
             tree.Dock = DockStyle.Fill;
-            tree.Font = new Font("Segoe UI", 12F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
             tree.Size = new Size(517, 1001);
             tree.TabIndex = 0;
+            tree.AfterSelect += Tree_AfterSelect;
+            // 
+            // panelTabs
+            // 
+            panelTabs.Controls.Add(menuStrip1);
+            panelTabs.Dock = DockStyle.Fill;
+            panelTabs.Location = new Point(0, 0);
+            panelTabs.Name = "panelTabs";
+            panelTabs.Size = new Size(1383, 979);
+            panelTabs.TabIndex = 1;
             // 
             // statusStrip1
             // 
@@ -86,12 +102,29 @@
             lblProgress.Size = new Size(16, 17);
             lblProgress.Text = "...";
             // 
+            // menuStrip1
+            // 
+            menuStrip1.Items.AddRange(new ToolStripItem[] { toolStripMenuItem1 });
+            menuStrip1.Location = new Point(0, 0);
+            menuStrip1.Name = "menuStrip1";
+            menuStrip1.RenderMode = ToolStripRenderMode.Professional;
+            menuStrip1.Size = new Size(1383, 24);
+            menuStrip1.TabIndex = 0;
+            menuStrip1.Text = "menuStrip1";
+            // 
+            // toolStripMenuItem1
+            // 
+            toolStripMenuItem1.Name = "toolStripMenuItem1";
+            toolStripMenuItem1.Size = new Size(54, 20);
+            toolStripMenuItem1.Text = "Search";
+            // 
             // frmMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1904, 1001);
             Controls.Add(splitContainer1);
+            MainMenuStrip = menuStrip1;
             Name = "frmMain";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Monovera";
@@ -102,8 +135,12 @@
             splitContainer1.Panel2.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
+            panelTabs.ResumeLayout(false);
+            panelTabs.PerformLayout();
             statusStrip1.ResumeLayout(false);
             statusStrip1.PerformLayout();
+            menuStrip1.ResumeLayout(false);
+            menuStrip1.PerformLayout();
             ResumeLayout(false);
         }
 
@@ -114,5 +151,8 @@
         private StatusStrip statusStrip1;
         private ToolStripProgressBar pbProgress;
         private ToolStripStatusLabel lblProgress;
+        private Panel panelTabs;
+        private MenuStrip menuStrip1;
+        private ToolStripMenuItem toolStripMenuItem1;
     }
 }
