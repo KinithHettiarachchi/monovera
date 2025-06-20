@@ -7,6 +7,8 @@ using System.Web;
 using SharpSvn;
 using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Web.WebView2.Core;
+using System.Drawing.Drawing2D;
+using System.Xml.Linq;
 
 namespace Monovera
 {
@@ -35,9 +37,110 @@ namespace Monovera
             };
 
             tabDetails.SelectedIndexChanged += TabDetails_SelectedIndexChanged;
+            tabDetails.ShowToolTips = true;
+            tabDetails.DrawMode = TabDrawMode.OwnerDrawFixed;
+            tabDetails.DrawItem += TabDetails_DrawItem;
+            tabDetails.MouseDown += tabDetails_MouseDown;
+            tabDetails.ItemSize = new Size(200, 30); // ← Set your custom width and height
+            tabDetails.Padding = new Point(40, 5); // space for X button
             panelTabs.Controls.Add(tabDetails);
         }
 
+        private void TabDetails_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            var tabControl = sender as TabControl;
+            var tabPage = tabControl.TabPages[e.Index];
+            var tabRect = tabControl.GetTabRect(e.Index);
+
+            using var g = e.Graphics;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+            bool isSelected = tabControl.SelectedIndex == e.Index;
+
+            // Background
+            using var background = new SolidBrush(isSelected ? Color.White : Color.LightGray);
+            g.FillRectangle(background, tabRect);
+
+            int padding = 6;
+            int iconSize = 16;
+            int closeSize = 16;
+            int spacing = 6;
+
+            int xOffset = tabRect.X + padding;
+
+            // Draw icon if available
+            if (tabControl.ImageList != null &&
+                !string.IsNullOrEmpty(tabPage.ImageKey) &&
+                tabControl.ImageList.Images.ContainsKey(tabPage.ImageKey))
+            {
+                g.DrawImage(tabControl.ImageList.Images[tabPage.ImageKey], xOffset, tabRect.Y + (tabRect.Height - iconSize) / 2, iconSize, iconSize);
+                xOffset += iconSize + spacing;
+            }
+
+            // Draw tab text
+            string text = tabPage.Text;
+            using var font = new Font("Segoe UI", 9f, FontStyle.Regular);
+            using var textBrush = new SolidBrush(Color.Black);
+
+            SizeF textSize = g.MeasureString(text, font);
+            float textY = tabRect.Y + (tabRect.Height - textSize.Height) / 2;
+            g.DrawString(text, font, textBrush, xOffset, textY);
+            xOffset += (int)textSize.Width + spacing;
+
+            // Draw close "X" button as square with rounded corners
+            int closeX = tabRect.Right - closeSize - padding;
+            int closeY = tabRect.Y + (tabRect.Height - closeSize) / 2;
+            var closeRect = new Rectangle(closeX, closeY, closeSize, closeSize);
+
+            using var closeBg = new SolidBrush(Color.FromArgb(220, 50, 50));
+            using var closeFg = new SolidBrush(Color.White);
+            using (var path = RoundedRect(closeRect, 4)) // Rounded square with 4px corner radius
+            {
+                g.FillPath(closeBg, path);
+            }
+
+            using var closeFont = new Font("Segoe UI", 9, FontStyle.Bold);
+            var stringFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+            g.DrawString("×", closeFont, closeFg, closeRect, stringFormat);
+
+            // Store the close rect for MouseDown event
+            tabPage.Tag = closeRect;
+        }
+
+        private GraphicsPath RoundedRect(Rectangle bounds, int radius)
+        {
+            int diameter = radius * 2;
+            var path = new GraphicsPath();
+
+            if (radius == 0)
+            {
+                path.AddRectangle(bounds);
+                return path;
+            }
+
+            path.StartFigure();
+            path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+            path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+
+            return path;
+        }
+
+        private void tabDetails_MouseDown(object sender, MouseEventArgs e)
+        {
+            for (int i = 0; i < tabDetails.TabPages.Count; i++)
+            {
+                var tab = tabDetails.TabPages[i];
+                if (tab.Tag is Rectangle closeRect && closeRect.Contains(e.Location))
+                {
+                    tabDetails.TabPages.Remove(tab);
+                    break;
+                }
+            }
+        }
+     
         private void InitializeIcons()
         {
             ImageList icons = new ImageList();
@@ -55,11 +158,12 @@ namespace Monovera
                 { "folder", "type_folder.png" },
                 { "definition", "type_definition.png" },
                 { "element", "type_element.png" },
+                { "test", "type_test.png" },
                 { "menu", "type_menu.png" },
                 { "draft", "status_draft.png" },
                 { "published", "status_published.png" },
                 { "rejected", "status_rejected.png" },
-                { "tood", "status_todo.png" }
+                { "todo", "status_todo.png" }
             };
 
             foreach (var kvp in iconDefinitions)
@@ -391,7 +495,7 @@ namespace Monovera
             if (lower.StartsWith("technical")) return "technical";
             if (lower.StartsWith("project")) return "project";
             if (lower.StartsWith("menu")) return "menu";
-
+            if (lower.StartsWith("test")) return "test";
             return "";
         }
 
@@ -400,7 +504,16 @@ namespace Monovera
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
 
-            // Prevent duplicate tabs
+            // Get the node icon (assumes ImageKey is set)
+            string iconUrl = null;
+            if (tree.ImageList != null && e.Node.ImageKey != null && tree.ImageList.Images.ContainsKey(e.Node.ImageKey))
+            {
+                using var ms = new MemoryStream();
+                tree.ImageList.Images[e.Node.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                string base64 = Convert.ToBase64String(ms.ToArray());
+                iconUrl = $"data:image/png;base64,{base64}";
+            }
+
             foreach (TabPage page in tabDetails.TabPages)
             {
                 if (page.Text == issueKey)
@@ -427,355 +540,394 @@ namespace Monovera
 
                 string summary = fields.GetProperty("summary").GetString();
                 string htmlDesc = renderedFields.GetProperty("description").GetString() ?? "";
-
-                var innerTabs = new TabControl { Dock = DockStyle.Fill };
-
-                // Description tab with WebView2
-                var descriptionTab = new TabPage("Description");
-                var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-
-                descriptionTab.Controls.Add(webView);
-
-                await webView.EnsureCoreWebView2Async();
-
-                // Suppress JS dialogs
-                webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
-                {
-                    var deferral = args.GetDeferral();
-                    try
-                    {
-                        args.Accept();
-                    }
-                    finally
-                    {
-                        deferral.Complete();
-                    }
-                };
-
-                string header = $"<h2>{WebUtility.HtmlEncode(summary)} [{issueKey}]</h2>";
                 string resolvedDesc = ReplaceJiraLinksAndSVNFeatures(htmlDesc);
 
-                string lightModeHtml = $@"
+                string encodedSummary = WebUtility.HtmlEncode(summary);
+                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                string headerLine = $"{iconImg}<strong>{encodedSummary} [{issueKey}]</strong>";
+
+                string encodedJson = WebUtility.HtmlEncode(FormatJson(json));
+
+                string BuildLinksTable(string title, string linkType, string prop)
+                {
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"<div class='subsection'><h4>{title}</h4><table><tbody>");
+
+                    if (fields.TryGetProperty("issuelinks", out var links))
+                    {
+                        foreach (var link in links.EnumerateArray())
+                        {
+                            if (link.GetProperty("type").GetProperty("name").GetString() == linkType)
+                            {
+                                JsonElement issueElem = prop == null
+                                    ? (link.TryGetProperty("inwardIssue", out var inw) ? inw :
+                                       link.TryGetProperty("outwardIssue", out var outw) ? outw : default)
+                                    : (link.TryGetProperty(prop, out var target) ? target : default);
+
+                                if (issueElem.ValueKind == JsonValueKind.Object)
+                                {
+                                    var key = issueElem.GetProperty("key").GetString();
+                                    var sum = issueElem.GetProperty("fields").GetProperty("summary").GetString();
+
+                                    // Find TreeNode for this issue key in the TreeView
+                                    TreeNode foundNode = FindNodeByKey(tree.Nodes, key);
+
+                                    string iconImg = "";
+                                    if (foundNode != null &&
+                                        !string.IsNullOrEmpty(foundNode.ImageKey) &&
+                                        tree.ImageList != null &&
+                                        tree.ImageList.Images.ContainsKey(foundNode.ImageKey))
+                                    {
+                                        using var ms = new MemoryStream();
+                                        tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                                        var base64 = Convert.ToBase64String(ms.ToArray());
+                                        iconImg = $"<img src='data:image/png;base64,{base64}' style='height:16px; vertical-align:middle; margin-right:6px;' />";
+                                    }
+
+                                    sb.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImg}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                                }
+                            }
+                        }
+                    }
+
+                    sb.AppendLine("</tbody></table></div>");
+                    return sb.ToString();
+                }
+
+                string linksHtml =
+                    BuildLinksTable("Parent", "Parent/Child", "inwardIssue") +
+                    BuildLinksTable("Children", "Parent/Child", "outwardIssue") +
+                    BuildLinksTable("Related", "Relates", null);
+
+                string historyHtml = "";
+                if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
+                    changelog.TryGetProperty("histories", out var histories))
+                {
+                    var grouped = histories.EnumerateArray()
+                        .Select(h =>
+                        {
+                            var createdRaw = h.GetProperty("created").GetString();
+                            if (!DateTime.TryParse(createdRaw, out var created))
+                                created = DateTime.MinValue;
+
+                            var author = h.GetProperty("author").GetProperty("displayName").GetString();
+
+                            var items = h.GetProperty("items").EnumerateArray()
+                                .Select(item =>
+                                {
+                                    var field = item.GetProperty("field").GetString();
+                                    var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
+                                    var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
+
+                                    string icon = field.ToLower() switch
+                                    {
+                                        "status" => "🟢",
+                                        "assignee" => "👤",
+                                        "priority" => "⚡",
+                                        "summary" => "📝",
+                                        "description" => "📄",
+                                        _ => "🔧"
+                                    };
+
+                                    string highlight = field.ToLower() switch
+                                    {
+                                        "status" => "highlight-status",
+                                        "assignee" => "highlight-assignee",
+                                        "priority" => "highlight-priority",
+                                        _ => ""
+                                    };
+
+                                    return $@"<li class='history-item {highlight}'>{icon} <strong>{field}</strong>: 
+                            <span class='from-val'>{WebUtility.HtmlEncode(from)}</span> → 
+                            <span class='to-val'>{WebUtility.HtmlEncode(to)}</span></li>";
+                                });
+
+                            return new
+                            {
+                                Day = created.Date,
+                                Html = $@"
+                    <div class='history-block'>
+                        <div class='change-header'>{created:HH:mm} by <strong>{HttpUtility.HtmlEncode(author)}</strong></div>
+                        <ul>{string.Join("", items)}</ul>
+                    </div>"
+                            };
+                        })
+                        .GroupBy(x => x.Day)
+                        .OrderByDescending(g => g.Key);
+
+                    var sb = new StringBuilder();
+                    foreach (var group in grouped)
+                    {
+                        sb.AppendLine($@"<div class='history-day'>
+            <h5>{group.Key:yyyy-MM-dd}</h5>
+            {string.Join("\n", group.Select(g => g.Html))}
+        </div>");
+                    }
+
+                    historyHtml = sb.ToString();
+                }
+
+                string html = $@"
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset='UTF-8'>
-  <link href=""https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.css"" rel=""stylesheet"" />
-  <script src=""https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js""></script>
-  <script src=""https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js""></script>
+  <link href='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.css' rel='stylesheet' />
+  <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js'></script>
+  <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
+  <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-
     body {{
-      background-color: #ffffff;
-      color: #1c1c1c;
-      font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: 'Inter', sans-serif;
       margin: 30px;
-      line-height: 1.75;
+      background: #ffffff;
+      color: #1c1c1c;
       font-size: 16px;
-    }}
-
-    h1, h2, h3 {{
-      color: #1a237e;
-      font-weight: 700;
-      margin-bottom: 16px;
+      line-height: 1.7;
     }}
 
     h2 {{
-      font-size: 1.8em;
-      border-bottom: 2px solid #c5cae9;
-      padding-bottom: 6px;
-      margin-bottom: 24px;
+      color: #0d47a1;
+      font-size: 1.9em;
+      margin-bottom: 20px;
+    }}
+
+    details {{
+      margin-bottom: 30px;
+      border: 1px solid #d6e0f5;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }}
+
+    summary {{
+      padding: 14px 20px;
+      background-color: #e8f0fe;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1.2em;
+      border-bottom: 1px solid #d6e0f5;
+    }}
+
+    section {{
+      padding: 16px 20px;
+      background-color: #f9fafe;
+    }}
+
+    .subsection h4 {{
+      margin-top: 20px;
+      margin-bottom: 10px;
+      font-size: 1.1em;
+      color: #1a237e;
+    }}
+
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      background: #fff;
+    }}
+
+    th, td {{
+      padding: 12px 16px;
+      border-bottom: 1px solid #e0e0e0;
+    }}
+
+    tr:hover td {{
+      background-color: #f0f4ff;
     }}
 
     a {{
       color: #1565c0;
       text-decoration: none;
-      font-weight: 500;
-      transition: color 0.2s ease-in-out;
     }}
 
     a:hover {{
       text-decoration: underline;
-      color: #0d47a1;
     }}
 
-    p, li {{
-      font-size: 1em;
-      color: #333333;
-    }}
-
-    ul, ol {{
-      margin-left: 25px;
-      margin-bottom: 15px;
-      padding-left: 1.5em;
-      list-style: none;
-    }}
-
-    ul li::before {{
-      content: '●';
-      color: #42a5f5;
-      font-weight: bold;
-      display: inline-block;
-      width: 1em;
-      margin-left: -1.5em;
-    }}
-
-    ol {{
-      counter-reset: section;
-    }}
-
-    ol li {{
-      counter-increment: section;
-      position: relative;
-    }}
-
-    ol li::before {{
-      content: counter(section) '.';
-      color: #7e57c2;
-      font-weight: bold;
-      display: inline-block;
-      width: 1.5em;
-      margin-left: -1.5em;
-    }}
-
-    table {{
-      border-collapse: separate;
-      border-spacing: 0;
-      width: 100%;
-      margin: 30px 0;
-      background: linear-gradient(to bottom right, #ffffff, #f6f7fb);
-      color: #222;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
-      border-radius: 12px;
-      overflow: hidden;
-      font-size: 0.95em;
-    }}
-
-    th, td {{
-      padding: 16px 20px;
-      text-align: left;
-      border-bottom: 1px solid #e0e0e0;
-    }}
-
-    th {{
-      background: linear-gradient(to right, #e8eaf6, #c5cae9);
-      color: #1c1c1c;
-      font-weight: 700;
-      text-shadow: 0 1px 0 #fff;
-      border-bottom: 2px solid #b0b9e6;
-    }}
-
-    td {{
-      background-color: #ffffff;
-      transition: background-color 0.3s ease, transform 0.1s ease;
-    }}
-
-    tr:nth-child(even) td {{
-      background-color: #f9faff;
-    }}
-
-    tr:hover td {{
-      background-color: #edf1ff;
-      transform: scale(1.005);
-      box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.05);
-    }}
-
-    blockquote {{
-      border-left: 4px solid #64b5f6;
-      padding-left: 16px;
-      color: #555;
-      background-color: #f6f9fc;
-      font-style: italic;
-      margin: 20px 0;
-    }}
-
-    hr {{
-      border: none;
-      height: 1px;
-      background-color: #dcdcdc;
-      margin: 30px 0;
-    }}
-
-    code {{
-      background-color: #f3f3f3;
-      color: #000;
-      font-family: monospace;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 90%;
-    }}
-
-    pre {{
-      background-color: #f5f5f5;
-      padding: 12px;
+    pre[class*='language-'] {{
+      background: #f5f5f5;
+      padding: 16px;
       border-radius: 6px;
       overflow-x: auto;
-      font-size: 90%;
-      line-height: 1.6;
+      font-size: 0.9em;
     }}
 
-    .panel {{
-      background-color: #f4f6ff;
-      border: 1px solid #3f51b5; /* rich blue border */
-      border-radius: 6px;
-      margin: 20px 0;
-      padding: 0;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
-    }}
+    .history-day {{
+  margin: 24px 0;
+  border-left: 4px solid #1e88e5;
+  padding-left: 16px;
+}}
 
-    .panelContent {{
-      background-color: #fdfdff;
-      color: #1c1c1c;
-      padding: 16px 20px;
-      border-radius: 6px;
-      line-height: 1.7;
-    }}
+.history-day h5 {{
+  font-size: 1.2em;
+  color: #0d47a1;
+  margin-bottom: 8px;
+}}
+
+.history-block {{
+  background: #f0f8ff;
+  padding: 12px 16px;
+  margin-bottom: 10px;
+  border: 1px solid #bbdefb;
+  border-radius: 6px;
+  box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
+}}
+
+.change-header {{
+  font-weight: 600;
+  color: #1565c0;
+  margin-bottom: 6px;
+}}
+
+.history-item {{
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}}
+
+.from-val {{
+  color: #d32f2f;
+}}
+
+.to-val {{
+  color: #2e7d32;
+}}
+
+.highlight-status {{
+  background: #fffde7;
+  padding: 2px 6px;
+  border-radius: 4px;
+}}
+
+.highlight-assignee {{
+  background: #e8f5e9;
+  padding: 2px 6px;
+  border-radius: 4px;
+}}
+
+.highlight-priority {{
+  background: #fce4ec;
+  padding: 2px 6px;
+  border-radius: 4px;
+}}
   </style>
 </head>
 <body>
-  {header}
-  {resolvedDesc}
+  <h2>{headerLine}</h2>
+
+  <details open>
+    <summary>Description</summary>
+    <section>{resolvedDesc}</section>
+  </details>
+
+  <details open>
+    <summary>Links</summary>
+    <section>{linksHtml}</section>
+  </details>
+
+<details>
+  <summary>History</summary>
+  <section>{historyHtml}</section>
+</details>
+
+  <details>
+    <summary>Response</summary>
+    <section>
+      <pre class='language-json'><code>{encodedJson}</code></pre>
+    </section>
+  </details>
+
+  <script>
+    Prism.highlightAll();
+
+    document.querySelectorAll('a').forEach(link => {{
+      link.addEventListener('click', e => {{
+        e.preventDefault();
+        let key = link.dataset.key || link.innerText.match(/\b[A-Z]+-\d+\b/)?.[0];
+        if (key) window.chrome.webview.postMessage(key);
+      }});
+    }});
+  </script>
 </body>
-</html>
-";
+</html>";
 
-                webView.NavigateToString(lightModeHtml);
+                var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                await webView.EnsureCoreWebView2Async();
 
-                // Setup link click interception
+                webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
+                {
+                    var deferral = args.GetDeferral();
+                    try { args.Accept(); } finally { deferral.Complete(); }
+                };
+
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
-                webView.CoreWebView2.DOMContentLoaded -= CoreWebView2_DOMContentLoaded;
-                webView.CoreWebView2.DOMContentLoaded += CoreWebView2_DOMContentLoaded;
-
-                void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs args)
+                /* Set tab page icon */
+                // Ensure your TabControl has an ImageList
+                if (tabDetails.ImageList == null)
                 {
-                    string message = args.TryGetWebMessageAsString();
-                    if (!string.IsNullOrWhiteSpace(message))
+                    tabDetails.ImageList = new ImageList();
+                    tabDetails.ImageList.ImageSize = new Size(16, 16); // optional
+                }
+
+                Image iconImage = null;
+                string iconKey = issueKey; // or any unique key
+
+                // Convert base64 image URL to actual Image
+                if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
+                {
+                    try
                     {
-                        SelectAndLoadTreeNode(message); // This should select and highlight the node
+                        string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
+                        byte[] bytes = Convert.FromBase64String(base64);
+                        using var ms = new MemoryStream(bytes);
+                        iconImage = Image.FromStream(ms);
+
+                        if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                            tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                    }
+                    catch
+                    {
+                        // fallback or log
                     }
                 }
 
-                void CoreWebView2_DOMContentLoaded(object sender, CoreWebView2DOMContentLoadedEventArgs args)
+                // Create tab with icon and tooltip
+                var page = new TabPage(issueKey)
                 {
-                    string js = @"
-        document.querySelectorAll('a').forEach(a => {
-            a.addEventListener('click', e => {
-                e.preventDefault();
-                let text = a.innerText;
-                let match = text.match(/\b[A-Z]+-\d+\b/);
-                if (match) {
-                    window.chrome.webview.postMessage(match[0]);
-                }
-            });
-        });
-    ";
-                    _ = webView.ExecuteScriptAsync(js);
-                }
-
-
-                // Links tab
-                var linksTab = new TabPage("Links");
-                var linksPanel = new FlowLayoutPanel
-                {
-                    Dock = DockStyle.Fill,
-                    AutoScroll = true,
-                    FlowDirection = FlowDirection.TopDown,
-                    WrapContents = false
+                    ImageKey = iconKey,
+                    ToolTipText = $"{summary} [{issueKey}]"
                 };
 
-                AddLinkSection("Parent", fields, linksPanel, "inwardIssue", "Parent/Child");
-                AddLinkSection("Children", fields, linksPanel, "outwardIssue", "Parent/Child");
-                AddLinkSection("Related", fields, linksPanel, null, "Relates");
+                page.Controls.Add(webView);
+                tabDetails.TabPages.Add(page);
+                tabDetails.SelectedTab = page;
 
-                linksTab.Controls.Add(linksPanel);
-                innerTabs.TabPages.Add(linksTab);
+                webView.NavigateToString(html);
 
-                // JSON tab
-                var jsonTab = new TabPage("Response");
-                var jsonBox = new TextBox
-                {
-                    Multiline = true,
-                    Dock = DockStyle.Fill,
-                    ScrollBars = ScrollBars.Both,
-                    ReadOnly = true,
-                    Font = new Font("Consolas", 12),
-                    Text = FormatJson(json)
-                };
-                jsonTab.Controls.Add(jsonBox);
-                innerTabs.TabPages.Add(jsonTab);
-
-                // Add Description tab last so it shows first (optional)
-                innerTabs.TabPages.Insert(0, descriptionTab);
-
-                // Add outer tab to main tab control
-                var outerTab = new TabPage(issueKey);
-                outerTab.Controls.Add(innerTabs);
-                tabDetails.TabPages.Add(outerTab);
-
-                // Select Description and outer tabs
-                innerTabs.SelectedTab = descriptionTab;
-                tabDetails.SelectedTab = outerTab;
-
-                // Keep tree node focused and visible
                 tree.SelectedNode = e.Node;
-                tree.SelectedNode?.EnsureVisible();
+                e.Node.EnsureVisible();
                 tree.Focus();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to load issue details: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Could not connect to featch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
 
-
-
-        private void AddLinkSection(string title, JsonElement fields, Control container, string issueProp, string linkType)
+        private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            var label = new Label { Text = title, Font = new Font("Segoe UI", 10, FontStyle.Bold), AutoSize = true };
-            container.Controls.Add(label);
-
-            if (fields.TryGetProperty("issuelinks", out var links))
+            string key = e.TryGetWebMessageAsString();
+            if (!string.IsNullOrWhiteSpace(key))
             {
-                foreach (var link in links.EnumerateArray())
-                {
-                    if (link.GetProperty("type").GetProperty("name").GetString() == linkType)
-                    {
-                        JsonElement issueElem;
-                        if (issueProp == null)
-                        {
-                            issueElem = link.TryGetProperty("inwardIssue", out var inw) ? inw :
-                                         link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
-                        }
-                        else if (link.TryGetProperty(issueProp, out var targetIssue))
-                        {
-                            issueElem = targetIssue;
-                        }
-                        else continue;
-
-                        string key = issueElem.GetProperty("key").GetString();
-                        string summary = issueElem.GetProperty("fields").GetProperty("summary").GetString();
-
-                        var linkLabel = new LinkLabel
-                        {
-                            Text = "\u2022 " + summary + " [" + key + "]",
-                            Tag = key,
-                            AutoSize = true,
-                            LinkBehavior = LinkBehavior.HoverUnderline
-                        };
-
-                        linkLabel.ForeColor = Color.Black;
-                        linkLabel.Font = new Font(linkLabel.Font.FontFamily, 12, linkLabel.Font.Style);
-
-                        linkLabel.Click += (s, e) => SelectAndLoadTreeNode(key);
-                        container.Controls.Add(linkLabel);
-                    }
-                }
+                SelectAndLoadTreeNode(key); // your logic to find + select tree node
             }
         }
+
         private string ReplaceJiraLinksAndSVNFeatures(string htmlDesc)
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
@@ -893,12 +1045,39 @@ namespace Monovera
                 }
             });
 
+            // Replace inline Jira attachment images with embedded base64 images
+            htmlDesc = Regex.Replace(htmlDesc, @"<img\s+[^>]*src\s*=\s*[""'](/rest/api/3/attachment/content/(\d+))[""'][^>]*>", match =>
+            {
+                string relativeUrl = match.Groups[1].Value;
+                string attachmentId = match.Groups[2].Value;
+
+                try
+                {
+                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    using var client = new HttpClient();
+                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                    // Jira requires redirect following for attachment download
+                    using var response = client.GetAsync(relativeUrl).Result;
+                    response.EnsureSuccessStatusCode();
+                    var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
+
+                    string base64 = Convert.ToBase64String(imageBytes);
+                    string contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+
+                    return $"<img src=\"data:{contentType};base64,{base64}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />";
+                }
+                catch (Exception ex)
+                {
+                    return $"<div style='color:red;'>⚠ Failed to load attachment ID {attachmentId}: {ex.Message}</div>";
+                }
+            });
+
+
 
             return htmlDesc;
         }
-
-
-
 
         private void SelectAndLoadTreeNode(string key)
         {

@@ -28,21 +28,19 @@
         /// </summary>
         private void InitializeComponent()
         {
+            components = new System.ComponentModel.Container();
             splitContainer1 = new SplitContainer();
             tree = new TreeView();
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
-            menuStrip1 = new MenuStrip();
-            toolStripMenuItem1 = new ToolStripMenuItem();
+            toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
             splitContainer1.SuspendLayout();
-            panelTabs.SuspendLayout();
             statusStrip1.SuspendLayout();
-            menuStrip1.SuspendLayout();
             SuspendLayout();
             // 
             // splitContainer1
@@ -75,7 +73,6 @@
             // 
             // panelTabs
             // 
-            panelTabs.Controls.Add(menuStrip1);
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
@@ -102,21 +99,9 @@
             lblProgress.Size = new Size(16, 17);
             lblProgress.Text = "...";
             // 
-            // menuStrip1
+            // toolTip1
             // 
-            menuStrip1.Items.AddRange(new ToolStripItem[] { toolStripMenuItem1 });
-            menuStrip1.Location = new Point(0, 0);
-            menuStrip1.Name = "menuStrip1";
-            menuStrip1.RenderMode = ToolStripRenderMode.Professional;
-            menuStrip1.Size = new Size(1383, 24);
-            menuStrip1.TabIndex = 0;
-            menuStrip1.Text = "menuStrip1";
-            // 
-            // toolStripMenuItem1
-            // 
-            toolStripMenuItem1.Name = "toolStripMenuItem1";
-            toolStripMenuItem1.Size = new Size(54, 20);
-            toolStripMenuItem1.Text = "Search";
+            toolTip1.ToolTipIcon = ToolTipIcon.Info;
             // 
             // frmMain
             // 
@@ -124,7 +109,6 @@
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1904, 1001);
             Controls.Add(splitContainer1);
-            MainMenuStrip = menuStrip1;
             Name = "frmMain";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "Monovera";
@@ -135,12 +119,8 @@
             splitContainer1.Panel2.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
-            panelTabs.ResumeLayout(false);
-            panelTabs.PerformLayout();
             statusStrip1.ResumeLayout(false);
             statusStrip1.PerformLayout();
-            menuStrip1.ResumeLayout(false);
-            menuStrip1.PerformLayout();
             ResumeLayout(false);
         }
 
@@ -152,7 +132,6 @@
         private ToolStripProgressBar pbProgress;
         private ToolStripStatusLabel lblProgress;
         private Panel panelTabs;
-        private MenuStrip menuStrip1;
-        private ToolStripMenuItem toolStripMenuItem1;
+        private ToolTip toolTip1;
     }
 }
