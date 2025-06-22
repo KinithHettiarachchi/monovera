@@ -94,7 +94,7 @@ Clicking a result auto-navigates the tree to that issue.
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/yourname/monovera.git
+   git clone https://github.com/KinithHettiarachchi/monovera.git
    ```
 
 2. Open the solution in **Visual Studio**.
