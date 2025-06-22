@@ -1486,7 +1486,8 @@ function showDiffOverlay(from, to) {
 
                 if (issueDict.TryGetValue(key, out var issue))
                 {
-                    return $"<a href=\"#\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+
                 }
 
                 return $"<a href=\"#\">[{key}]</a>";
@@ -1504,7 +1505,7 @@ function showDiffOverlay(from, to) {
 
                 if (!string.IsNullOrEmpty(key) && issueDict.TryGetValue(key, out var issue))
                 {
-                    return $"<a href=\"#\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
                 }
 
                 return HttpUtility.HtmlEncode(label);
@@ -1538,7 +1539,7 @@ function showDiffOverlay(from, to) {
 
                 if (issueDict.TryGetValue(key, out var issue))
                 {
-                    return $"<a href=\"#\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
                 }
 
                 return $"<a href=\"#\">[{key}]</a>";
