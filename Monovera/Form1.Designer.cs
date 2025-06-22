@@ -29,12 +29,14 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmMain));
             splitContainer1 = new SplitContainer();
             tree = new TreeView();
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
+            toolStripStatusLabel1 = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -81,7 +83,7 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { pbProgress, lblProgress });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { pbProgress, lblProgress, toolStripStatusLabel1 });
             statusStrip1.Location = new Point(0, 979);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.Size = new Size(1383, 22);
@@ -99,6 +101,12 @@
             lblProgress.Size = new Size(16, 17);
             lblProgress.Text = "...";
             // 
+            // toolStripStatusLabel1
+            // 
+            toolStripStatusLabel1.Name = "toolStripStatusLabel1";
+            toolStripStatusLabel1.Size = new Size(133, 17);
+            toolStripStatusLabel1.Text = "Search = Ctrl + Shift + S";
+            // 
             // toolTip1
             // 
             toolTip1.ToolTipIcon = ToolTipIcon.Info;
@@ -109,9 +117,10 @@
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1904, 1001);
             Controls.Add(splitContainer1);
+            Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "frmMain";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "Monovera";
+            Text = "M O N O V E R A ";
             WindowState = FormWindowState.Maximized;
             Load += frmMain_Load;
             splitContainer1.Panel1.ResumeLayout(false);
@@ -133,5 +142,6 @@
         private ToolStripStatusLabel lblProgress;
         private Panel panelTabs;
         private ToolTip toolTip1;
+        private ToolStripStatusLabel toolStripStatusLabel1;
     }
 }

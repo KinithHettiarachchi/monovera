@@ -35,7 +35,7 @@ namespace Monovera
         {
             InitializeComponent();
             InitializeIcons();
-   
+
             //Tabs for right side
             tabDetails = new TabControl
             {
@@ -147,20 +147,25 @@ namespace Monovera
                 }
             }
         }
-     
+
+        Dictionary<string, string> iconDefinitions;
+
+
         private void InitializeIcons()
         {
             ImageList icons = new ImageList();
             icons.ImageSize = new Size(18, 18);
             string basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images");
 
-            var iconDefinitions = new Dictionary<string, string>
+            iconDefinitions = new Dictionary<string, string>
             {
                 { "user", "type_userreq.png" },
                 { "gui", "type_gui.png" },
+                { "gui component", "type_gui.png" },
                 { "rule", "type_rule.png" },
                 { "technical", "type_technical.png" },
                 { "entity", "type_entity.png" },
+                { "data entity", "type_entity.png" },
                 { "project", "type_project.png" },
                 { "folder", "type_folder.png" },
                 { "definition", "type_definition.png" },
@@ -170,8 +175,12 @@ namespace Monovera
                 { "draft", "status_draft.png" },
                 { "published", "status_published.png" },
                 { "rejected", "status_rejected.png" },
-                { "todo", "status_todo.png" }
+                { "todo", "status_todo.png" },
+                { "parameter", "type_parameter.png" },
+                { "report", "type_report.png" },
+                { "usecase", "type_usecase.png" }
             };
+
 
             foreach (var kvp in iconDefinitions)
             {
@@ -184,6 +193,30 @@ namespace Monovera
             }
 
             tree.ImageList = icons;
+        }
+
+        private string GetIconForType(string issueType)
+        {
+            string lower = issueType.ToLower();
+
+            if (lower.StartsWith("user")) return "user"; // handles "User req" and "User Story"
+            if (lower.StartsWith("gui")) return "gui"; // GUI Component
+            if (lower.StartsWith("gui component")) return "gui component"; // GUI Component
+            if (lower.StartsWith("rule")) return "rule";
+            if (lower.StartsWith("definition")) return "definition";
+            if (lower.StartsWith("entity")) return "entity";
+            if (lower.StartsWith("data entity")) return "entity";
+            if (lower.StartsWith("element")) return "element";
+            if (lower.StartsWith("folder")) return "folder";
+            if (lower.StartsWith("technical")) return "technical";
+            if (lower.StartsWith("project")) return "project";
+            if (lower.StartsWith("menu")) return "menu";
+            if (lower.StartsWith("test")) return "test";
+            if (lower.StartsWith("parameter")) return "parameter";
+            if (lower.StartsWith("report")) return "report";
+            if (lower.StartsWith("use case")) return "usecase";
+
+            return "";
         }
 
         public class JiraIssue
@@ -486,24 +519,6 @@ namespace Monovera
                 ImageKey = iconKey,
                 SelectedImageKey = iconKey
             };
-        }
-
-        private string GetIconForType(string issueType)
-        {
-            string lower = issueType.ToLower();
-
-            if (lower.StartsWith("user")) return "user";
-            if (lower.StartsWith("gui")) return "gui";
-            if (lower.StartsWith("rule")) return "rule";
-            if (lower.StartsWith("definition")) return "definition";
-            if (lower.StartsWith("data entity")) return "entity";
-            if (lower.StartsWith("element")) return "element";
-            if (lower.StartsWith("folder")) return "folder";
-            if (lower.StartsWith("technical")) return "technical";
-            if (lower.StartsWith("project")) return "project";
-            if (lower.StartsWith("menu")) return "menu";
-            if (lower.StartsWith("test")) return "test";
-            return "";
         }
 
         private async void Tree_AfterSelect(object sender, TreeViewEventArgs e)
@@ -853,7 +868,7 @@ function scrollAttachments(id, direction) {{
 
                     var sb = new StringBuilder();
 
-                    
+
                     foreach (var group in grouped)
                     {
                         sb.AppendLine($@"<div class='history-day'>
@@ -1679,6 +1694,22 @@ function showDiffOverlay(from, to) {
             if (string.IsNullOrEmpty(issueKey)) return;
             SelectAndLoadTreeNode(issueKey);
             //SelectTreeNodeByKey(issueKey);
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.Shift | Keys.S))
+            {
+                ShowSearchDialog();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private void ShowSearchDialog()
+        {
+            var dialog = new SearchDialog(issueDict, tree,jiraEmail,jiraToken,jiraBaseUrl,projectList, iconDefinitions);
+            dialog.Show(this); // non-modal
         }
     }
 }
