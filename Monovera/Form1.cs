@@ -11,6 +11,11 @@ using System.Drawing.Drawing2D;
 using System.Xml.Linq;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using System.Drawing;
+using System.Windows.Forms;
+using System.Diagnostics;
+using static System.Net.Mime.MediaTypeNames;
+using System.Security.Policy;
+using System.Drawing;
 
 namespace Monovera
 {
@@ -81,7 +86,7 @@ namespace Monovera
 
             // Draw tab text
             string text = tabPage.Text;
-            using var font = new Font("Segoe UI", 9f, FontStyle.Regular);
+            using var font = new System.Drawing.Font("Segoe UI", 9f, FontStyle.Regular);
             using var textBrush = new SolidBrush(Color.Black);
 
             SizeF textSize = g.MeasureString(text, font);
@@ -101,7 +106,7 @@ namespace Monovera
                 g.FillPath(closeBg, path);
             }
 
-            using var closeFont = new Font("Segoe UI", 9, FontStyle.Bold);
+            using var closeFont = new System.Drawing.Font("Segoe UI", 9, FontStyle.Bold);
             var stringFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
             g.DrawString("×", closeFont, closeFg, closeRect, stringFormat);
 
@@ -174,7 +179,7 @@ namespace Monovera
                 string path = Path.Combine(basePath, kvp.Value);
                 if (File.Exists(path))
                 {
-                    icons.Images.Add(key, Image.FromFile(path));
+                    icons.Images.Add(key, System.Drawing.Image.FromFile(path));
                 }
             }
 
@@ -613,6 +618,132 @@ namespace Monovera
                     return sb.ToString();
                 }
 
+
+                string attachmentsHtml = "";
+                if (root.TryGetProperty("fields", out var fieldsAttachment) &&
+                    fieldsAttachment.TryGetProperty("attachment", out var attachmentsArray) &&
+                    attachmentsArray.ValueKind == JsonValueKind.Array)
+                {
+                    var authTokenAttachment = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    using var clientAttachment = new HttpClient();
+                    clientAttachment.BaseAddress = new Uri(jiraBaseUrl);
+                    clientAttachment.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authTokenAttachment);
+
+                    var tempDir = Path.Combine(Path.GetTempPath(), "JiraAttachments");
+                    Directory.CreateDirectory(tempDir);
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine("<div class='attachments-strip'>");
+
+                    foreach (var att in attachmentsArray.EnumerateArray())
+                    {
+                        string fileName = att.GetProperty("filename").GetString() ?? "unknown";
+                        string contentUrl = att.GetProperty("content").GetString() ?? "";
+                        string thumbnailUrl = att.TryGetProperty("thumbnail", out var thumbProp) ? thumbProp.GetString() ?? "" : "";
+                        string mimeType = att.TryGetProperty("mimeType", out var mimeProp) ? mimeProp.GetString() ?? "" : "";
+                        string fileExtension = Path.GetExtension(fileName).ToLower();
+                        string created = att.TryGetProperty("created", out var createdProp) ? createdProp.GetString() ?? "" : "";
+                        string author = att.TryGetProperty("author", out var authorProp) && authorProp.TryGetProperty("displayName", out var authorNameProp)
+                                        ? authorNameProp.GetString() ?? "Unknown"
+                                        : "Unknown";
+
+                        bool isImage = mimeType.StartsWith("image/") || fileExtension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp";
+
+                        string localFilePath = Path.Combine(tempDir, fileName);
+
+                        try
+                        {
+                            // Forcefully remove existing file (if any)
+                            if (File.Exists(localFilePath))
+                            {
+                                File.SetAttributes(localFilePath, FileAttributes.Normal); // Clear read-only if set
+                                File.Delete(localFilePath);
+                            }
+
+                            // Always download and write the file
+                            var fileBytes = clientAttachment.GetByteArrayAsync(contentUrl).Result;
+                            File.WriteAllBytes(localFilePath, fileBytes);
+                        }
+                        catch
+                        {
+                            continue; // Skip this attachment on any error
+                        }
+
+
+                        string thumbHtml;
+                        if (isImage)
+                        {
+                            try
+                            {
+                                using var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
+                                responseAttachment.EnsureSuccessStatusCode();
+                                var bytes = responseAttachment.Content.ReadAsByteArrayAsync().Result;
+                                var base64 = Convert.ToBase64String(bytes);
+                                var thumbMime = responseAttachment.Content.Headers.ContentType?.MediaType ?? "image/png";
+
+                                thumbHtml = $"<img src=\"data:{thumbMime};base64,{base64}\" alt=\"{fileName}\" title=\"{fileName}\" />";
+                            }
+                            catch
+                            {
+                                thumbHtml = "<div class='attachment-placeholder'>🖼️</div>";
+                            }
+                        }
+                        else
+                        {
+                            string icon = fileExtension switch
+                            {
+                                ".pdf" => "📄",
+                                ".doc" or ".docx" => "📝",
+                                ".xls" or ".xlsx" => "📊",
+                                ".zip" or ".rar" => "🗜️",
+                                ".txt" => "📃",
+                                _ => "📁"
+                            };
+                            thumbHtml = $"<div class='attachment-placeholder'>{icon}</div>";
+                        }
+
+                        // Format timestamp
+                        string createdDisplay = "";
+                        if (DateTime.TryParse(created, out var createdDt))
+                            createdDisplay = createdDt.ToString("yyyy-MM-dd HH:mm");
+
+                        // File size
+                        string fileSizeDisplay = "";
+                        if (att.TryGetProperty("size", out var sizeProp))
+                        {
+                            long sizeBytes = sizeProp.GetInt64();
+                            fileSizeDisplay = $"{(sizeBytes / 1024.0):0.#} KB";
+                        }
+
+                        // Encode full path for data attributes (not as href)
+                        string encodedLocalPath = "file:///" + Uri.EscapeDataString(localFilePath.Replace("\\", "/"));
+
+                        // Wrapper with preview for images (send path via JS)
+                        string thumbWrapper = isImage
+                            ? $"<a href='#' class='preview-image' data-src='{encodedLocalPath}' title='Preview {fileName}'>{thumbHtml}</a>"
+                            : $"<a class='attachment-link' href='{encodedLocalPath}' target='_blank' title='{fileName}'>{thumbHtml}</a>";
+
+                        sb.AppendLine($@"
+<div class='attachment-card'>
+  {thumbWrapper}
+  <div class='attachment-filename'>{HttpUtility.HtmlEncode(fileName)}</div>
+  <div class='attachment-meta'>
+    {fileSizeDisplay}<br/>
+    {createdDisplay}<br/>
+    by {HttpUtility.HtmlEncode(author)}
+  </div>
+  <div>
+    <a href='#' data-filepath='{encodedLocalPath}' title='Download {HttpUtility.HtmlEncode(fileName)}' class='download-btn'>⬇️ Download</a>
+  </div>
+</div>");
+                    }
+
+                    sb.AppendLine("</div>");
+                    attachmentsHtml = sb.ToString();
+                }
+
+
+
                 string linksHtml =
                     BuildLinksTable("Parent", "Parent/Child", "inwardIssue") +
                     BuildLinksTable("Children", "Parent/Child", "outwardIssue") +
@@ -685,53 +816,7 @@ namespace Monovera
 
                     var sb = new StringBuilder();
 
-                    // Insert your CSS styles here or append combined CSS string
-                    sb.AppendLine(@"
-<style>
-.history-item { font-family: sans-serif; margin-bottom: 5px; }
-.highlight-status { background-color: #f0f9ff; }
-.highlight-assignee { background-color: #fff5f5; }
-.highlight-priority { background-color: #fffaf0; }
-
-.diff-added { color: #007f00; font-weight: bold; }
-.diff-deleted { color: #888; text-decoration: line-through; }
-.view-diff-btn { margin-left: 10px; font-size: 0.9em; cursor: pointer; }
-
-.diff-overlay {
-    position: fixed;
-    top: 5%;
-    left: 10%;
-    width: 80%;
-    height: 70%;
-    background: white;
-    border: 2px solid #ccc;
-    z-index: 9999;
-    overflow: auto;
-    display: none;
-    box-shadow: 0 0 20px rgba(0,0,0,0.3);
-}
-.diff-overlay .diff-close {
-    float: right;
-    margin: 10px;
-    cursor: pointer;
-    font-size: 20px;
-}
-.diff-columns {
-    display: flex;
-    justify-content: space-between;
-    padding: 20px;
-    font-family: monospace;
-    white-space: pre-wrap;
-}
-.diff-columns > div {
-    width: 48%;
-    border: 1px solid #eee;
-    padding: 10px;
-    background: #f9f9f9;
-}
-</style>
-");
-
+                    
                     foreach (var group in grouped)
                     {
                         sb.AppendLine($@"<div class='history-day'>
@@ -749,16 +834,56 @@ namespace Monovera
 </div>
 
 <script>
+// Simple char-level diff highlighter (similar to C# DiffText)
+function simpleDiffHtml(from, to) {
+  let i = 0;
+  let minLen = Math.min(from.length, to.length);
+  let commonPrefix = '';
+
+  while(i < minLen && from[i] === to[i]) {
+    commonPrefix += from[i];
+    i++;
+  }
+
+  let fromDeleted = from.slice(i);
+  let toAdded = to.slice(i);
+
+  // Escape HTML helper
+  function escapeHtml(text) {
+    return text.replace(/&/g, ""&amp;"")
+               .replace(/</g, ""&lt;"")
+               .replace(/>/g, ""&gt;"")
+               .replace(/""/g, ""&quot;"")
+               .replace(/'/g, ""&#039;"");
+  }
+
+  let htmlFrom = escapeHtml(commonPrefix);
+  if(fromDeleted.length > 0) {
+    htmlFrom += `<span class=""diff-deleted"">${escapeHtml(fromDeleted)}</span>`;
+  }
+
+  let htmlTo = escapeHtml(commonPrefix);
+  if(toAdded.length > 0) {
+    htmlTo += `<span class=""diff-added"">${escapeHtml(toAdded)}</span>`;
+  }
+
+  return { htmlFrom, htmlTo };
+}
+
 function showDiffOverlay(from, to) {
-    document.getElementById('diffFrom').textContent = from;
-    document.getElementById('diffTo').textContent = to;
-    document.getElementById('diffOverlay').style.display = 'block';
+  const diffs = simpleDiffHtml(from, to);
+
+  document.getElementById('diffFrom').innerHTML = diffs.htmlFrom;
+  document.getElementById('diffTo').innerHTML = diffs.htmlTo;
+  document.getElementById('diffOverlay').style.display = 'block';
 }
 </script>
+
 ");
 
                     historyHtml = sb.ToString();
                 }
+
                 string html = $@"
 <!DOCTYPE html>
 <html>
@@ -768,7 +893,7 @@ function showDiffOverlay(from, to) {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
-  <style>
+ <style>
   body {{
     font-family: 'Inter', sans-serif;
     margin: 30px;
@@ -814,14 +939,25 @@ function showDiffOverlay(from, to) {
 
   table {{
     width: 100%;
-    border-collapse: collapse;
-    border-radius: 6px;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     background: #fff;
+    margin-bottom: 20px;
   }}
 
-  th, td {{
+  th {{
+    background-color: #e3f2fd;
+    color: #0d47a1;
+    text-align: left;
+    padding: 12px 16px;
+    font-weight: bold;
+    border-bottom: 2px solid #bbdefb;
+  }}
+
+  td {{
     padding: 12px 16px;
     border-bottom: 1px solid #e0e0e0;
   }}
@@ -905,7 +1041,6 @@ function showDiffOverlay(from, to) {
     color: #2e7d32;
   }}
 
-  /* DIFF Enhancements */
   .diff-added {{
     color: #007f00;
     font-weight: bold;
@@ -924,6 +1059,7 @@ function showDiffOverlay(from, to) {
   .view-diff-btn {{
     margin-left: 10px;
     font-size: 0.9em;
+    cursor: pointer;
   }}
 
   .diff-overlay {{
@@ -951,16 +1087,47 @@ function showDiffOverlay(from, to) {
     display: flex;
     justify-content: space-between;
     padding: 20px;
+    font-family: monospace;
+    white-space: pre-wrap;
   }}
 
   .diff-columns > div {{
     width: 48%;
-    white-space: pre-wrap;
     border: 1px solid #eee;
     padding: 10px;
     background: #f9f9f9;
   }}
+
+  /* Attachments Grid View */
+.attachment-card {{border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px;
+  text-align: center;
+  font-size: 0.85em;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 140px; /* limit width per attachment */
+}}
+
+.attachment-filename,
+.attachment-meta,
+.download-btn {{width: 100%; /* full width inside the card */
+  box-sizing: border-box;
+  margin: 4px 0;
+}}
+
+.attachment-meta {{font - size: 0.75em;
+  color: #444;
+  line-height: 1.3;
+}}
+
 </style>
+
 </head>
 <body>
   <h2>{headerLine}</h2>
@@ -968,6 +1135,13 @@ function showDiffOverlay(from, to) {
   <details open>
     <summary>Description</summary>
     <section>{resolvedDesc}</section>
+  </details>
+
+  <details open>
+    <summary>Attachments</summary>
+    <section>
+      {attachmentsHtml}
+    </section>
   </details>
 
   <details open>
@@ -990,16 +1164,54 @@ function showDiffOverlay(from, to) {
   <script>
     Prism.highlightAll();
 
+    // Handle generic links to send simple Jira key messages
     document.querySelectorAll('a').forEach(link => {{
       link.addEventListener('click', e => {{
         e.preventDefault();
-        let key = link.dataset.key || link.innerText.match(/\b[A-Z]+-\d+\b/)?.[0];
-        if (key) window.chrome.webview.postMessage(key);
+        // Ignore download and preview links here (they have special handlers below)
+        if (link.classList.contains('download-btn') || link.classList.contains('preview-image'))
+          return;
+        let key = link.dataset.key || link.innerText.match(/\\b[A-Z]+-\\d+\\b/)?.[0];
+        if (key && window.chrome && window.chrome.webview) {{
+          window.chrome.webview.postMessage(key);
+        }}
+      }});
+    }});
+
+    // Send download requests to WebView2 with file path
+    document.querySelectorAll('.download-btn').forEach(btn => {{
+      btn.addEventListener('click', e => {{
+        e.preventDefault();
+        const path = btn.dataset.filepath;
+        if (window.chrome && window.chrome.webview && path) {{
+          window.chrome.webview.postMessage(JSON.stringify({{ type: 'download', path }}));
+        }}
+      }});
+    }});
+
+    // Send preview requests to WebView2 with image src
+    document.querySelectorAll('.preview-image').forEach(link => {{
+      link.addEventListener('click', e => {{
+        e.preventDefault();
+        const src = link.dataset.src;
+        if (window.chrome && window.chrome.webview && src) {{
+          window.chrome.webview.postMessage(JSON.stringify({{ type: 'preview', path: src }}));
+        }} else {{
+          // Fallback: simple lightbox in browser if WebView2 not present
+          const overlay = document.createElement('div');
+          overlay.className = 'lightbox-overlay';
+          overlay.style.display = 'flex';
+          overlay.innerHTML = `<img src='${{src}}' alt='Preview' />`;
+          overlay.onclick = () => overlay.remove();
+          document.body.appendChild(overlay);
+        }}
       }});
     }});
   </script>
 </body>
 </html>";
+
+
 
                 var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
                 await webView.EnsureCoreWebView2Async();
@@ -1019,7 +1231,7 @@ function showDiffOverlay(from, to) {
                     tabDetails.ImageList.ImageSize = new Size(16, 16);
                 }
 
-                Image iconImage = null;
+                System.Drawing.Image iconImage = null;
                 string iconKey = issueKey;
                 if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
                 {
@@ -1028,7 +1240,7 @@ function showDiffOverlay(from, to) {
                         string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
                         byte[] bytes = Convert.FromBase64String(base64);
                         using var ms = new MemoryStream(bytes);
-                        iconImage = Image.FromStream(ms);
+                        iconImage = System.Drawing.Image.FromStream(ms);
                         if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
                             tabDetails.ImageList.Images.Add(iconKey, iconImage);
                     }
@@ -1097,12 +1309,83 @@ function showDiffOverlay(from, to) {
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            string key = e.TryGetWebMessageAsString();
-            if (!string.IsNullOrWhiteSpace(key))
+            try
             {
-                SelectAndLoadTreeNode(key); // your logic to find + select tree node
+                var message = e.TryGetWebMessageAsString();
+                if (string.IsNullOrWhiteSpace(message)) return;
+
+                // Try to detect if it's JSON or a plain string
+                message = message.Trim();
+
+                if (message.StartsWith("{"))
+                {
+                    using var jsonDoc = JsonDocument.Parse(message);
+                    var root = jsonDoc.RootElement;
+
+                    if (root.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "download")
+                    {
+                        var filePath = root.GetProperty("path").GetString();
+
+                        if (!string.IsNullOrEmpty(filePath))
+                        {
+                            // Strip file:/// and decode
+                            if (filePath.StartsWith("file:///"))
+                                filePath = Uri.UnescapeDataString(filePath.Substring(8)); // removes 'file:///' and keeps path
+
+                            SaveFile(filePath); // your download/open logic
+                        }
+                    }
+                }
+                else
+                {
+                    // Handle plain string messages (e.g. issue keys like REQ-123)
+                    SelectAndLoadTreeNode(message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("WebMessageReceived error: " + ex.Message);
             }
         }
+
+
+        private void SaveFile(string sourceFilePath)
+        {
+            if (!File.Exists(sourceFilePath)) return;
+
+            try
+            {
+                // Create temp folder inside working directory if it doesn't exist
+                string tempFolder = Path.Combine(Directory.GetCurrentDirectory(), "temp");
+                Directory.CreateDirectory(tempFolder);
+
+                // Destination path
+                string destFilePath = Path.Combine(tempFolder, Path.GetFileName(sourceFilePath));
+
+                // Forcefully remove existing file
+                if (File.Exists(destFilePath))
+                {
+                    File.SetAttributes(destFilePath, FileAttributes.Normal); // Remove read-only
+                    File.Delete(destFilePath);
+                }
+
+                // Copy file to temp folder
+                File.Copy(sourceFilePath, destFilePath, overwrite: false); // overwrite not needed now
+
+                // Open the saved file with default app
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = destFilePath,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error saving or opening file: " + ex.Message);
+            }
+        }
+
+
 
         private string ReplaceJiraLinksAndSVNFeatures(string htmlDesc)
         {
