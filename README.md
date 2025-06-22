@@ -1,7 +1,7 @@
 
 # Monovera
 
-**Monovera** is an open-source Windows Forms application that allows users to efficiently **visualize**, **search**, and **navigate** a Jira requirement repository structured using **parent-child relationships**.
+**Monovera** (One Truth) is an open-source Windows Forms application that allows users to efficiently **visualize**, **search**, and **navigate** a Jira requirement repository structured using **parent-child relationships**.
 
 It is ideal for product development, QA, and business analysis teams working with structured Jira data. Monovera provides a user-friendly interface to explore hierarchical issue relationships and access detailed issue information — including attachments, links, history, and even embedded `.feature` files from SVN.
 
