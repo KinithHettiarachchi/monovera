@@ -659,13 +659,14 @@ namespace Monovera
                                         _ => ""
                                     };
 
-                                    // Inline diff display
                                     string inlineDiff = DiffText(from, to);
 
-                                    // Side-by-side diff popup button
-                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{HttpUtility.JavaScriptStringEncode(from)}', '{HttpUtility.JavaScriptStringEncode(to)}')"">🔍 View Side-by-Side</button>";
+                                    string fromEsc = HttpUtility.JavaScriptStringEncode(from);
+                                    string toEsc = HttpUtility.JavaScriptStringEncode(to);
 
-                                    return $@"<li class='history-item {highlight}'>{icon} <strong>{field}</strong>: 
+                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View Side-by-Side</button>";
+
+                                    return $@"<li class='history-item {highlight}'>{icon} <strong>{HttpUtility.HtmlEncode(field)}</strong>: 
 <span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
                                 });
 
@@ -683,6 +684,53 @@ namespace Monovera
                         .OrderByDescending(g => g.Key);
 
                     var sb = new StringBuilder();
+
+                    // Insert your CSS styles here or append combined CSS string
+                    sb.AppendLine(@"
+<style>
+.history-item { font-family: sans-serif; margin-bottom: 5px; }
+.highlight-status { background-color: #f0f9ff; }
+.highlight-assignee { background-color: #fff5f5; }
+.highlight-priority { background-color: #fffaf0; }
+
+.diff-added { color: #007f00; font-weight: bold; }
+.diff-deleted { color: #888; text-decoration: line-through; }
+.view-diff-btn { margin-left: 10px; font-size: 0.9em; cursor: pointer; }
+
+.diff-overlay {
+    position: fixed;
+    top: 5%;
+    left: 10%;
+    width: 80%;
+    height: 70%;
+    background: white;
+    border: 2px solid #ccc;
+    z-index: 9999;
+    overflow: auto;
+    display: none;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3);
+}
+.diff-overlay .diff-close {
+    float: right;
+    margin: 10px;
+    cursor: pointer;
+    font-size: 20px;
+}
+.diff-columns {
+    display: flex;
+    justify-content: space-between;
+    padding: 20px;
+    font-family: monospace;
+    white-space: pre-wrap;
+}
+.diff-columns > div {
+    width: 48%;
+    border: 1px solid #eee;
+    padding: 10px;
+    background: #f9f9f9;
+}
+</style>
+");
 
                     foreach (var group in grouped)
                     {
@@ -711,7 +759,6 @@ function showDiffOverlay(from, to) {
 
                     historyHtml = sb.ToString();
                 }
-
                 string html = $@"
 <!DOCTYPE html>
 <html>
@@ -1015,33 +1062,35 @@ function showDiffOverlay(from, to) {
 
         private static string DiffText(string? from, string? to)
         {
-            if (from == to)
-                return $"<span>{WebUtility.HtmlEncode(from ?? "")}</span>";
+            if (from == to) return $"<span>{WebUtility.HtmlEncode(from ?? "")}</span>";
 
             from ??= "";
             to ??= "";
 
             var diff = new StringBuilder();
-            int commonLength = Math.Min(from.Length, to.Length);
+            int minLen = Math.Min(from.Length, to.Length);
             int i = 0;
 
-            // Common prefix
-            while (i < commonLength && from[i] == to[i])
+            // Find common prefix
+            while (i < minLen && from[i] == to[i])
             {
                 diff.Append(WebUtility.HtmlEncode(from[i].ToString()));
                 i++;
             }
 
-            var deleted = from.Length > i ? WebUtility.HtmlEncode(from[i..]) : "";
-            var added = to.Length > i ? WebUtility.HtmlEncode(to[i..]) : "";
-
-            diff.Append(" <span class='diff-arrow'>➡</span> ");
-
-            if (!string.IsNullOrEmpty(deleted))
+            // Deleted part (from)
+            if (i < from.Length)
+            {
+                var deleted = WebUtility.HtmlEncode(from.Substring(i));
                 diff.Append($@"<span class='diff-deleted'>{deleted}</span>");
+            }
 
-            if (!string.IsNullOrEmpty(added))
+            // Added part (to)
+            if (i < to.Length)
+            {
+                var added = WebUtility.HtmlEncode(to.Substring(i));
                 diff.Append($@"<span class='diff-added'>{added}</span>");
+            }
 
             return diff.ToString();
         }
