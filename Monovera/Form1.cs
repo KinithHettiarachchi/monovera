@@ -569,10 +569,14 @@ namespace Monovera
                 string BuildLinksTable(string title, string linkType, string prop)
                 {
                     var sb = new StringBuilder();
-                    sb.AppendLine($"<div class='subsection'><h4>{title}</h4><table><tbody>");
+                    int matchCount = 0;
+
+                    sb.AppendLine($"<div class='subsection'><h4>{title}</h4>");
 
                     if (fields.TryGetProperty("issuelinks", out var links))
                     {
+                        var tableRows = new StringBuilder();
+
                         foreach (var link in links.EnumerateArray())
                         {
                             if (link.TryGetProperty("type", out var typeProp) &&
@@ -580,6 +584,7 @@ namespace Monovera
                                 nameProp.GetString() == linkType)
                             {
                                 JsonElement issueElem = default;
+
                                 if (prop == null)
                                 {
                                     if (!link.TryGetProperty("inwardIssue", out issueElem))
@@ -608,15 +613,32 @@ namespace Monovera
                                         iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:16px; vertical-align:middle; margin-right:6px;' />";
                                     }
 
-                                    sb.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                                    tableRows.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                                    matchCount++;
                                 }
                             }
                         }
+
+                        if (matchCount > 0)
+                        {
+                            sb.AppendLine("<table><tbody>");
+                            sb.Append(tableRows);
+                            sb.AppendLine("</tbody></table>");
+                        }
+                        else
+                        {
+                            sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
+                        }
+                    }
+                    else
+                    {
+                        sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
                     }
 
-                    sb.AppendLine("</tbody></table></div>");
+                    sb.AppendLine("</div>");
                     return sb.ToString();
                 }
+
 
 
                 string attachmentsHtml = "";
@@ -624,106 +646,109 @@ namespace Monovera
                     fieldsAttachment.TryGetProperty("attachment", out var attachmentsArray) &&
                     attachmentsArray.ValueKind == JsonValueKind.Array)
                 {
-                    var authTokenAttachment = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                    using var clientAttachment = new HttpClient();
-                    clientAttachment.BaseAddress = new Uri(jiraBaseUrl);
-                    clientAttachment.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authTokenAttachment);
-
-                    var tempDir = Path.Combine(Path.GetTempPath(), "JiraAttachments");
-                    Directory.CreateDirectory(tempDir);
-
-                    var sb = new StringBuilder();
-                    sb.AppendLine("<div class='attachments-strip'>");
-
-                    foreach (var att in attachmentsArray.EnumerateArray())
+                    if (!attachmentsArray.EnumerateArray().Any())
                     {
-                        string fileName = att.GetProperty("filename").GetString() ?? "unknown";
-                        string contentUrl = att.GetProperty("content").GetString() ?? "";
-                        string thumbnailUrl = att.TryGetProperty("thumbnail", out var thumbProp) ? thumbProp.GetString() ?? "" : "";
-                        string mimeType = att.TryGetProperty("mimeType", out var mimeProp) ? mimeProp.GetString() ?? "" : "";
-                        string fileExtension = Path.GetExtension(fileName).ToLower();
-                        string created = att.TryGetProperty("created", out var createdProp) ? createdProp.GetString() ?? "" : "";
-                        string author = att.TryGetProperty("author", out var authorProp) && authorProp.TryGetProperty("displayName", out var authorNameProp)
-                                        ? authorNameProp.GetString() ?? "Unknown"
-                                        : "Unknown";
+                        attachmentsHtml = "<div class='no-attachments'>No attachments found.</div>";
+                    }
+                    else
+                    {
+                        var authTokenAttachment = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        using var clientAttachment = new HttpClient();
+                        clientAttachment.BaseAddress = new Uri(jiraBaseUrl);
+                        clientAttachment.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authTokenAttachment);
 
-                        bool isImage = mimeType.StartsWith("image/") || fileExtension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp";
+                        var tempDir = Path.Combine(Path.GetTempPath(), "JiraAttachments");
+                        Directory.CreateDirectory(tempDir);
 
-                        string localFilePath = Path.Combine(tempDir, fileName);
+                        var sb = new StringBuilder();
+                        string uniqueId = Guid.NewGuid().ToString("N");
 
-                        try
+                        sb.AppendLine($@"
+<div class='attachments-wrapper' id='wrapper-{uniqueId}'>
+  <button class='scroll-btn left' onclick='scrollAttachments(""{uniqueId}"", -1)'>&lt;</button>
+  <div class='attachments-strip' id='strip-{uniqueId}'>");
+
+                        foreach (var att in attachmentsArray.EnumerateArray())
                         {
-                            // Forcefully remove existing file (if any)
-                            if (File.Exists(localFilePath))
-                            {
-                                File.SetAttributes(localFilePath, FileAttributes.Normal); // Clear read-only if set
-                                File.Delete(localFilePath);
-                            }
+                            string fileName = att.GetProperty("filename").GetString() ?? "unknown";
+                            string contentUrl = att.GetProperty("content").GetString() ?? "";
+                            string thumbnailUrl = att.TryGetProperty("thumbnail", out var thumbProp) ? thumbProp.GetString() ?? "" : "";
+                            string mimeType = att.TryGetProperty("mimeType", out var mimeProp) ? mimeProp.GetString() ?? "" : "";
+                            string fileExtension = Path.GetExtension(fileName).ToLower();
+                            string created = att.TryGetProperty("created", out var createdProp) ? createdProp.GetString() ?? "" : "";
+                            string author = att.TryGetProperty("author", out var authorProp) &&
+                                            authorProp.TryGetProperty("displayName", out var authorNameProp)
+                                            ? authorNameProp.GetString() ?? "Unknown"
+                                            : "Unknown";
 
-                            // Always download and write the file
-                            var fileBytes = clientAttachment.GetByteArrayAsync(contentUrl).Result;
-                            File.WriteAllBytes(localFilePath, fileBytes);
-                        }
-                        catch
-                        {
-                            continue; // Skip this attachment on any error
-                        }
+                            bool isImage = mimeType.StartsWith("image/") || fileExtension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp";
 
+                            string localFilePath = Path.Combine(tempDir, fileName);
 
-                        string thumbHtml;
-                        if (isImage)
-                        {
                             try
                             {
-                                using var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
-                                responseAttachment.EnsureSuccessStatusCode();
-                                var bytes = responseAttachment.Content.ReadAsByteArrayAsync().Result;
-                                var base64 = Convert.ToBase64String(bytes);
-                                var thumbMime = responseAttachment.Content.Headers.ContentType?.MediaType ?? "image/png";
+                                if (File.Exists(localFilePath))
+                                {
+                                    File.SetAttributes(localFilePath, FileAttributes.Normal);
+                                    File.Delete(localFilePath);
+                                }
 
-                                thumbHtml = $"<img src=\"data:{thumbMime};base64,{base64}\" alt=\"{fileName}\" title=\"{fileName}\" />";
+                                var fileBytes = clientAttachment.GetByteArrayAsync(contentUrl).Result;
+                                File.WriteAllBytes(localFilePath, fileBytes);
                             }
                             catch
                             {
-                                thumbHtml = "<div class='attachment-placeholder'>🖼️</div>";
+                                continue;
                             }
-                        }
-                        else
-                        {
-                            string icon = fileExtension switch
+
+                            string thumbHtml;
+                            if (isImage)
                             {
-                                ".pdf" => "📄",
-                                ".doc" or ".docx" => "📝",
-                                ".xls" or ".xlsx" => "📊",
-                                ".zip" or ".rar" => "🗜️",
-                                ".txt" => "📃",
-                                _ => "📁"
-                            };
-                            thumbHtml = $"<div class='attachment-placeholder'>{icon}</div>";
-                        }
+                                try
+                                {
+                                    using var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
+                                    responseAttachment.EnsureSuccessStatusCode();
+                                    var bytes = responseAttachment.Content.ReadAsByteArrayAsync().Result;
+                                    var base64 = Convert.ToBase64String(bytes);
+                                    var thumbMime = responseAttachment.Content.Headers.ContentType?.MediaType ?? "image/png";
+                                    thumbHtml = $"<img src=\"data:{thumbMime};base64,{base64}\" alt=\"{fileName}\" title=\"{fileName}\" />";
+                                }
+                                catch
+                                {
+                                    thumbHtml = "<div class='attachment-placeholder'>🖼️</div>";
+                                }
+                            }
+                            else
+                            {
+                                string icon = fileExtension switch
+                                {
+                                    ".pdf" => "📄",
+                                    ".doc" or ".docx" => "📝",
+                                    ".xls" or ".xlsx" => "📊",
+                                    ".zip" or ".rar" => "🗜️",
+                                    ".txt" => "📃",
+                                    _ => "📁"
+                                };
+                                thumbHtml = $"<div class='attachment-placeholder'>{icon}</div>";
+                            }
 
-                        // Format timestamp
-                        string createdDisplay = "";
-                        if (DateTime.TryParse(created, out var createdDt))
-                            createdDisplay = createdDt.ToString("yyyy-MM-dd HH:mm");
+                            string createdDisplay = DateTime.TryParse(created, out var createdDt)
+                                ? createdDt.ToString("yyyy-MM-dd HH:mm")
+                                : "";
 
-                        // File size
-                        string fileSizeDisplay = "";
-                        if (att.TryGetProperty("size", out var sizeProp))
-                        {
-                            long sizeBytes = sizeProp.GetInt64();
-                            fileSizeDisplay = $"{(sizeBytes / 1024.0):0.#} KB";
-                        }
+                            string fileSizeDisplay = "";
+                            if (att.TryGetProperty("size", out var sizeProp))
+                            {
+                                long sizeBytes = sizeProp.GetInt64();
+                                fileSizeDisplay = $"{(sizeBytes / 1024.0):0.#} KB";
+                            }
 
-                        // Encode full path for data attributes (not as href)
-                        string encodedLocalPath = "file:///" + Uri.EscapeDataString(localFilePath.Replace("\\", "/"));
+                            string encodedLocalPath = "file:///" + Uri.EscapeDataString(localFilePath.Replace("\\", "/"));
+                            string thumbWrapper = isImage
+                                ? $"<a href='#' class='preview-image' data-src='{encodedLocalPath}' title='Preview {fileName}'>{thumbHtml}</a>"
+                                : $"<a class='attachment-link' href='{encodedLocalPath}' target='_blank' title='{fileName}'>{thumbHtml}</a>";
 
-                        // Wrapper with preview for images (send path via JS)
-                        string thumbWrapper = isImage
-                            ? $"<a href='#' class='preview-image' data-src='{encodedLocalPath}' title='Preview {fileName}'>{thumbHtml}</a>"
-                            : $"<a class='attachment-link' href='{encodedLocalPath}' target='_blank' title='{fileName}'>{thumbHtml}</a>";
-
-                        sb.AppendLine($@"
+                            sb.AppendLine($@"
 <div class='attachment-card'>
   {thumbWrapper}
   <div class='attachment-filename'>{HttpUtility.HtmlEncode(fileName)}</div>
@@ -736,12 +761,24 @@ namespace Monovera
     <a href='#' data-filepath='{encodedLocalPath}' title='Download {HttpUtility.HtmlEncode(fileName)}' class='download-btn'>⬇️ Download</a>
   </div>
 </div>");
+                        }
+
+                        sb.AppendLine($@"
+  </div>
+  <button class='scroll-btn right' onclick='scrollAttachments(""{uniqueId}"", 1)'>&gt;</button>
+</div>
+<script>
+function scrollAttachments(id, direction) {{
+  const strip = document.getElementById('strip-' + id);
+  if (strip) {{
+    strip.scrollBy({{ left: direction * 200, behavior: 'smooth' }});
+  }}
+}}
+</script>");
+
+                        attachmentsHtml = sb.ToString();
                     }
-
-                    sb.AppendLine("</div>");
-                    attachmentsHtml = sb.ToString();
                 }
-
 
 
                 string linksHtml =
@@ -795,7 +832,7 @@ namespace Monovera
                                     string fromEsc = HttpUtility.JavaScriptStringEncode(from);
                                     string toEsc = HttpUtility.JavaScriptStringEncode(to);
 
-                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View Side-by-Side</button>";
+                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View</button>";
 
                                     return $@"<li class='history-item {highlight}'>{icon} <strong>{HttpUtility.HtmlEncode(field)}</strong>: 
 <span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
@@ -893,241 +930,266 @@ function showDiffOverlay(from, to) {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
- <style>
-  body {{
-    font-family: 'Inter', sans-serif;
-    margin: 30px;
-    background: #ffffff;
-    color: #1c1c1c;
-    font-size: 16px;
-    line-height: 1.7;
-  }}
+  <style>
+    body {{
+      font-family: 'Inter', sans-serif;
+      margin: 30px;
+      background: #ffffff;
+      color: #1c1c1c;
+      font-size: 16px;
+      line-height: 1.7;
+    }}
+    h2 {{
+      color: #0d47a1;
+      font-size: 1.9em;
+      margin-bottom: 20px;
+    }}
+    details {{
+      margin-bottom: 30px;
+      border: 1px solid #d6e0f5;
+      border-radius: 6px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+    }}
+    summary {{
+      padding: 14px 20px;
+      background-color: #e8f0fe;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1.2em;
+      border-bottom: 1px solid #d6e0f5;
+    }}
+    section {{
+      padding: 16px 20px;
+      background-color: #f9fafe;
+    }}
+    .subsection h4 {{
+      margin-top: 20px;
+      margin-bottom: 10px;
+      font-size: 1.1em;
+      color: #1a237e;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      overflow: hidden;
+      background: #fff;
+      margin-bottom: 20px;
+    }}
+    th {{
+      background-color: #e3f2fd;
+      color: #0d47a1;
+      text-align: left;
+      padding: 12px 16px;
+      font-weight: bold;
+      border-bottom: 2px solid #bbdefb;
+    }}
+    td {{
+      padding: 12px 16px;
+      border-bottom: 1px solid #e0e0e0;
+    }}
+    tr:hover td {{
+      background-color: #f0f4ff;
+    }}
+    a {{
+      color: #1565c0;
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    pre[class*='language-'] {{
+      background: #f5f5f5;
+      padding: 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.9em;
+    }}
+    .history-day {{
+      margin: 24px 0;
+      border-left: 4px solid #1e88e5;
+      padding-left: 16px;
+    }}
+    .history-day h5 {{
+      font-size: 1.2em;
+      color: #0d47a1;
+      margin-bottom: 8px;
+    }}
+    .history-block {{
+      background: #f0f8ff;
+      padding: 12px 16px;
+      margin-bottom: 10px;
+      border: 1px solid #bbdefb;
+      border-radius: 6px;
+      box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
+    }}
+    .change-header {{
+      font-weight: 600;
+      color: #1565c0;
+      margin-bottom: 6px;
+    }}
+    .history-item {{
+      font-family: sans-serif;
+      margin-bottom: 5px;
+    }}
+    .highlight-status {{ background: #fffde7; padding: 2px 6px; border-radius: 4px; }}
+    .highlight-assignee {{ background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }}
+    .highlight-priority {{ background: #fce4ec; padding: 2px 6px; border-radius: 4px; }}
+    .from-val {{ color: #d32f2f; }}
+    .to-val {{ color: #2e7d32; }}
+    .diff-added {{ color: #007f00; font-weight: bold; }}
+    .diff-deleted {{ color: #888; text-decoration: line-through; }}
+    .diff-arrow {{ color: #999; padding: 0 4px; }}
+    .view-diff-btn {{
+      margin-left: 10px;
+      font-size: 0.9em;
+      cursor: pointer;
+    }}
+    .diff-overlay {{
+      position: fixed;
+      top: 5%;
+      left: 10%;
+      width: 80%;
+      height: 70%;
+      background: white;
+      border: 2px solid #ccc;
+      z-index: 9999;
+      overflow: auto;
+      display: none;
+      box-shadow: 0 0 20px rgba(0,0,0,0.3);
+    }}
+    .diff-overlay .diff-close {{
+      float: right;
+      margin: 10px;
+      cursor: pointer;
+      font-size: 20px;
+    }}
+    .diff-columns {{
+      display: flex;
+      justify-content: space-between;
+      padding: 20px;
+      font-family: monospace;
+      white-space: pre-wrap;
+    }}
+    .diff-columns > div {{
+      width: 48%;
+      border: 1px solid #eee;
+      padding: 10px;
+      background: #f9f9f9;
+    }}
 
-  h2 {{
-    color: #0d47a1;
-    font-size: 1.9em;
-    margin-bottom: 20px;
-  }}
+.no-links {{padding: 12px;
+  color: #666;
+  font-style: italic;
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}}
 
-  details {{
-    margin-bottom: 30px;
-    border: 1px solid #d6e0f5;
-    border-radius: 6px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-  }}
+    /* Attachment strip */
+    .attachment-strip-wrapper {{
+      position: relative;
+      overflow: hidden;
+    }}
+    .attachment-strip {{
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      scroll-behavior: smooth;
+      padding: 8px 36px;
+    }}
+    .attachment-strip::-webkit-scrollbar {{
+      height: 8px;
+    }}
+    .attachment-strip::-webkit-scrollbar-thumb {{
+      background: #bbb;
+      border-radius: 4px;
+    }}
 
-  summary {{
-    padding: 14px 20px;
-    background-color: #e8f0fe;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 1.2em;
-    border-bottom: 1px solid #d6e0f5;
-  }}
+    .attachment-nav {{
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 32px;
+      height: 32px;
+      background: #eee;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 32px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 0 5px rgba(0,0,0,0.2);
+      z-index: 2;
+    }}
+    .attachment-nav.left {{ left: 0; }}
+    .attachment-nav.right {{ right: 0; }}
 
-  section {{
-    padding: 16px 20px;
-    background-color: #f9fafe;
-  }}
+    .attachment-card {{
+      border: 1px solid #ccc;
+      background: #fff;
+      border-radius: 6px;
+      padding: 6px;
+      text-align: center;
+      font-size: 0.85em;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 130px;
+      max-width: 140px;
+    }}
 
-  .subsection h4 {{
-    margin-top: 20px;
-    margin-bottom: 10px;
-    font-size: 1.1em;
-    color: #1a237e;
-  }}
+    .attachment-filename,
+    .attachment-meta,
+    .download-btn {{
+      width: 100%;
+      box-sizing: border-box;
+      margin: 4px 0;
+    }}
+    .attachment-meta {{
+      font-size: 0.75em;
+      color: #444;
+      line-height: 1.3;
+    }}
 
-  table {{
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-    overflow: hidden;
-    background: #fff;
-    margin-bottom: 20px;
-  }}
+.no-attachments {{padding: 12px;
+  color: #666;
+  font-style: italic;
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}}
 
-  th {{
-    background-color: #e3f2fd;
-    color: #0d47a1;
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: bold;
-    border-bottom: 2px solid #bbdefb;
-  }}
 
-  td {{
-    padding: 12px 16px;
-    border-bottom: 1px solid #e0e0e0;
-  }}
-
-  tr:hover td {{
-    background-color: #f0f4ff;
-  }}
-
-  a {{
-    color: #1565c0;
-    text-decoration: none;
-  }}
-
-  a:hover {{
-    text-decoration: underline;
-  }}
-
-  pre[class*='language-'] {{
-    background: #f5f5f5;
-    padding: 16px;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.9em;
-  }}
-
-  .history-day {{
-    margin: 24px 0;
-    border-left: 4px solid #1e88e5;
-    padding-left: 16px;
-  }}
-
-  .history-day h5 {{
-    font-size: 1.2em;
-    color: #0d47a1;
-    margin-bottom: 8px;
-  }}
-
-  .history-block {{
-    background: #f0f8ff;
-    padding: 12px 16px;
-    margin-bottom: 10px;
-    border: 1px solid #bbdefb;
-    border-radius: 6px;
-    box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
-  }}
-
-  .change-header {{
-    font-weight: 600;
-    color: #1565c0;
-    margin-bottom: 6px;
-  }}
-
-  .history-item {{
-    font-family: sans-serif;
-    margin-bottom: 5px;
-  }}
-
-  .highlight-status {{
-    background: #fffde7;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .highlight-assignee {{
-    background: #e8f5e9;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .highlight-priority {{
-    background: #fce4ec;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .from-val {{
-    color: #d32f2f;
-  }}
-
-  .to-val {{
-    color: #2e7d32;
-  }}
-
-  .diff-added {{
-    color: #007f00;
-    font-weight: bold;
-  }}
-
-  .diff-deleted {{
-    color: #888;
-    text-decoration: line-through;
-  }}
-
-  .diff-arrow {{
-    color: #999;
-    padding: 0 4px;
-  }}
-
-  .view-diff-btn {{
-    margin-left: 10px;
-    font-size: 0.9em;
-    cursor: pointer;
-  }}
-
-  .diff-overlay {{
-    position: fixed;
-    top: 5%;
-    left: 10%;
-    width: 80%;
-    height: 70%;
-    background: white;
-    border: 2px solid #ccc;
-    z-index: 9999;
-    overflow: auto;
-    display: none;
-    box-shadow: 0 0 20px rgba(0,0,0,0.3);
-  }}
-
-  .diff-overlay .diff-close {{
-    float: right;
-    margin: 10px;
-    cursor: pointer;
-    font-size: 20px;
-  }}
-
-  .diff-columns {{
-    display: flex;
-    justify-content: space-between;
-    padding: 20px;
-    font-family: monospace;
-    white-space: pre-wrap;
-  }}
-
-  .diff-columns > div {{
-    width: 48%;
-    border: 1px solid #eee;
-    padding: 10px;
-    background: #f9f9f9;
-  }}
-
-  /* Attachments Grid View */
-.attachment-card {{border: 1px solid #ccc;
-  background: #fff;
-  border-radius: 6px;
-  padding: 6px;
-  text-align: center;
-  font-size: 0.85em;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-
+.attachments-wrapper {{position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  width: 100%;
-  max-width: 140px; /* limit width per attachment */
+  margin: 10px 0;
 }}
 
-.attachment-filename,
-.attachment-meta,
-.download-btn {{width: 100%; /* full width inside the card */
-  box-sizing: border-box;
-  margin: 4px 0;
+.attachments-strip {{display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 10px 0;
+  scroll-behavior: smooth;
+  flex-grow: 1;
 }}
 
-.attachment-meta {{font - size: 0.75em;
-  color: #444;
-  line-height: 1.3;
+.scroll-btn {{background - color: #e3f2fd;
+  border: none;
+  cursor: pointer;
+  padding: 8px 12px;
+  font-size: 18px;
+  border-radius: 4px;
+  color: #0d47a1;
+  transition: background 0.3s;
 }}
 
-</style>
-
+.scroll-btn:hover {{background - color: #bbdefb;
+}}
+  </style>
 </head>
 <body>
   <h2>{headerLine}</h2>
@@ -1137,10 +1199,16 @@ function showDiffOverlay(from, to) {
     <section>{resolvedDesc}</section>
   </details>
 
-  <details open>
+  <details>
     <summary>Attachments</summary>
     <section>
-      {attachmentsHtml}
+      <div class='attachment-strip-wrapper'>
+        <div class='attachment-nav left' onclick='scrollStrip(-1)'>&lt;</div>
+        <div class='attachment-strip' id='attachmentStrip'>
+          {attachmentsHtml}
+        </div>
+        <div class='attachment-nav right' onclick='scrollStrip(1)'>&gt;</div>
+      </div>
     </section>
   </details>
 
@@ -1164,11 +1232,9 @@ function showDiffOverlay(from, to) {
   <script>
     Prism.highlightAll();
 
-    // Handle generic links to send simple Jira key messages
     document.querySelectorAll('a').forEach(link => {{
       link.addEventListener('click', e => {{
         e.preventDefault();
-        // Ignore download and preview links here (they have special handlers below)
         if (link.classList.contains('download-btn') || link.classList.contains('preview-image'))
           return;
         let key = link.dataset.key || link.innerText.match(/\\b[A-Z]+-\\d+\\b/)?.[0];
@@ -1178,26 +1244,23 @@ function showDiffOverlay(from, to) {
       }});
     }});
 
-    // Send download requests to WebView2 with file path
     document.querySelectorAll('.download-btn').forEach(btn => {{
       btn.addEventListener('click', e => {{
         e.preventDefault();
         const path = btn.dataset.filepath;
-        if (window.chrome && window.chrome.webview && path) {{
+        if (window.chrome?.webview && path) {{
           window.chrome.webview.postMessage(JSON.stringify({{ type: 'download', path }}));
         }}
       }});
     }});
 
-    // Send preview requests to WebView2 with image src
     document.querySelectorAll('.preview-image').forEach(link => {{
       link.addEventListener('click', e => {{
         e.preventDefault();
         const src = link.dataset.src;
-        if (window.chrome && window.chrome.webview && src) {{
+        if (window.chrome?.webview && src) {{
           window.chrome.webview.postMessage(JSON.stringify({{ type: 'preview', path: src }}));
         }} else {{
-          // Fallback: simple lightbox in browser if WebView2 not present
           const overlay = document.createElement('div');
           overlay.className = 'lightbox-overlay';
           overlay.style.display = 'flex';
@@ -1207,11 +1270,15 @@ function showDiffOverlay(from, to) {
         }}
       }});
     }});
+
+    function scrollStrip(direction) {{
+      const strip = document.getElementById('attachmentStrip');
+      const scrollAmount = 160; // width + margin
+      strip.scrollLeft += direction * scrollAmount;
+    }}
   </script>
 </body>
 </html>";
-
-
 
                 var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
                 await webView.EnsureCoreWebView2Async();
