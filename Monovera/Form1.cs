@@ -9,6 +9,8 @@ using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Web.WebView2.Core;
 using System.Drawing.Drawing2D;
 using System.Xml.Linq;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
+using System.Drawing;
 
 namespace Monovera
 {
@@ -504,7 +506,6 @@ namespace Monovera
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
 
-            // Get the node icon (assumes ImageKey is set)
             string iconUrl = null;
             if (tree.ImageList != null && e.Node.ImageKey != null && tree.ImageList.Images.ContainsKey(e.Node.ImageKey))
             {
@@ -535,11 +536,23 @@ namespace Monovera
                 var json = await response.Content.ReadAsStringAsync();
 
                 using var doc = JsonDocument.Parse(json);
-                var fields = doc.RootElement.GetProperty("fields");
-                var renderedFields = doc.RootElement.GetProperty("renderedFields");
+                var root = doc.RootElement;
 
-                string summary = fields.GetProperty("summary").GetString();
-                string htmlDesc = renderedFields.GetProperty("description").GetString() ?? "";
+                // Defensive get for fields
+                if (!root.TryGetProperty("fields", out var fields))
+                    throw new Exception("Missing 'fields' in response.");
+
+                string summary = "";
+                if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                    summary = summaryProp.GetString();
+
+                string htmlDesc = "";
+                if (root.TryGetProperty("renderedFields", out var renderedFields) &&
+                    renderedFields.TryGetProperty("description", out var descProp) &&
+                    descProp.ValueKind == JsonValueKind.String)
+                {
+                    htmlDesc = descProp.GetString() ?? "";
+                }
                 string resolvedDesc = ReplaceJiraLinksAndSVNFeatures(htmlDesc);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
@@ -557,22 +570,28 @@ namespace Monovera
                     {
                         foreach (var link in links.EnumerateArray())
                         {
-                            if (link.GetProperty("type").GetProperty("name").GetString() == linkType)
+                            if (link.TryGetProperty("type", out var typeProp) &&
+                                typeProp.TryGetProperty("name", out var nameProp) &&
+                                nameProp.GetString() == linkType)
                             {
-                                JsonElement issueElem = prop == null
-                                    ? (link.TryGetProperty("inwardIssue", out var inw) ? inw :
-                                       link.TryGetProperty("outwardIssue", out var outw) ? outw : default)
-                                    : (link.TryGetProperty(prop, out var target) ? target : default);
+                                JsonElement issueElem = default;
+                                if (prop == null)
+                                {
+                                    if (!link.TryGetProperty("inwardIssue", out issueElem))
+                                        issueElem = link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
+                                }
+                                else
+                                {
+                                    link.TryGetProperty(prop, out issueElem);
+                                }
 
                                 if (issueElem.ValueKind == JsonValueKind.Object)
                                 {
-                                    var key = issueElem.GetProperty("key").GetString();
-                                    var sum = issueElem.GetProperty("fields").GetProperty("summary").GetString();
+                                    var key = issueElem.GetProperty("key").GetString() ?? "";
+                                    var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
 
-                                    // Find TreeNode for this issue key in the TreeView
                                     TreeNode foundNode = FindNodeByKey(tree.Nodes, key);
-
-                                    string iconImg = "";
+                                    string iconImgInner = "";
                                     if (foundNode != null &&
                                         !string.IsNullOrEmpty(foundNode.ImageKey) &&
                                         tree.ImageList != null &&
@@ -581,10 +600,10 @@ namespace Monovera
                                         using var ms = new MemoryStream();
                                         tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                                         var base64 = Convert.ToBase64String(ms.ToArray());
-                                        iconImg = $"<img src='data:image/png;base64,{base64}' style='height:16px; vertical-align:middle; margin-right:6px;' />";
+                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:16px; vertical-align:middle; margin-right:6px;' />";
                                     }
 
-                                    sb.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImg}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                                    sb.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
                                 }
                             }
                         }
@@ -600,7 +619,7 @@ namespace Monovera
                     BuildLinksTable("Related", "Relates", null);
 
                 string historyHtml = "";
-                if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
+                if (root.TryGetProperty("changelog", out var changelog) &&
                     changelog.TryGetProperty("histories", out var histories))
                 {
                     var grouped = histories.EnumerateArray()
@@ -610,7 +629,10 @@ namespace Monovera
                             if (!DateTime.TryParse(createdRaw, out var created))
                                 created = DateTime.MinValue;
 
-                            var author = h.GetProperty("author").GetProperty("displayName").GetString();
+                            var author = "";
+                            if (h.TryGetProperty("author", out var authorProp) &&
+                                authorProp.TryGetProperty("displayName", out var displayNameProp))
+                                author = displayNameProp.GetString() ?? "";
 
                             var items = h.GetProperty("items").EnumerateArray()
                                 .Select(item =>
@@ -619,7 +641,7 @@ namespace Monovera
                                     var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
                                     var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
 
-                                    string icon = field.ToLower() switch
+                                    string icon = field?.ToLower() switch
                                     {
                                         "status" => "🟢",
                                         "assignee" => "👤",
@@ -629,7 +651,7 @@ namespace Monovera
                                         _ => "🔧"
                                     };
 
-                                    string highlight = field.ToLower() switch
+                                    string highlight = field?.ToLower() switch
                                     {
                                         "status" => "highlight-status",
                                         "assignee" => "highlight-assignee",
@@ -637,32 +659,55 @@ namespace Monovera
                                         _ => ""
                                     };
 
+                                    // Inline diff display
+                                    string inlineDiff = DiffText(from, to);
+
+                                    // Side-by-side diff popup button
+                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{HttpUtility.JavaScriptStringEncode(from)}', '{HttpUtility.JavaScriptStringEncode(to)}')"">🔍 View Side-by-Side</button>";
+
                                     return $@"<li class='history-item {highlight}'>{icon} <strong>{field}</strong>: 
-                            <span class='from-val'>{WebUtility.HtmlEncode(from)}</span> → 
-                            <span class='to-val'>{WebUtility.HtmlEncode(to)}</span></li>";
+<span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
                                 });
 
                             return new
                             {
                                 Day = created.Date,
                                 Html = $@"
-                    <div class='history-block'>
-                        <div class='change-header'>{created:HH:mm} by <strong>{HttpUtility.HtmlEncode(author)}</strong></div>
-                        <ul>{string.Join("", items)}</ul>
-                    </div>"
+<div class='history-block'>
+    <div class='change-header'>{created:HH:mm} by <strong>{HttpUtility.HtmlEncode(author)}</strong></div>
+    <ul>{string.Join("", items)}</ul>
+</div>"
                             };
                         })
                         .GroupBy(x => x.Day)
                         .OrderByDescending(g => g.Key);
 
                     var sb = new StringBuilder();
+
                     foreach (var group in grouped)
                     {
                         sb.AppendLine($@"<div class='history-day'>
-            <h5>{group.Key:yyyy-MM-dd}</h5>
-            {string.Join("\n", group.Select(g => g.Html))}
-        </div>");
+<h5>{group.Key:yyyy-MM-dd}</h5>
+{string.Join("\n", group.Select(g => g.Html))}</div>");
                     }
+
+                    sb.AppendLine(@"
+<div class='diff-overlay' id='diffOverlay'>
+    <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
+    <div class='diff-columns'>
+        <div id='diffFrom'></div>
+        <div id='diffTo'></div>
+    </div>
+</div>
+
+<script>
+function showDiffOverlay(from, to) {
+    document.getElementById('diffFrom').textContent = from;
+    document.getElementById('diffTo').textContent = to;
+    document.getElementById('diffOverlay').style.display = 'block';
+}
+</script>
+");
 
                     historyHtml = sb.ToString();
                 }
@@ -677,142 +722,198 @@ namespace Monovera
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <style>
-    body {{
-      font-family: 'Inter', sans-serif;
-      margin: 30px;
-      background: #ffffff;
-      color: #1c1c1c;
-      font-size: 16px;
-      line-height: 1.7;
-    }}
+  body {{
+    font-family: 'Inter', sans-serif;
+    margin: 30px;
+    background: #ffffff;
+    color: #1c1c1c;
+    font-size: 16px;
+    line-height: 1.7;
+  }}
 
-    h2 {{
-      color: #0d47a1;
-      font-size: 1.9em;
-      margin-bottom: 20px;
-    }}
+  h2 {{
+    color: #0d47a1;
+    font-size: 1.9em;
+    margin-bottom: 20px;
+  }}
 
-    details {{
-      margin-bottom: 30px;
-      border: 1px solid #d6e0f5;
-      border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-    }}
+  details {{
+    margin-bottom: 30px;
+    border: 1px solid #d6e0f5;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+  }}
 
-    summary {{
-      padding: 14px 20px;
-      background-color: #e8f0fe;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 1.2em;
-      border-bottom: 1px solid #d6e0f5;
-    }}
+  summary {{
+    padding: 14px 20px;
+    background-color: #e8f0fe;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1.2em;
+    border-bottom: 1px solid #d6e0f5;
+  }}
 
-    section {{
-      padding: 16px 20px;
-      background-color: #f9fafe;
-    }}
+  section {{
+    padding: 16px 20px;
+    background-color: #f9fafe;
+  }}
 
-    .subsection h4 {{
-      margin-top: 20px;
-      margin-bottom: 10px;
-      font-size: 1.1em;
-      color: #1a237e;
-    }}
+  .subsection h4 {{
+    margin-top: 20px;
+    margin-bottom: 10px;
+    font-size: 1.1em;
+    color: #1a237e;
+  }}
 
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      border-radius: 6px;
-      overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-      background: #fff;
-    }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    background: #fff;
+  }}
 
-    th, td {{
-      padding: 12px 16px;
-      border-bottom: 1px solid #e0e0e0;
-    }}
+  th, td {{
+    padding: 12px 16px;
+    border-bottom: 1px solid #e0e0e0;
+  }}
 
-    tr:hover td {{
-      background-color: #f0f4ff;
-    }}
+  tr:hover td {{
+    background-color: #f0f4ff;
+  }}
 
-    a {{
-      color: #1565c0;
-      text-decoration: none;
-    }}
+  a {{
+    color: #1565c0;
+    text-decoration: none;
+  }}
 
-    a:hover {{
-      text-decoration: underline;
-    }}
+  a:hover {{
+    text-decoration: underline;
+  }}
 
-    pre[class*='language-'] {{
-      background: #f5f5f5;
-      padding: 16px;
-      border-radius: 6px;
-      overflow-x: auto;
-      font-size: 0.9em;
-    }}
+  pre[class*='language-'] {{
+    background: #f5f5f5;
+    padding: 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.9em;
+  }}
 
-    .history-day {{
-  margin: 24px 0;
-  border-left: 4px solid #1e88e5;
-  padding-left: 16px;
-}}
+  .history-day {{
+    margin: 24px 0;
+    border-left: 4px solid #1e88e5;
+    padding-left: 16px;
+  }}
 
-.history-day h5 {{
-  font-size: 1.2em;
-  color: #0d47a1;
-  margin-bottom: 8px;
-}}
+  .history-day h5 {{
+    font-size: 1.2em;
+    color: #0d47a1;
+    margin-bottom: 8px;
+  }}
 
-.history-block {{
-  background: #f0f8ff;
-  padding: 12px 16px;
-  margin-bottom: 10px;
-  border: 1px solid #bbdefb;
-  border-radius: 6px;
-  box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
-}}
+  .history-block {{
+    background: #f0f8ff;
+    padding: 12px 16px;
+    margin-bottom: 10px;
+    border: 1px solid #bbdefb;
+    border-radius: 6px;
+    box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
+  }}
 
-.change-header {{
-  font-weight: 600;
-  color: #1565c0;
-  margin-bottom: 6px;
-}}
+  .change-header {{
+    font-weight: 600;
+    color: #1565c0;
+    margin-bottom: 6px;
+  }}
 
-.history-item {{
-  margin-bottom: 4px;
-  font-size: 0.95em;
-}}
+  .history-item {{
+    font-family: sans-serif;
+    margin-bottom: 5px;
+  }}
 
-.from-val {{
-  color: #d32f2f;
-}}
+  .highlight-status {{
+    background: #fffde7;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
 
-.to-val {{
-  color: #2e7d32;
-}}
+  .highlight-assignee {{
+    background: #e8f5e9;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
 
-.highlight-status {{
-  background: #fffde7;
-  padding: 2px 6px;
-  border-radius: 4px;
-}}
+  .highlight-priority {{
+    background: #fce4ec;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
 
-.highlight-assignee {{
-  background: #e8f5e9;
-  padding: 2px 6px;
-  border-radius: 4px;
-}}
+  .from-val {{
+    color: #d32f2f;
+  }}
 
-.highlight-priority {{
-  background: #fce4ec;
-  padding: 2px 6px;
-  border-radius: 4px;
-}}
-  </style>
+  .to-val {{
+    color: #2e7d32;
+  }}
+
+  /* DIFF Enhancements */
+  .diff-added {{
+    color: #007f00;
+    font-weight: bold;
+  }}
+
+  .diff-deleted {{
+    color: #888;
+    text-decoration: line-through;
+  }}
+
+  .diff-arrow {{
+    color: #999;
+    padding: 0 4px;
+  }}
+
+  .view-diff-btn {{
+    margin-left: 10px;
+    font-size: 0.9em;
+  }}
+
+  .diff-overlay {{
+    position: fixed;
+    top: 5%;
+    left: 10%;
+    width: 80%;
+    height: 70%;
+    background: white;
+    border: 2px solid #ccc;
+    z-index: 9999;
+    overflow: auto;
+    display: none;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3);
+  }}
+
+  .diff-overlay .diff-close {{
+    float: right;
+    margin: 10px;
+    cursor: pointer;
+    font-size: 20px;
+  }}
+
+  .diff-columns {{
+    display: flex;
+    justify-content: space-between;
+    padding: 20px;
+  }}
+
+  .diff-columns > div {{
+    width: 48%;
+    white-space: pre-wrap;
+    border: 1px solid #eee;
+    padding: 10px;
+    background: #f9f9f9;
+  }}
+</style>
 </head>
 <body>
   <h2>{headerLine}</h2>
@@ -827,10 +928,10 @@ namespace Monovera
     <section>{linksHtml}</section>
   </details>
 
-<details>
-  <summary>History</summary>
-  <section>{historyHtml}</section>
-</details>
+  <details>
+    <summary>History</summary>
+    <section>{historyHtml}</section>
+  </details>
 
   <details>
     <summary>Response</summary>
@@ -865,18 +966,14 @@ namespace Monovera
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
-                /* Set tab page icon */
-                // Ensure your TabControl has an ImageList
                 if (tabDetails.ImageList == null)
                 {
                     tabDetails.ImageList = new ImageList();
-                    tabDetails.ImageList.ImageSize = new Size(16, 16); // optional
+                    tabDetails.ImageList.ImageSize = new Size(16, 16);
                 }
 
                 Image iconImage = null;
-                string iconKey = issueKey; // or any unique key
-
-                // Convert base64 image URL to actual Image
+                string iconKey = issueKey;
                 if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
                 {
                     try
@@ -885,17 +982,15 @@ namespace Monovera
                         byte[] bytes = Convert.FromBase64String(base64);
                         using var ms = new MemoryStream(bytes);
                         iconImage = Image.FromStream(ms);
-
                         if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
                             tabDetails.ImageList.Images.Add(iconKey, iconImage);
                     }
                     catch
                     {
-                        // fallback or log
+                        // ignore
                     }
                 }
 
-                // Create tab with icon and tooltip
                 var page = new TabPage(issueKey)
                 {
                     ImageKey = iconKey,
@@ -914,10 +1009,42 @@ namespace Monovera
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Could not connect to featch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
+        private static string DiffText(string? from, string? to)
+        {
+            if (from == to)
+                return $"<span>{WebUtility.HtmlEncode(from ?? "")}</span>";
+
+            from ??= "";
+            to ??= "";
+
+            var diff = new StringBuilder();
+            int commonLength = Math.Min(from.Length, to.Length);
+            int i = 0;
+
+            // Common prefix
+            while (i < commonLength && from[i] == to[i])
+            {
+                diff.Append(WebUtility.HtmlEncode(from[i].ToString()));
+                i++;
+            }
+
+            var deleted = from.Length > i ? WebUtility.HtmlEncode(from[i..]) : "";
+            var added = to.Length > i ? WebUtility.HtmlEncode(to[i..]) : "";
+
+            diff.Append(" <span class='diff-arrow'>➡</span> ");
+
+            if (!string.IsNullOrEmpty(deleted))
+                diff.Append($@"<span class='diff-deleted'>{deleted}</span>");
+
+            if (!string.IsNullOrEmpty(added))
+                diff.Append($@"<span class='diff-added'>{added}</span>");
+
+            return diff.ToString();
+        }
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
