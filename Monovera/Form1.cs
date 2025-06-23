@@ -16,6 +16,7 @@ using System.Diagnostics;
 using static System.Net.Mime.MediaTypeNames;
 using System.Security.Policy;
 using System.Drawing;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace Monovera
 {
@@ -584,6 +585,30 @@ namespace Monovera
                 string summary = "";
                 if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
                     summary = summaryProp.GetString();
+
+                string status = fields.TryGetProperty("status", out var statusProp) &&
+                statusProp.TryGetProperty("name", out var statusName)
+                ? statusName.GetString() ?? ""
+                : "";
+
+                string lastUpdated = fields.TryGetProperty("updated", out var updatedProp)
+                                ? DateTime.TryParse(updatedProp.GetString(), out var dt)
+                                    ? dt.ToString("yyyy-MM-dd HH:mm")
+                                    : updatedProp.GetString()
+                                : "N/A";
+
+                string statusIcon = "";
+                string iconKeyStatus = GetIconForStatus(status);
+                if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                {
+                    using var ms = new MemoryStream();
+                    tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    string base64 = Convert.ToBase64String(ms.ToArray());
+                    statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 16px; vertical-align: middle; margin-right: 6px;'>";
+                }
+
+                string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
+
 
                 string htmlDesc = "";
                 if (root.TryGetProperty("renderedFields", out var renderedFields) &&
@@ -1227,6 +1252,17 @@ function showDiffOverlay(from, to) {
 </head>
 <body>
   <h2>{headerLine}</h2>
+
+<div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
+  <div>📅 <strong>Updated:</strong> 
+                {lastUpdated}</div>
+  <div>
+    {statusIcon} {HttpUtility.HtmlEncode(status)}
+  </div>
+  <div>
+    🔗 <a href='{issueUrl}' target='_blank'>Open in Browser</a>
+  </div>
+</div>
 
   <details open>
     <summary>Description</summary>
