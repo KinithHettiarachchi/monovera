@@ -21,20 +21,68 @@ namespace Monovera
 {
     public partial class frmMain : Form
     {
-        private Dictionary<string, List<JiraIssue>> childrenByParent = new();
-        private Dictionary<string, JiraIssue> issueDict = new();
-        private string root_key = "";
-        private List<string> projectList = new();
-        private string jiraBaseUrl = "";
-        private string jiraEmail = "";
-        private string jiraToken = "";
+        public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
+        public static Dictionary<string, JiraIssue> issueDict = new();
+        public static string root_key = "";
+        public static List<string> projectList = new();
+        public static string jiraBaseUrl = "";
+        public static string jiraEmail = "";
+        public static string jiraToken = "";
+        public static Dictionary<string, string> typeIcons;
+        public static Dictionary<string, string> statusIcons;
 
         private TabControl tabDetails;
+
+
+        private class JiraConfigRoot
+        {
+            public JiraAuth Jira { get; set; }
+            public List<JiraProjectConfig> Projects { get; set; }
+        }
+
+        private class JiraAuth
+        {
+            public string Url { get; set; }
+            public string Email { get; set; }
+            public string Token { get; set; }
+        }
+
+        private class JiraProjectConfig
+        {
+            public string Project { get; set; }
+            public string Root { get; set; }
+            public Dictionary<string, string> Types { get; set; }
+            public Dictionary<string, string> Status { get; set; }
+        }
+
+
+        public class JiraIssue
+        {
+            public string Key { get; set; }
+            public string Summary { get; set; }
+            public string Type { get; set; }
+            public string ParentKey { get; set; }
+        }
+
+        public class JiraIssueLink
+        {
+            public string LinkTypeName { get; set; } = "";
+            public string OutwardIssueKey { get; set; } = "";
+            public string OutwardIssueSummary { get; set; } = "";
+            public string OutwardIssueType { get; set; } = "";
+        }
+
+        public class JiraIssueDto
+        {
+            public string Key { get; set; }
+            public string Summary { get; set; }
+            public string Type { get; set; }
+            public List<JiraIssueLink> IssueLinks { get; set; } = new();
+        }
 
         public frmMain()
         {
             InitializeComponent();
-            InitializeIcons();
 
             //Tabs for right side
             tabDetails = new TabControl
@@ -148,138 +196,99 @@ namespace Monovera
             }
         }
 
-        Dictionary<string, string> iconDefinitions;
-
-
         private void InitializeIcons()
         {
             ImageList icons = new ImageList();
             icons.ImageSize = new Size(18, 18);
             string basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images");
 
-            iconDefinitions = new Dictionary<string, string>
+            var addedImages = new HashSet<string>();
+            foreach (var kv in typeIcons.Concat(statusIcons))
             {
-                { "user", "type_userreq.png" },
-                { "gui", "type_gui.png" },
-                { "gui component", "type_gui.png" },
-                { "rule", "type_rule.png" },
-                { "technical", "type_technical.png" },
-                { "entity", "type_entity.png" },
-                { "data entity", "type_entity.png" },
-                { "project", "type_project.png" },
-                { "folder", "type_folder.png" },
-                { "definition", "type_definition.png" },
-                { "element", "type_element.png" },
-                { "test", "type_test.png" },
-                { "menu", "type_menu.png" },
-                { "draft", "status_draft.png" },
-                { "published", "status_published.png" },
-                { "rejected", "status_rejected.png" },
-                { "todo", "status_todo.png" },
-                { "parameter", "type_parameter.png" },
-                { "report", "type_report.png" },
-                { "usecase", "type_usecase.png" }
-            };
+                string key = kv.Key;
+                string fileName = kv.Value;
+                string fullPath = Path.Combine(basePath, fileName);
 
-
-            foreach (var kvp in iconDefinitions)
-            {
-                string key = kvp.Key;
-                string path = Path.Combine(basePath, kvp.Value);
-                if (File.Exists(path))
+                if (File.Exists(fullPath) && !addedImages.Contains(key))
                 {
-                    icons.Images.Add(key, System.Drawing.Image.FromFile(path));
+                    icons.Images.Add(key, System.Drawing.Image.FromFile(fullPath));
+                    addedImages.Add(key);
                 }
             }
 
             tree.ImageList = icons;
         }
 
-        private string GetIconForType(string issueType)
-        {
-            string lower = issueType.ToLower();
 
-            if (lower.StartsWith("user")) return "user"; // handles "User req" and "User Story"
-            if (lower.StartsWith("gui")) return "gui"; // GUI Component
-            if (lower.StartsWith("gui component")) return "gui component"; // GUI Component
-            if (lower.StartsWith("rule")) return "rule";
-            if (lower.StartsWith("definition")) return "definition";
-            if (lower.StartsWith("entity")) return "entity";
-            if (lower.StartsWith("data entity")) return "entity";
-            if (lower.StartsWith("element")) return "element";
-            if (lower.StartsWith("folder")) return "folder";
-            if (lower.StartsWith("technical")) return "technical";
-            if (lower.StartsWith("project")) return "project";
-            if (lower.StartsWith("menu")) return "menu";
-            if (lower.StartsWith("test")) return "test";
-            if (lower.StartsWith("parameter")) return "parameter";
-            if (lower.StartsWith("report")) return "report";
-            if (lower.StartsWith("use case")) return "usecase";
+        public static string GetIconForType(string issueType)
+        {
+            if (string.IsNullOrWhiteSpace(issueType))
+                return "";
+
+            // Try full match
+            if (typeIcons.ContainsKey(issueType))
+                return issueType;
+
+            // Try startsWith (fallback, case-insensitive)
+            foreach (var key in typeIcons.Keys)
+            {
+                if (issueType.StartsWith(key, StringComparison.OrdinalIgnoreCase))
+                    return key;
+            }
 
             return "";
         }
 
-        public class JiraIssue
+        public static string GetIconForStatus(string status)
         {
-            public string Key { get; set; }
-            public string Summary { get; set; }
-            public string Type { get; set; }
-            public string ParentKey { get; set; }
-        }
+            if (string.IsNullOrWhiteSpace(status))
+                return "";
 
-        public class JiraIssueLink
-        {
-            public string LinkTypeName { get; set; } = "";
-            public string OutwardIssueKey { get; set; } = "";
-            public string OutwardIssueSummary { get; set; } = "";
-            public string OutwardIssueType { get; set; } = "";
-        }
+            if (statusIcons.ContainsKey(status))
+                return status;
 
-        public class JiraIssueDto
-        {
-            public string Key { get; set; }
-            public string Summary { get; set; }
-            public string Type { get; set; }
-            public List<JiraIssueLink> IssueLinks { get; set; } = new();
-        }
-
-        private async void frmMain_Load(object sender, EventArgs e)
-        {
-            var config = ReadConfiguration();
-
-            if (!config.TryGetValue("JIRA_PROJECTS", out string projectCsv) ||
-                !config.TryGetValue("JIRA_PROJECT_ROOTS", out root_key) ||
-                !config.TryGetValue("JIRA_HOME", out jiraBaseUrl) ||
-                !config.TryGetValue("JIRA_EMAIL", out jiraEmail) ||
-                !config.TryGetValue("JIRA_TOKEN", out jiraToken))
+            foreach (var key in statusIcons.Keys)
             {
-                MessageBox.Show("Missing required configuration values.");
+                if (status.StartsWith(key, StringComparison.OrdinalIgnoreCase))
+                    return key;
+            }
+
+            return "";
+        }
+
+        private void LoadConfigurationFromJson()
+        {
+            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.json");
+            if (!File.Exists(path))
+            {
+                MessageBox.Show("Missing configuration.json file.");
                 return;
             }
 
-            projectList = projectCsv.Split(',').Select(p => p.Trim()).Where(p => p != "").ToList();
+            var configText = File.ReadAllText(path);
+            var config = JsonSerializer.Deserialize<JiraConfigRoot>(configText);
 
+            jiraBaseUrl = config.Jira.Url;
+            jiraEmail = config.Jira.Email;
+            jiraToken = config.Jira.Token;
+
+            projectList = config.Projects.Select(p => p.Project).ToList();
+            root_key = string.Join(",", config.Projects.Select(p => p.Root));
+
+            // Default to first project for type/status icons
+            typeIcons = config.Projects[0].Types;
+            statusIcons = config.Projects[0].Status;
+        }
+
+
+        private async void frmMain_Load(object sender, EventArgs e)
+        {
+            LoadConfigurationFromJson();
+            InitializeIcons();
             await LoadAllProjectsToTreeAsync();
         }
 
-        private Dictionary<string, string> ReadConfiguration()
-        {
-            var configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.properties");
-            var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var line in File.ReadAllLines(configPath))
-            {
-                var trimmed = line.Trim();
-                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("#")) continue;
-                var parts = trimmed.Split('=', 2);
-                if (parts.Length == 2)
-                    config[parts[0].Trim()] = parts[1].Trim();
-            }
-
-            return config;
-        }
-
-        private async Task LoadAllProjectsToTreeAsync()
+        private async Task LoadAllProjectsToTreeAsync(bool forceSync = false)
         {
             pbProgress.Visible = true;
             pbProgress.Value = 0;
@@ -294,13 +303,18 @@ namespace Monovera
                 string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{project}.json");
                 List<JiraIssueDto> issues;
 
-                if (File.Exists(cacheFile))
+                if (!forceSync && File.Exists(cacheFile))
                 {
+                    // Load from cache
                     string cachedJson = await File.ReadAllTextAsync(cacheFile);
                     issues = ParseIssuesFromJson(cachedJson);
                 }
                 else
                 {
+                    // Delete cache if it exists
+                    if (File.Exists(cacheFile))
+                        File.Delete(cacheFile);
+
                     var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
                     using var client = new HttpClient();
                     client.BaseAddress = new Uri(jiraBaseUrl);
@@ -346,6 +360,7 @@ namespace Monovera
                 tree.EndUpdate();
             });
         }
+
 
         private void BuildDictionaries(List<JiraIssueDto> issues)
         {
@@ -512,7 +527,11 @@ namespace Monovera
 
         private TreeNode CreateTreeNode(JiraIssue issue)
         {
-            string iconKey = GetIconForType(issue.Type);
+            //string typeKey = GetIconForType(issue.Type);
+            //string statusKey = GetIconForStatus(issue.Status);
+            //string iconKey = !string.IsNullOrEmpty(statusKey) ? statusKey : typeKey;
+
+            string iconKey = GetIconForType(issue.Type); // or combine with status if needed
             return new TreeNode($"{issue.Summary} [{issue.Key}]")
             {
                 Tag = issue.Key,
@@ -1708,8 +1727,33 @@ function showDiffOverlay(from, to) {
 
         private void ShowSearchDialog()
         {
-            var dialog = new SearchDialog(issueDict, tree,jiraEmail,jiraToken,jiraBaseUrl,projectList, iconDefinitions);
+            var dialog = new SearchDialog(tree);
             dialog.Show(this); // non-modal
+        }
+
+        private void toolStripSplitButton1_ButtonClick(object sender, EventArgs e)
+        {
+
+        }
+
+        private void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            var result = MessageBox.Show(
+          "Are you sure you want to sync the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
+          "Sync Hierarchy",
+          MessageBoxButtons.YesNo,
+          MessageBoxIcon.Warning
+      );
+
+            if (result == DialogResult.Yes)
+            {
+                SyncHierarchy();
+            }
+        }
+
+        private async void SyncHierarchy()
+        {
+            await LoadAllProjectsToTreeAsync(true);
         }
     }
 }

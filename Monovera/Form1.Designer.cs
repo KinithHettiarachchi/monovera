@@ -37,6 +37,8 @@
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
             toolStripStatusLabel1 = new ToolStripStatusLabel();
+            toolStripSplitButton1 = new ToolStripSplitButton();
+            mnuUpdateHierarchy = new ToolStripMenuItem();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -83,7 +85,7 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { pbProgress, lblProgress, toolStripStatusLabel1 });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { pbProgress, lblProgress, toolStripStatusLabel1, toolStripSplitButton1 });
             statusStrip1.Location = new Point(0, 979);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.Size = new Size(1383, 22);
@@ -106,6 +108,25 @@
             toolStripStatusLabel1.Name = "toolStripStatusLabel1";
             toolStripStatusLabel1.Size = new Size(133, 17);
             toolStripStatusLabel1.Text = "Search = Ctrl + Shift + S";
+            // 
+            // toolStripSplitButton1
+            // 
+            toolStripSplitButton1.DisplayStyle = ToolStripItemDisplayStyle.Image;
+            toolStripSplitButton1.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy });
+            toolStripSplitButton1.Image = Properties.Resources.settings;
+            toolStripSplitButton1.ImageTransparentColor = Color.Magenta;
+            toolStripSplitButton1.Name = "toolStripSplitButton1";
+            toolStripSplitButton1.Size = new Size(32, 20);
+            toolStripSplitButton1.Text = "Settings";
+            toolStripSplitButton1.ButtonClick += toolStripSplitButton1_ButtonClick;
+            // 
+            // mnuUpdateHierarchy
+            // 
+            mnuUpdateHierarchy.Image = Properties.Resources.Sync;
+            mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
+            mnuUpdateHierarchy.Size = new Size(180, 22);
+            mnuUpdateHierarchy.Text = "Update hierarchy";
+            mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
             // toolTip1
             // 
@@ -143,5 +164,7 @@
         private Panel panelTabs;
         private ToolTip toolTip1;
         private ToolStripStatusLabel toolStripStatusLabel1;
+        private ToolStripSplitButton toolStripSplitButton1;
+        private ToolStripMenuItem mnuUpdateHierarchy;
     }
 }

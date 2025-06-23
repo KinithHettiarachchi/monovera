@@ -45,20 +45,21 @@
             // txtSearch
             // 
             txtSearch.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            txtSearch.Font = new Font("Segoe UI", 10F);
-            txtSearch.Location = new Point(221, 13);
+            txtSearch.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            txtSearch.Location = new Point(221, 14);
             txtSearch.Name = "txtSearch";
             txtSearch.PlaceholderText = "Enter issue key or search text...";
-            txtSearch.Size = new Size(895, 25);
+            txtSearch.Size = new Size(726, 33);
             txtSearch.TabIndex = 0;
+            txtSearch.TextChanged += txtSearch_TextChanged;
             // 
             // btnSearch
             // 
             btnSearch.Anchor = AnchorStyles.Top;
-            btnSearch.Font = new Font("Segoe UI", 10F);
-            btnSearch.Location = new Point(1503, 11);
+            btnSearch.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            btnSearch.Location = new Point(1480, 11);
             btnSearch.Name = "btnSearch";
-            btnSearch.Size = new Size(90, 27);
+            btnSearch.Size = new Size(113, 37);
             btnSearch.TabIndex = 1;
             btnSearch.Text = "🔍 Search";
             btnSearch.UseVisualStyleBackColor = true;
@@ -67,20 +68,21 @@
             // 
             cmbType.Anchor = AnchorStyles.Top;
             cmbType.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbType.Font = new Font("Segoe UI", 10F);
-            cmbType.Location = new Point(1174, 11);
+            cmbType.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            cmbType.Location = new Point(1011, 14);
             cmbType.Name = "cmbType";
-            cmbType.Size = new Size(120, 25);
+            cmbType.Size = new Size(231, 33);
             cmbType.TabIndex = 2;
+            cmbType.SelectedIndexChanged += cmbType_SelectedIndexChanged;
             // 
             // cmbStatus
             // 
             cmbStatus.Anchor = AnchorStyles.Top;
             cmbStatus.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbStatus.Font = new Font("Segoe UI", 10F);
-            cmbStatus.Location = new Point(1354, 11);
+            cmbStatus.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            cmbStatus.Location = new Point(1312, 14);
             cmbStatus.Name = "cmbStatus";
-            cmbStatus.Size = new Size(120, 25);
+            cmbStatus.Size = new Size(152, 33);
             cmbStatus.TabIndex = 3;
             // 
             // lblType
@@ -88,7 +90,7 @@
             lblType.Anchor = AnchorStyles.Top;
             lblType.AutoSize = true;
             lblType.Font = new Font("Segoe UI", 9F);
-            lblType.Location = new Point(1134, 15);
+            lblType.Location = new Point(970, 25);
             lblType.Name = "lblType";
             lblType.Size = new Size(35, 15);
             lblType.TabIndex = 4;
@@ -99,7 +101,7 @@
             lblStatus.Anchor = AnchorStyles.Top;
             lblStatus.AutoSize = true;
             lblStatus.Font = new Font("Segoe UI", 9F);
-            lblStatus.Location = new Point(1304, 15);
+            lblStatus.Location = new Point(1264, 26);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(42, 15);
             lblStatus.TabIndex = 5;
@@ -135,11 +137,12 @@
             topPanel.Name = "topPanel";
             topPanel.Size = new Size(1605, 70);
             topPanel.TabIndex = 1;
+            topPanel.Paint += topPanel_Paint;
             // 
             // lblProgress
             // 
             lblProgress.AutoSize = true;
-            lblProgress.Location = new Point(1480, 48);
+            lblProgress.Location = new Point(1480, 53);
             lblProgress.Name = "lblProgress";
             lblProgress.Size = new Size(16, 15);
             lblProgress.TabIndex = 10;
@@ -147,19 +150,20 @@
             // 
             // pbProgress
             // 
-            pbProgress.Location = new Point(21, 48);
+            pbProgress.Location = new Point(21, 56);
             pbProgress.Name = "pbProgress";
             pbProgress.Size = new Size(1453, 10);
             pbProgress.TabIndex = 9;
+            pbProgress.Click += pbProgress_Click;
             // 
             // cmbProject
             // 
             cmbProject.Anchor = AnchorStyles.Top;
             cmbProject.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbProject.Font = new Font("Segoe UI", 10F);
+            cmbProject.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
             cmbProject.Location = new Point(74, 15);
             cmbProject.Name = "cmbProject";
-            cmbProject.Size = new Size(120, 25);
+            cmbProject.Size = new Size(141, 33);
             cmbProject.TabIndex = 7;
             // 
             // label1
@@ -167,7 +171,7 @@
             label1.Anchor = AnchorStyles.Top;
             label1.AutoSize = true;
             label1.Font = new Font("Segoe UI", 9F);
-            label1.Location = new Point(21, 19);
+            label1.Location = new Point(21, 25);
             label1.Name = "label1";
             label1.Size = new Size(47, 15);
             label1.TabIndex = 8;
@@ -198,6 +202,8 @@
             MinimizeBox = false;
             MinimumSize = new Size(600, 400);
             Name = "SearchDialog";
+            Opacity = 0.9D;
+            StartPosition = FormStartPosition.CenterScreen;
             Text = "M O N O V E R A - SEARCH";
             ((System.ComponentModel.ISupportInitialize)webViewResults).EndInit();
             topPanel.ResumeLayout(false);

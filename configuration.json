@@ -1,0 +1,33 @@
+{
+  "Jira": {
+    "Url": "https://YOUR_DOMAIN.atlassian.net",
+    "Email": "YOUR_EMAIL@YOUR_DOMAIN.com",
+    "Token": "YOUR_TOKEN"
+  },
+  "Projects": [
+    {
+      "Project": "PROJECT1",
+      "Root": "PRJ1-100",
+      "Types": {
+        "Issue Type1": "type_icon1.png",
+        "Issue Type2": "type_icon2.png"
+      },
+      "Status": {
+        "Status 1": "status_1.png",
+        "Status 2": "status_2.png"
+      }
+    },
+    {
+      "Project": "PROJECT2",
+      "Root": "PRJ2-1",
+      "Types": {
+        "Issue Type3": "type_icon3.png",
+        "Issue Type4": "type_icon4.png"
+      },
+      "Status": {
+        "Status X": "status_X.png",
+        "Status Y": "status_Y.png"
+      }
+    }
+  ]
+}

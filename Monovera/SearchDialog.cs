@@ -28,41 +28,54 @@ namespace Monovera
 
         }
 
-        private readonly Dictionary<string, JiraIssue> issueDict;
         private readonly TreeView tree;
-        private readonly string jiraEmail;
-        private readonly string jiraToken;
-        private readonly string jiraBaseUrl;
-        private List<string> projectList = new();
-        private Dictionary<string, string> iconDefinitions;
 
-        public SearchDialog(
-                Dictionary<string, JiraIssue> issueDict,
-                TreeView tree,
-                string email,
-                string token,
-                string baseUrl,
-                List<string> projectList,
-                Dictionary<string, string> iconDefinitions)
+        public SearchDialog(TreeView tree)
         {
             InitializeComponent();
 
-            this.issueDict = issueDict;
             this.tree = tree;
-            this.jiraEmail = email;
-            this.jiraToken = token;
-            this.jiraBaseUrl = baseUrl;
-            this.projectList = projectList;
-            this.iconDefinitions = iconDefinitions;
+
+            cmbType.DrawMode = DrawMode.OwnerDrawFixed;
+            cmbType.ItemHeight = 28;
+
+            cmbStatus.DrawMode = DrawMode.OwnerDrawFixed;
+            cmbStatus.ItemHeight = 28;
+
+            cmbType.DrawItem += (s, e) => DrawComboItem(s, e, typeIcons);
+            cmbStatus.DrawItem += (s, e) => DrawComboItem(s, e, statusIcons);
+
 
             cmbProject.Items.Add("All");
             cmbProject.Items.AddRange(projectList.ToArray());
             cmbProject.SelectedIndex = 0;
 
-            cmbType.Items.AddRange(new[] { "All", "Data Entity", "Definition", "Element", "Folder", "GUI Component", "Menu", "Parameter", "Project", "Report Component", "Rule", "Technical Req", "Testable Functionality", "Use Case", "User req", "User Story" });
+            cmbType.Items.Clear();
+            cmbType.Items.Add("All"); // Add "All" as the first option
+
+            if (typeIcons != null)
+            {
+                var sortedTypes = typeIcons.Keys.OrderBy(k => k);
+                foreach (var type in sortedTypes)
+                {
+                    cmbType.Items.Add(type);
+                }
+            }
+
             cmbType.SelectedIndex = 0;
 
-            cmbStatus.Items.AddRange(new[] { "All", "Draft", "To Approve", "Published", "Rejected" });
+            cmbStatus.Items.Clear();
+            cmbStatus.Items.Add("All"); // Add "All" option first
+
+            if (statusIcons != null)
+            {
+                var sortedStatuses = statusIcons.Keys.OrderBy(k => k);
+                foreach (var status in sortedStatuses)
+                {
+                    cmbStatus.Items.Add(status);
+                }
+            }
+
             cmbStatus.SelectedIndex = 0;
 
             btnSearch.Click += BtnSearch_Click;
@@ -74,6 +87,31 @@ namespace Monovera
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
+        private void DrawComboItem(object sender, DrawItemEventArgs e, Dictionary<string, string> iconMap)
+        {
+            if (e.Index < 0) return;
+            ComboBox cmb = sender as ComboBox;
+            string text = cmb.Items[e.Index].ToString();
+            e.DrawBackground();
+
+            Image img = null;
+            if (iconMap.TryGetValue(text, out var fileName))
+            {
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                if (File.Exists(path))
+                {
+                    try { img = Image.FromFile(path); } catch { }
+                }
+            }
+
+            if (img != null)
+                e.Graphics.DrawImage(img, e.Bounds.Left + 2, e.Bounds.Top + 2, 24, 24);
+
+            using var brush = new SolidBrush(e.ForeColor);
+            float textX = e.Bounds.Left + (img != null ? 28 : 2);
+            e.Graphics.DrawString(text, e.Font, brush, textX, e.Bounds.Top + 2);
+            e.DrawFocusRectangle();
+        }
 
 
         private async void BtnSearch_Click(object sender, EventArgs e)
@@ -220,8 +258,8 @@ namespace Monovera
                 string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                 string iconPath = "";
 
-                string typeIconKey = GetIconForType(issue.Type);
-                if (!string.IsNullOrEmpty(typeIconKey) && iconDefinitions.TryGetValue(typeIconKey, out var fileName))
+                string typeIconKey = frmMain.GetIconForType(issue.Type);
+                if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                 {
                     string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
                     if (File.Exists(fullPath))
@@ -335,40 +373,6 @@ namespace Monovera
             webViewResults.NavigateToString(html);
         }
 
-
-        private string GetIconHtml(string issueType)
-        {
-            string key = GetIconForType(issueType);
-            if (!string.IsNullOrEmpty(key) && iconDefinitions.TryGetValue(key, out var fileName))
-            {
-                string path = $"file:///{Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName).Replace("\\", "/")}";
-                return $"<img src='{path}' width='16' height='16' style='vertical-align:middle;margin-right:8px;' />";
-            }
-            return "";
-        }
-
-        private string GetIconForType(string issueType)
-        {
-            string lower = issueType.ToLower();
-
-            if (lower.StartsWith("user")) return "user"; // handles "User req" and "User Story"
-            if (lower.StartsWith("gui")) return "gui"; // GUI Component
-            if (lower.StartsWith("rule")) return "rule";
-            if (lower.StartsWith("definition")) return "definition";
-            if (lower.StartsWith("data entity")) return "entity";
-            if (lower.StartsWith("element")) return "element";
-            if (lower.StartsWith("folder")) return "folder";
-            if (lower.StartsWith("technical")) return "technical";
-            if (lower.StartsWith("project")) return "project";
-            if (lower.StartsWith("menu")) return "menu";
-            if (lower.StartsWith("test")) return "test";
-            if (lower.StartsWith("parameter")) return "parameter";
-            if (lower.StartsWith("report")) return "report";
-            if (lower.StartsWith("use case")) return "usecase";
-
-            return "";
-        }
-
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             string key = e.TryGetWebMessageAsString();
@@ -383,6 +387,31 @@ namespace Monovera
                     node.EnsureVisible();
                 });
             }
+        }
+
+        private void webViewResults_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void pbProgress_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void txtSearch_TextChanged(object sender, EventArgs e)
+        {
+
+        }
+
+        private void topPanel_Paint(object sender, PaintEventArgs e)
+        {
+
+        }
+
+        private void cmbType_SelectedIndexChanged(object sender, EventArgs e)
+        {
+
         }
     }
 }
