@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Linq;
@@ -12,6 +13,8 @@ using System.Threading.Tasks;
 using System.Web;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
+using static System.Net.Mime.MediaTypeNames;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using static Monovera.frmMain;
 
 namespace Monovera
@@ -45,38 +48,20 @@ namespace Monovera
             cmbType.DrawItem += (s, e) => DrawComboItem(s, e, typeIcons);
             cmbStatus.DrawItem += (s, e) => DrawComboItem(s, e, statusIcons);
 
-
+            cmbProject.Items.Clear();
             cmbProject.Items.Add("All");
-            cmbProject.Items.AddRange(projectList.ToArray());
+            cmbProject.Items.AddRange(config.Projects.Select(p => p.Project).ToArray());
+
+            // Subscribe event before setting SelectedIndex
+            cmbProject.SelectedIndexChanged += CmbProject_SelectedIndexChanged;
+
+            // Set selected index AFTER event subscription to trigger the handler
             cmbProject.SelectedIndex = 0;
 
-            cmbType.Items.Clear();
-            cmbType.Items.Add("All"); // Add "All" as the first option
+            // Just in case event doesn’t fire on setting SelectedIndex, call handler explicitly
+            CmbProject_SelectedIndexChanged(cmbProject, EventArgs.Empty);
 
-            if (typeIcons != null)
-            {
-                var sortedTypes = typeIcons.Keys.OrderBy(k => k);
-                foreach (var type in sortedTypes)
-                {
-                    cmbType.Items.Add(type);
-                }
-            }
-
-            cmbType.SelectedIndex = 0;
-
-            cmbStatus.Items.Clear();
-            cmbStatus.Items.Add("All"); // Add "All" option first
-
-            if (statusIcons != null)
-            {
-                var sortedStatuses = statusIcons.Keys.OrderBy(k => k);
-                foreach (var status in sortedStatuses)
-                {
-                    cmbStatus.Items.Add(status);
-                }
-            }
-
-            cmbStatus.SelectedIndex = 0;
+            txtSearch.KeyDown += TxtSearch_KeyDown;
 
             btnSearch.Click += BtnSearch_Click;
             btnClose.Click += (s, e) => Close();
@@ -85,7 +70,57 @@ namespace Monovera
             {
                 webViewResults.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }, TaskScheduler.FromCurrentSynchronizationContext());
+
+            txtSearch.Focus();
         }
+
+
+        private void TxtSearch_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true; // Prevents the ding sound
+
+                BtnSearch_Click(sender, e); // Call your method here
+            }
+        }
+
+        private void CmbProject_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            string selectedProject = cmbProject.SelectedItem.ToString();
+
+            var selectedProjects = selectedProject == "All"
+                ? config.Projects
+                : config.Projects.Where(p => p.Project == selectedProject);
+
+            // Merge all types
+            var mergedTypes = selectedProjects
+                .Where(p => p.Types != null)
+                .SelectMany(p => p.Types.Keys)
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            cmbType.Items.Clear();
+            cmbType.Items.Add("All");
+            cmbType.Items.AddRange(mergedTypes.ToArray());
+            cmbType.SelectedIndex = 0;
+
+            // Merge all statuses
+            var mergedStatuses = selectedProjects
+                .Where(p => p.Status != null)
+                .SelectMany(p => p.Status.Keys)
+                .Distinct()
+                .OrderBy(k => k)
+                .ToList();
+
+            cmbStatus.Items.Clear();
+            cmbStatus.Items.Add("All");
+            cmbStatus.Items.AddRange(mergedStatuses.ToArray());
+            cmbStatus.SelectedIndex = 0;
+        }
+
 
         private void DrawComboItem(object sender, DrawItemEventArgs e, Dictionary<string, string> iconMap)
         {
@@ -94,13 +129,13 @@ namespace Monovera
             string text = cmb.Items[e.Index].ToString();
             e.DrawBackground();
 
-            Image img = null;
+            System.Drawing.Image img = null;
             if (iconMap.TryGetValue(text, out var fileName))
             {
                 string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
                 if (File.Exists(path))
                 {
-                    try { img = Image.FromFile(path); } catch { }
+                    try { img = System.Drawing.Image.FromFile(path); } catch { }
                 }
             }
 
@@ -144,7 +179,7 @@ namespace Monovera
             lblProgress.Visible = true;
             pbProgress.Style = ProgressBarStyle.Marquee;
             lblProgress.Text = "Searching...";
-            Application.DoEvents(); // Let UI render the progress state
+            System.Windows.Forms.Application.DoEvents(); // Let UI render the progress state
 
             // Build JQL filters
             List<string> jqlFilters = new();
@@ -302,49 +337,75 @@ namespace Monovera
 <html>
 <head>
   <meta charset='UTF-8'>
-  <style>
-    body {{
-      font-family: 'Segoe UI'; font-size: 14px; padding: 20px;
-      background-color: #fefefe;
-      color: #1c1c1c;
-    }}
-    details {{
-      border: 1px solid #ccc;
-      border-radius: 6px;
-      margin-bottom: 20px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.04);
-    }}
-    summary {{
-      padding: 10px 14px;
-      font-weight: bold;
-      background-color: #e8f0fe;
-      cursor: pointer;
-      font-size: 1.1em;
-    }}
-    section {{
-      padding: 10px 20px;
-      background-color: #ffffff;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-    }}
-    td {{
-      padding: 8px;
-      border-bottom: 1px solid #eee;
-    }}
-    a {{
-      color: #1565c0;
-      text-decoration: none;
-    }}
-    a:hover {{
-      text-decoration: underline;
-    }}
-    img {{
-      vertical-align: middle;
-      margin-right: 8px;
-    }}
-  </style>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+
+<style>
+  body {{
+    font-family: 'IBM Plex Sans', sans-serif
+    font-size: 14px;
+    padding: 20px;
+    background-color: #fefefe;
+    color: #1c1c1c;
+  }}
+
+  details {{border: 1px solid #c8e6c9;
+    border-radius: 6px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 5px rgba(0, 64, 0, 0.04);
+    background-color: #f5fbf5;
+  }}
+
+  summary {{padding: 10px 14px;
+    font-weight: bold;
+    background-color: #e9f7e9;
+    cursor: pointer;
+    font-size: 1.1em;
+    color: #2e7d32;
+    border-bottom: 1px solid #d0e8d0;
+  }}
+
+  section {{padding: 10px 20px;
+    background-color: #ffffff;
+  }}
+
+  table {{width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    background-color: #fff;
+    border: 1px solid #e0f2e0;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 64, 0, 0.03);
+  
+            }}
+
+  td, th {{padding: 8px 10px;
+    border-bottom: 1px solid #eef5ee;
+    text-align: left;
+  
+            }}
+
+  th {{background - color: #e3f4e3;
+    color: #1a3d1a;
+    font-weight: 600;
+    font-size: 0.95em;
+  }}
+
+  tr:hover td {{background - color: #f1faf1;
+  }}
+
+  a {{color: #2e7d32;
+    text-decoration: none;
+  }}
+
+  a:hover {{text - decoration: underline;
+    color: #1b5e20;
+  }}
+
+  img {{vertical - align: middle;
+    margin-right: 8px;
+  }}
+</style>
+
 </head>
 <body>
   <details open>
@@ -370,7 +431,24 @@ namespace Monovera
 </body>
 </html>";
 
-            webViewResults.NavigateToString(html);
+            try
+            {
+                webViewResults.NavigateToString(html);
+            }
+            catch (Exception ex)
+            {
+                // Optionally log the error for debugging
+                Debug.WriteLine("NavigateToString error: " + ex.Message);
+
+                // Show user-friendly message
+                MessageBox.Show(
+                    "Result list is too long to show.\nPlease filter your results to get more specific results.",
+                    "Too Many Results!",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
+
         }
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -387,31 +465,6 @@ namespace Monovera
                     node.EnsureVisible();
                 });
             }
-        }
-
-        private void webViewResults_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void pbProgress_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void txtSearch_TextChanged(object sender, EventArgs e)
-        {
-
-        }
-
-        private void topPanel_Paint(object sender, PaintEventArgs e)
-        {
-
-        }
-
-        private void cmbType_SelectedIndexChanged(object sender, EventArgs e)
-        {
-
         }
     }
 }

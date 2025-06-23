@@ -31,24 +31,25 @@ namespace Monovera
         public static string jiraToken = "";
         public static Dictionary<string, string> typeIcons;
         public static Dictionary<string, string> statusIcons;
+        public static JiraConfigRoot config;
 
         private TabControl tabDetails;
 
 
-        private class JiraConfigRoot
+        public class JiraConfigRoot
         {
             public JiraAuth Jira { get; set; }
             public List<JiraProjectConfig> Projects { get; set; }
         }
 
-        private class JiraAuth
+        public class JiraAuth
         {
             public string Url { get; set; }
             public string Email { get; set; }
             public string Token { get; set; }
         }
 
-        private class JiraProjectConfig
+        public class JiraProjectConfig
         {
             public string Project { get; set; }
             public string Root { get; set; }
@@ -267,7 +268,7 @@ namespace Monovera
             }
 
             var configText = File.ReadAllText(path);
-            var config = JsonSerializer.Deserialize<JiraConfigRoot>(configText);
+            config = JsonSerializer.Deserialize<JiraConfigRoot>(configText);
 
             jiraBaseUrl = config.Jira.Url;
             jiraEmail = config.Jira.Email;
@@ -989,266 +990,340 @@ function showDiffOverlay(from, to) {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
-  <style>
-    body {{
-      font-family: 'Inter', sans-serif;
-      margin: 30px;
-      background: #ffffff;
-      color: #1c1c1c;
-      font-size: 16px;
-      line-height: 1.7;
-    }}
-    h2 {{
-      color: #0d47a1;
-      font-size: 1.9em;
-      margin-bottom: 20px;
-    }}
-    details {{
-      margin-bottom: 30px;
-      border: 1px solid #d6e0f5;
-      border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-    }}
-    summary {{
-      padding: 14px 20px;
-      background-color: #e8f0fe;
-      cursor: pointer;
-      font-weight: 600;
-      font-size: 1.2em;
-      border-bottom: 1px solid #d6e0f5;
-    }}
-    section {{
-      padding: 16px 20px;
-      background-color: #f9fafe;
-    }}
-    .subsection h4 {{
-      margin-top: 20px;
-      margin-bottom: 10px;
-      font-size: 1.1em;
-      color: #1a237e;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: separate;
-      border-spacing: 0;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-      overflow: hidden;
-      background: #fff;
-      margin-bottom: 20px;
-    }}
-    th {{
-      background-color: #e3f2fd;
-      color: #0d47a1;
-      text-align: left;
-      padding: 12px 16px;
-      font-weight: bold;
-      border-bottom: 2px solid #bbdefb;
-    }}
-    td {{
-      padding: 12px 16px;
-      border-bottom: 1px solid #e0e0e0;
-    }}
-    tr:hover td {{
-      background-color: #f0f4ff;
-    }}
-    a {{
-      color: #1565c0;
-      text-decoration: none;
-    }}
-    a:hover {{
-      text-decoration: underline;
-    }}
-    pre[class*='language-'] {{
-      background: #f5f5f5;
-      padding: 16px;
-      border-radius: 6px;
-      overflow-x: auto;
-      font-size: 0.9em;
-    }}
-    .history-day {{
-      margin: 24px 0;
-      border-left: 4px solid #1e88e5;
-      padding-left: 16px;
-    }}
-    .history-day h5 {{
-      font-size: 1.2em;
-      color: #0d47a1;
-      margin-bottom: 8px;
-    }}
-    .history-block {{
-      background: #f0f8ff;
-      padding: 12px 16px;
-      margin-bottom: 10px;
-      border: 1px solid #bbdefb;
-      border-radius: 6px;
-      box-shadow: inset 0 0 3px rgba(0,0,0,0.04);
-    }}
-    .change-header {{
-      font-weight: 600;
-      color: #1565c0;
-      margin-bottom: 6px;
-    }}
-    .history-item {{
-      font-family: sans-serif;
-      margin-bottom: 5px;
-    }}
-    .highlight-status {{ background: #fffde7; padding: 2px 6px; border-radius: 4px; }}
-    .highlight-assignee {{ background: #e8f5e9; padding: 2px 6px; border-radius: 4px; }}
-    .highlight-priority {{ background: #fce4ec; padding: 2px 6px; border-radius: 4px; }}
-    .from-val {{ color: #d32f2f; }}
-    .to-val {{ color: #2e7d32; }}
-    .diff-added {{ color: #007f00; font-weight: bold; }}
-    .diff-deleted {{ color: #888; text-decoration: line-through; }}
-    .diff-arrow {{ color: #999; padding: 0 4px; }}
-    .view-diff-btn {{
-      margin-left: 10px;
-      font-size: 0.9em;
-      cursor: pointer;
-    }}
-    .diff-overlay {{
-      position: fixed;
-      top: 5%;
-      left: 10%;
-      width: 80%;
-      height: 70%;
-      background: white;
-      border: 2px solid #ccc;
-      z-index: 9999;
-      overflow: auto;
-      display: none;
-      box-shadow: 0 0 20px rgba(0,0,0,0.3);
-    }}
-    .diff-overlay .diff-close {{
-      float: right;
-      margin: 10px;
-      cursor: pointer;
-      font-size: 20px;
-    }}
-    .diff-columns {{
-      display: flex;
-      justify-content: space-between;
-      padding: 20px;
-      font-family: monospace;
-      white-space: pre-wrap;
-    }}
-    .diff-columns > div {{
-      width: 48%;
-      border: 1px solid #eee;
-      padding: 10px;
-      background: #f9f9f9;
-    }}
+  <!-- Include IBM Plex Sans font -->
+<link href=""https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"" rel=""stylesheet"">
 
-.no-links {{padding: 12px;
-  color: #666;
-  font-style: italic;
-  background: #f9f9f9;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}}
+<style>
+  body {{
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 30px;
+    background: #ffffff;
+    color: #1b3a1b;
+    font-size: 16px;
+    line-height: 1.7;
+  }}
 
-    /* Attachment strip */
-    .attachment-strip-wrapper {{
-      position: relative;
-      overflow: hidden;
-    }}
-    .attachment-strip {{
-      display: flex;
-      gap: 12px;
-      overflow-x: auto;
-      scroll-behavior: smooth;
-      padding: 8px 36px;
-    }}
-    .attachment-strip::-webkit-scrollbar {{
-      height: 8px;
-    }}
-    .attachment-strip::-webkit-scrollbar-thumb {{
-      background: #bbb;
-      border-radius: 4px;
-    }}
+  h2 {{
+    color: #2e4d2e;
+    font-size: 1.9em;
+    margin-bottom: 20px;
+  }}
 
-    .attachment-nav {{
-      position: absolute;
-      top: 50%;
-      transform: translateY(-50%);
-      width: 32px;
-      height: 32px;
-      background: #eee;
-      border-radius: 50%;
-      text-align: center;
-      line-height: 32px;
-      font-weight: bold;
-      cursor: pointer;
-      box-shadow: 0 0 5px rgba(0,0,0,0.2);
-      z-index: 2;
-    }}
-    .attachment-nav.left {{ left: 0; }}
-    .attachment-nav.right {{ right: 0; }}
+  details {{
+    margin-bottom: 30px;
+    border: 1px solid #cde0cd;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0, 64, 0, 0.05);
+  }}
 
-    .attachment-card {{
-      border: 1px solid #ccc;
-      background: #fff;
-      border-radius: 6px;
-      padding: 6px;
-      text-align: center;
-      font-size: 0.85em;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      min-width: 130px;
-      max-width: 140px;
-    }}
+  summary {{
+    padding: 14px 20px;
+    background-color: #edf7ed;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1.2em;
+    border-bottom: 1px solid #d0e8d0;
+    color: #2e4d2e;
+  }}
 
-    .attachment-filename,
-    .attachment-meta,
-    .download-btn {{
-      width: 100%;
-      box-sizing: border-box;
-      margin: 4px 0;
-    }}
-    .attachment-meta {{
-      font-size: 0.75em;
-      color: #444;
-      line-height: 1.3;
-    }}
+  section {{
+    padding: 16px 20px;
+    background-color: #f8fcf8;
+  }}
 
-.no-attachments {{padding: 12px;
-  color: #666;
-  font-style: italic;
-  background: #f9f9f9;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}}
+  .subsection h4 {{
+    margin-top: 20px;
+    margin-bottom: 10px;
+    font-size: 1.1em;
+    color: #345e34;
+  }}
+
+  table {{
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }}
+
+  th {{
+    background-color: #e7f5e7;
+    color: #204020;
+    text-align: left;
+    padding: 12px 16px;
+    font-weight: bold;
+    border-bottom: 2px solid #c4dcc4;
+  }}
+
+  td {{
+    padding: 12px 16px;
+    border-bottom: 1px solid #e0eae0;
+    color: #2a2a2a;
+  }}
+
+  tr:hover td {{
+    background-color: #f0f8f0;
+  }}
+
+  a {{
+    color: #2e7d32;
+    text-decoration: none;
+  }}
+
+  a:hover {{
+    text-decoration: underline;
+    color: #1b5e20;
+  }}
+
+  pre[class*='language-'] {{
+    background: #f1f6f1;
+    padding: 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.9em;
+    color: #1b3a1b;
+  }}
+
+  .history-day {{
+    margin: 24px 0;
+    border-left: 4px solid #4caf50;
+    padding-left: 16px;
+  }}
+
+  .history-day h5 {{
+    font-size: 1.2em;
+    color: #256029;
+    margin-bottom: 8px;
+  }}
+
+  .history-block {{
+    background: #f2fbf2;
+    padding: 12px 16px;
+    margin-bottom: 10px;
+    border: 1px solid #d0e8d0;
+    border-radius: 6px;
+  }}
+
+  .change-header {{
+    font-weight: 600;
+    color: #336633;
+    margin-bottom: 6px;
+  }}
+
+  .history-item {{
+    font-family: sans-serif;
+    margin-bottom: 5px;
+  }}
+
+  .highlight-status {{
+    background: #edf7ed;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
+
+  .highlight-assignee {{
+    background: #e6f4e6;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
+
+  .highlight-priority {{
+    background: #e8f5e9;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }}
+
+  .from-val {{
+    color: #b71c1c;
+  }}
+
+  .to-val {{
+    color: #2e7d32;
+  }}
+
+  .diff-added {{
+    color: #1b5e20;
+    font-weight: bold;
+  }}
+
+  .diff-deleted {{
+    color: #888;
+    text-decoration: line-through;
+  }}
+
+  .diff-arrow {{
+    color: #999;
+    padding: 0 4px;
+  }}
+
+  .view-diff-btn {{
+    margin-left: 10px;
+    font-size: 0.9em;
+    cursor: pointer;
+    color: #2e7d32;
+  }}
+
+  .diff-overlay {{
+    position: fixed;
+    top: 5%;
+    left: 10%;
+    width: 80%;
+    height: 70%;
+    background: #ffffff;
+    border: 2px solid #a5d6a7;
+    z-index: 9999;
+    overflow: auto;
+    display: none;
+    box-shadow: 0 0 20px rgba(0, 64, 0, 0.2);
+  }}
+
+  .diff-overlay .diff-close {{
+    float: right;
+    margin: 10px;
+    cursor: pointer;
+    font-size: 20px;
+    color: #1a1a1a;
+  }}
+
+  .diff-columns {{
+    display: flex;
+    justify-content: space-between;
+    padding: 20px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }}
+
+  .diff-columns > div {{
+    width: 48%;
+    border: 1px solid #d4e9d4;
+    padding: 10px;
+    background: #f9fef9;
+    color: #1a1a1a;
+  }}
+
+  .no-links,
+  .no-attachments {{
+    padding: 12px;
+    color: #666;
+    font-style: italic;
+    background: #f6fdf6;
+    border: 1px solid #d6e9d6;
+    border-radius: 4px;
+  }}
+
+  .attachment-strip-wrapper {{
+    position: relative;
+    overflow: hidden;
+  }}
+
+  .attachment-strip {{
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    padding: 8px 36px;
+  }}
+
+  .attachment-strip::-webkit-scrollbar {{
+    height: 8px;
+  }}
+
+  .attachment-strip::-webkit-scrollbar-thumb {{
+    background: #a5d6a7;
+    border-radius: 4px;
+  }}
+
+  .attachment-nav {{
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    background: #edf7ed;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 32px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 0 5px rgba(0, 64, 0, 0.1);
+    z-index: 2;
+    color: #2e7d32;
+  }}
+
+  .attachment-nav.left {{
+    left: 0;
+  }}
+
+  .attachment-nav.right {{
+    right: 0;
+  }}
+
+  .attachment-card {{
+    border: 1px solid #c8e6c9;
+    background: #ffffff;
+    border-radius: 6px;
+    padding: 6px;
+    text-align: center;
+    font-size: 0.85em;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 130px;
+    max-width: 140px;
+    color: #2a2a2a;
+  }}
+
+  .attachment-filename,
+  .attachment-meta,
+  .download-btn {{
+    width: 100%;
+    box-sizing: border-box;
+    margin: 4px 0;
+  }}
+
+  .attachment-meta {{
+    font-size: 0.75em;
+    color: #4b4b4b;
+    line-height: 1.3;
+  }}
+
+  .attachments-wrapper {{
+    position: relative;
+    display: flex;
+    align-items: center;
+    margin: 10px 0;
+  }}
+
+  .attachments-strip {{
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 10px 0;
+    scroll-behavior: smooth;
+    flex-grow: 1;
+  }}
+
+  .scroll-btn {{
+    background-color: #e8f5e9;
+    border: none;
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 18px;
+    border-radius: 4px;
+    color: #2e7d32;
+    transition: background 0.3s;
+  }}
+
+  .scroll-btn:hover {{
+    background-color: #c8e6c9;
+  }}
+</style>
 
 
-.attachments-wrapper {{position: relative;
-  display: flex;
-  align-items: center;
-  margin: 10px 0;
-}}
 
-.attachments-strip {{display: flex;
-  gap: 10px;
-  overflow-x: auto;
-  padding: 10px 0;
-  scroll-behavior: smooth;
-  flex-grow: 1;
-}}
-
-.scroll-btn {{background - color: #e3f2fd;
-  border: none;
-  cursor: pointer;
-  padding: 8px 12px;
-  font-size: 18px;
-  border-radius: 4px;
-  color: #0d47a1;
-  transition: background 0.3s;
-}}
-
-.scroll-btn:hover {{background - color: #bbdefb;
-}}
-  </style>
 </head>
 <body>
   <h2>{headerLine}</h2>
@@ -1260,7 +1335,7 @@ function showDiffOverlay(from, to) {
     {statusIcon} {HttpUtility.HtmlEncode(status)}
   </div>
   <div>
-    🔗 <a href='{issueUrl}' target='_blank'>Open in Browser</a>
+  🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a>
   </div>
 </div>
 
@@ -1346,7 +1421,15 @@ function showDiffOverlay(from, to) {
       const scrollAmount = 160; // width + margin
       strip.scrollLeft += direction * scrollAmount;
     }}
-  </script>
+ 
+ function openInBrowser(url) {{
+  if (window.chrome?.webview) {{
+    window.chrome.webview.postMessage({{ action: 'openInBrowser', url }});
+  }}
+}}
+
+</script>
+
 </body>
 </html>";
 
@@ -1448,10 +1531,21 @@ function showDiffOverlay(from, to) {
         {
             try
             {
-                var message = e.TryGetWebMessageAsString();
+                string message = null;
+
+                // Try to get as string
+                try
+                {
+                    message = e.TryGetWebMessageAsString();
+                }
+                catch
+                {
+                    // Fall back to JSON
+                    message = e.WebMessageAsJson;
+                }
+
                 if (string.IsNullOrWhiteSpace(message)) return;
 
-                // Try to detect if it's JSON or a plain string
                 message = message.Trim();
 
                 if (message.StartsWith("{"))
@@ -1459,23 +1553,55 @@ function showDiffOverlay(from, to) {
                     using var jsonDoc = JsonDocument.Parse(message);
                     var root = jsonDoc.RootElement;
 
+                    // Handle openInBrowser
+                    if (root.TryGetProperty("action", out var actionProp) &&
+                        actionProp.GetString() == "openInBrowser")
+                    {
+                        string url = null;
+
+                        // Try to get "url" property from message
+                        if (root.TryGetProperty("url", out var urlProp))
+                        {
+                            url = urlProp.GetString();
+                        }
+
+                        // If not found, fallback to e.Source
+                        if (string.IsNullOrWhiteSpace(url) && Uri.TryCreate(e.Source, UriKind.Absolute, out var fallbackUri))
+                        {
+                            url = fallbackUri.ToString();
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(url))
+                        {
+                            System.Diagnostics.Process.Start(new ProcessStartInfo
+                            {
+                                FileName = url,
+                                UseShellExecute = true
+                            });
+                        }
+
+                        return;
+                    }
+
+                    // Handle download
                     if (root.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "download")
                     {
                         var filePath = root.GetProperty("path").GetString();
 
                         if (!string.IsNullOrEmpty(filePath))
                         {
-                            // Strip file:/// and decode
                             if (filePath.StartsWith("file:///"))
-                                filePath = Uri.UnescapeDataString(filePath.Substring(8)); // removes 'file:///' and keeps path
+                                filePath = Uri.UnescapeDataString(filePath.Substring(8));
 
-                            SaveFile(filePath); // your download/open logic
+                            SaveFile(filePath); // Your file handling logic
                         }
+
+                        return;
                     }
                 }
                 else
                 {
-                    // Handle plain string messages (e.g. issue keys like REQ-123)
+                    // Handle plain string messages (e.g. REQ-123)
                     SelectAndLoadTreeNode(message);
                 }
             }
@@ -1484,6 +1610,7 @@ function showDiffOverlay(from, to) {
                 Debug.WriteLine("WebMessageReceived error: " + ex.Message);
             }
         }
+
 
 
         private void SaveFile(string sourceFilePath)

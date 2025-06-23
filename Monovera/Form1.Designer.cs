@@ -62,16 +62,17 @@
             splitContainer1.Panel2.Controls.Add(panelTabs);
             splitContainer1.Panel2.Controls.Add(statusStrip1);
             splitContainer1.Size = new Size(1904, 1001);
-            splitContainer1.SplitterDistance = 517;
+            splitContainer1.SplitterDistance = 670;
             splitContainer1.TabIndex = 0;
             // 
             // tree
             // 
+            tree.BackColor = Color.Honeydew;
             tree.Dock = DockStyle.Fill;
             tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
-            tree.Size = new Size(517, 1001);
+            tree.Size = new Size(670, 1001);
             tree.TabIndex = 0;
             tree.AfterSelect += Tree_AfterSelect;
             // 
@@ -80,7 +81,7 @@
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
-            panelTabs.Size = new Size(1383, 979);
+            panelTabs.Size = new Size(1230, 979);
             panelTabs.TabIndex = 1;
             // 
             // statusStrip1
@@ -88,7 +89,7 @@
             statusStrip1.Items.AddRange(new ToolStripItem[] { pbProgress, lblProgress, toolStripStatusLabel1, toolStripSplitButton1 });
             statusStrip1.Location = new Point(0, 979);
             statusStrip1.Name = "statusStrip1";
-            statusStrip1.Size = new Size(1383, 22);
+            statusStrip1.Size = new Size(1230, 22);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
@@ -124,7 +125,7 @@
             // 
             mnuUpdateHierarchy.Image = Properties.Resources.Sync;
             mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
-            mnuUpdateHierarchy.Size = new Size(180, 22);
+            mnuUpdateHierarchy.Size = new Size(164, 22);
             mnuUpdateHierarchy.Text = "Update hierarchy";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
