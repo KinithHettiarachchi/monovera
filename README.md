@@ -76,7 +76,7 @@ Before launching the app, create a `configuration.json` file in the application 
 ```
 
 - `Jira.Url`: Your Jira instance base URL  
-- `Projects`: List of projects to load with root issue key, type and status icons  
+- `Projects`: List of projects to load with root issue key, Linke type name, type and status icons  
 - `Types` & `Status`: Maps for custom icons used for each type/status
 
 🔒 **Note**: Your credentials are used locally only — no telemetry or remote logging.
