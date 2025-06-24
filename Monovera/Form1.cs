@@ -32,6 +32,9 @@ namespace Monovera
         public static Dictionary<string, string> typeIcons;
         public static Dictionary<string, string> statusIcons;
         public static JiraConfigRoot config;
+        public static string hierarchyLinkTypeName = "Parent/Child";//"Parent/Child","Blocks";
+        //public static string hierarchyLinkTypeInward = "is blocked by";//"inwardIssue";
+        //public static string hierarchyLinkTypeOutward = "blocks";
 
         private TabControl tabDetails;
 
@@ -80,6 +83,9 @@ namespace Monovera
             public string Summary { get; set; }
             public string Type { get; set; }
             public List<JiraIssueLink> IssueLinks { get; set; } = new();
+
+            public DateTime? Updated { get; set; }
+
         }
 
         public frmMain()
@@ -277,10 +283,22 @@ namespace Monovera
             projectList = config.Projects.Select(p => p.Project).ToList();
             root_key = string.Join(",", config.Projects.Select(p => p.Root));
 
-            // Default to first project for type/status icons
-            typeIcons = config.Projects[0].Types;
-            statusIcons = config.Projects[0].Status;
+            // ✅ Merge icons from all projects
+            typeIcons = new Dictionary<string, string>();
+            statusIcons = new Dictionary<string, string>();
+
+            foreach (var project in config.Projects)
+            {
+                foreach (var kvp in project.Types)
+                    typeIcons[kvp.Key] = kvp.Value;
+
+                foreach (var kvp in project.Status)
+                    statusIcons[kvp.Key] = kvp.Value;
+            }
+
+            AddHomeTabAsync(tabDetails);
         }
+
 
 
         private async void frmMain_Load(object sender, EventArgs e)
@@ -288,6 +306,7 @@ namespace Monovera
             LoadConfigurationFromJson();
             InitializeIcons();
             await LoadAllProjectsToTreeAsync();
+            ShowRecentlyUpdatedIssuesAsync(tabDetails);
         }
 
         private async Task LoadAllProjectsToTreeAsync(bool forceSync = false)
@@ -381,7 +400,7 @@ namespace Monovera
             {
                 foreach (var link in issue.IssueLinks)
                 {
-                    if (link.LinkTypeName == "Parent/Child")
+                    if (link.LinkTypeName == hierarchyLinkTypeName)
                     {
                         if (issueDict.TryGetValue(link.OutwardIssueKey, out var child))
                         {
@@ -398,6 +417,319 @@ namespace Monovera
                 }
             }
         }
+
+        public async Task AddHomeTabAsync(TabControl tabDetails)
+        {
+            var webView = new Microsoft.Web.WebView2.WinForms.WebView2
+            {
+                Dock = DockStyle.Fill
+            };
+
+            await webView.EnsureCoreWebView2Async();
+
+            webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
+            {
+                var deferral = args.GetDeferral();
+                try { args.Accept(); } finally { deferral.Complete(); }
+            };
+
+            // Prepare the image path relative to application directory
+            string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "MonoveraBanner.png");
+
+            if (!File.Exists(imagePath))
+            {
+                MessageBox.Show("Image not found: images/MonoveraBanner.png", "Missing Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string base64 = Convert.ToBase64String(File.ReadAllBytes(imagePath));
+            string imageUri = $"data:image/webp;base64,{base64}";
+
+            // Build HTML content with light green background and image
+            string html = $@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <style>
+    body {{
+      margin: 0;
+      padding: 0;
+      background-color: #e8f5e9;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }}
+    img {{
+      max-width: 100%;
+      height: auto;
+    }}
+  </style>
+</head>
+<body>
+  <img src=""{imageUri}"" alt=""Monovera"" />
+</body>
+</html>";
+
+            // Set up ImageList if not already done
+            if (tabDetails.ImageList == null)
+            {
+                tabDetails.ImageList = new ImageList();
+                tabDetails.ImageList.ImageSize = new Size(16, 16);
+            }
+
+            // Optionally load an icon (or reuse monovera.webp thumbnail)
+            string iconKey = "home";
+            System.Drawing.Image iconImage = null;
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
+
+            if (File.Exists(iconFile))
+            {
+                try
+                {
+                    using var iconStream = File.OpenRead(iconFile);
+                    iconImage = System.Drawing.Image.FromStream(iconStream);
+                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                }
+                catch
+                {
+                    // Ignore icon load failure
+                }
+            }
+
+            var homePage = new TabPage("Welcome to Monovera!")
+            {
+                ImageKey = iconKey,
+                ToolTipText = "Welcome to Monovera!"
+            };
+
+            homePage.Controls.Add(webView);
+            tabDetails.TabPages.Add(homePage);
+            tabDetails.SelectedTab = homePage;
+
+            webView.NavigateToString(html);
+        }
+
+
+        public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails)
+        {
+            var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+            await webView.EnsureCoreWebView2Async();
+
+            webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
+            {
+                var deferral = args.GetDeferral();
+                try { args.Accept(); } finally { deferral.Complete(); }
+            };
+
+            // Handle messages from WebView
+            webView.CoreWebView2.WebMessageReceived += (s, args) =>
+            {
+                try
+                {
+                    string message = args.TryGetWebMessageAsString()?.Trim();
+
+                    if (!string.IsNullOrWhiteSpace(message))
+                    {
+                        // For simplicity, assume it's the Jira key (like "REQ-123")
+                        SelectAndLoadTreeNode(message); // Your existing method
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("WebMessageReceived in RecentUpdates error: " + ex.Message);
+                }
+            };
+
+
+            DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
+            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -30d ORDER BY updated DESC";
+
+            var updatedIssues = await SearchDialog.SearchJiraIssues(jql, null);
+
+            //Debug.WriteLine($"Total issues fetched: {updatedIssues.Count}");
+            //Debug.WriteLine($"With Updated: {updatedIssues.Count(i => i.Updated.HasValue)}");
+
+            foreach (var i in updatedIssues)
+            {
+                Debug.WriteLine($"Key={i.Key}, Updated={i.Updated}");
+            }
+
+
+            IEnumerable<IGrouping<DateTime, JiraIssueDto>> grouped;
+
+            try
+            {
+                grouped = updatedIssues
+                    .Where(i => i.Updated.HasValue)
+                    .GroupBy(i => i.Updated.Value.ToLocalTime().Date)
+                    .OrderByDescending(g => g.Key);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Grouping failed: " + ex.Message);
+                return;
+            }
+
+
+            if (grouped == null || !grouped.Any())
+            {
+                MessageBox.Show("No recently updated issues were found.", "No Data", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+
+            var sb = new StringBuilder();
+
+            if (!grouped.Any())
+            {
+                sb.AppendLine("<p>No issues updated in the past 30 days.</p>");
+            }
+            else
+            {
+                foreach (var group in grouped)
+                {
+                    sb.AppendLine($@"
+<details open>
+  <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
+  <section>
+    <table>");
+
+                    foreach (var issue in group)
+                    {
+                        string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
+                        string key = issue.Key;
+                        string iconPath = "";
+
+                        string typeIconKey = frmMain.GetIconForType(issue.Type);
+                        if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
+                        {
+                            string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                            if (File.Exists(fullPath))
+                            {
+                                try
+                                {
+                                    byte[] bytes = File.ReadAllBytes(fullPath);
+                                    string base64 = Convert.ToBase64String(bytes);
+                                    iconPath = $"<img src='data:image/png;base64,{base64}' width='20' height='20' />";
+                                }
+                                catch { }
+                            }
+                        }
+
+                        sb.AppendLine($"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath} {summary} [{key}]</a></td></tr>");
+                    }
+
+                    sb.AppendLine("</table></section></details>");
+                }
+            }
+
+            string html = $@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <style>
+    body {{
+      font-family: 'IBM Plex Sans', sans-serif;
+      margin: 30px;
+      font-size: 16px;
+      background-color: #f8fcf8;
+      color: #1c1c1c;
+    }}
+    details {{
+      border: 1px solid #c8e6c9;
+      border-radius: 6px;
+      margin-bottom: 20px;
+      background-color: #f5fbf5;
+      box-shadow: 0 2px 5px rgba(0, 64, 0, 0.04);
+    }}
+    summary {{
+      padding: 12px 18px;
+      background-color: #e9f7e9;
+      font-weight: bold;
+      font-size: 1.1em;
+      color: #2e7d32;
+      cursor: pointer;
+      border-bottom: 1px solid #d0e8d0;
+    }}
+    section {{
+      padding: 10px 20px;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 5px;
+    }}
+    td {{
+      padding: 8px;
+      border-bottom: 1px solid #eef5ee;
+    }}
+    a {{
+      color: #2e7d32;
+      text-decoration: none;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    img {{
+      vertical-align: middle;
+      margin-right: 6px;
+    }}
+  </style>
+</head>
+<body>
+{sb}
+<script>
+  document.querySelectorAll('a').forEach(link => {{
+    link.addEventListener('click', e => {{
+      e.preventDefault();
+      const key = link.dataset.key;
+      if (key && window.chrome?.webview)
+        window.chrome.webview.postMessage(key);
+    }});
+  }});
+</script>
+</body>
+</html>";
+            string iconKey = "updates";
+            System.Drawing.Image iconImage = null;
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
+
+            if (File.Exists(iconFile))
+            {
+                try
+                {
+                    using var iconStream = File.OpenRead(iconFile);
+                    iconImage = System.Drawing.Image.FromStream(iconStream);
+                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                }
+                catch
+                {
+                    // Ignore icon load failure
+                }
+            }
+
+            var updatePage = new TabPage("Recent Updates!")
+            {
+                ImageKey = iconKey,
+                ToolTipText = "Issues that were updated during past 30 days!"
+            };
+
+            updatePage.Controls.Add(webView);
+            tabDetails.TabPages.Add(updatePage);
+            tabDetails.SelectedTab = updatePage;
+
+            string tempFilePath = Path.Combine(Path.GetTempPath(), "monovera_updated.html");
+            File.WriteAllText(tempFilePath, html);
+            webView.CoreWebView2.Navigate(tempFilePath);
+        }
+
+
 
         private void AddChildNodesRecursively(TreeNode parentNode, string parentKey)
         {
@@ -433,7 +765,7 @@ namespace Monovera
                     foreach (var link in links.EnumerateArray())
                     {
                         var linkTypeName = link.GetProperty("type").GetProperty("name").GetString();
-                        if (linkTypeName == "Parent/Child" && link.TryGetProperty("outwardIssue", out var outward))
+                        if (linkTypeName == hierarchyLinkTypeName && link.TryGetProperty("outwardIssue", out var outward))
                         {
                             var outwardKey = outward.GetProperty("key").GetString();
                             var outwardFields = outward.GetProperty("fields");
@@ -605,10 +937,15 @@ namespace Monovera
                     using var ms = new MemoryStream();
                     tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                     string base64 = Convert.ToBase64String(ms.ToArray());
-                    statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 16px; vertical-align: middle; margin-right: 6px;'>";
+                    statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
                 }
 
                 string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
+
+                string issueType = fields.TryGetProperty("issuetype", out var typeProp) &&
+                   typeProp.TryGetProperty("name", out var typeName)
+                   ? typeName.GetString() ?? ""
+                   : "";
 
 
                 string htmlDesc = "";
@@ -621,7 +958,7 @@ namespace Monovera
                 string resolvedDesc = ReplaceJiraLinksAndSVNFeatures(htmlDesc);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
-                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 36px; vertical-align: middle; margin-right: 8px;'>";
                 string headerLine = $"{iconImg}<strong>{encodedSummary} [{issueKey}]</strong>";
 
                 string encodedJson = WebUtility.HtmlEncode(FormatJson(json));
@@ -670,7 +1007,7 @@ namespace Monovera
                                         using var ms = new MemoryStream();
                                         tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                                         var base64 = Convert.ToBase64String(ms.ToArray());
-                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:16px; vertical-align:middle; margin-right:6px;' />";
+                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:28px; vertical-align:middle; margin-right:6px;' />";
                                     }
 
                                     tableRows.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
@@ -706,9 +1043,11 @@ namespace Monovera
                     fieldsAttachment.TryGetProperty("attachment", out var attachmentsArray) &&
                     attachmentsArray.ValueKind == JsonValueKind.Array)
                 {
-                    if (!attachmentsArray.EnumerateArray().Any())
+                    int attachmentCount = attachmentsArray.GetArrayLength();
+
+                    if (attachmentCount == 0)
                     {
-                        attachmentsHtml = "<div class='no-attachments'>No attachments found.</div>";
+                        attachmentsHtml = $"<details><summary>Attachments ({attachmentCount})</summary>\r\n  <section><div class='no-attachments'>No attachments found.</div></summary></details>";
                     }
                     else
                     {
@@ -724,9 +1063,12 @@ namespace Monovera
                         string uniqueId = Guid.NewGuid().ToString("N");
 
                         sb.AppendLine($@"
-<div class='attachments-wrapper' id='wrapper-{uniqueId}'>
-  <button class='scroll-btn left' onclick='scrollAttachments(""{uniqueId}"", -1)'>&lt;</button>
-  <div class='attachments-strip' id='strip-{uniqueId}'>");
+<details>
+  <summary>Attachments ({attachmentCount})</summary>
+  <section>
+    <div class='attachments-wrapper' id='wrapper-{uniqueId}'>
+      <button class='scroll-btn left' onclick='scrollAttachments(""{uniqueId}"", -1)'>&lt;</button>
+      <div class='attachments-strip' id='strip-{uniqueId}'>");
 
                         foreach (var att in attachmentsArray.EnumerateArray())
                         {
@@ -738,10 +1080,10 @@ namespace Monovera
                             string created = att.TryGetProperty("created", out var createdProp) ? createdProp.GetString() ?? "" : "";
                             string author = att.TryGetProperty("author", out var authorProp) &&
                                             authorProp.TryGetProperty("displayName", out var authorNameProp)
-                                            ? authorNameProp.GetString() ?? "Unknown"
-                                            : "Unknown";
+                                                ? authorNameProp.GetString() ?? "Unknown"
+                                                : "Unknown";
 
-                            bool isImage = mimeType.StartsWith("image/") || fileExtension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp";
+                            bool isImage = mimeType.StartsWith("image/") || new[] { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" }.Contains(fileExtension);
 
                             string localFilePath = Path.Combine(tempDir, fileName);
 
@@ -766,7 +1108,7 @@ namespace Monovera
                             {
                                 try
                                 {
-                                    using var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
+                                    var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
                                     responseAttachment.EnsureSuccessStatusCode();
                                     var bytes = responseAttachment.Content.ReadAsByteArrayAsync().Result;
                                     var base64 = Convert.ToBase64String(bytes);
@@ -824,9 +1166,11 @@ namespace Monovera
                         }
 
                         sb.AppendLine($@"
-  </div>
-  <button class='scroll-btn right' onclick='scrollAttachments(""{uniqueId}"", 1)'>&gt;</button>
-</div>
+      </div>
+      <button class='scroll-btn right' onclick='scrollAttachments(""{uniqueId}"", 1)'>&gt;</button>
+    </div>
+  </section>
+</details>
 <script>
 function scrollAttachments(id, direction) {{
   const strip = document.getElementById('strip-' + id);
@@ -841,9 +1185,11 @@ function scrollAttachments(id, direction) {{
                 }
 
 
+
+
                 string linksHtml =
-                    BuildLinksTable("Parent", "Parent/Child", "inwardIssue") +
-                    BuildLinksTable("Children", "Parent/Child", "outwardIssue") +
+                    BuildLinksTable("Parent", hierarchyLinkTypeName, "inwardIssue") +
+                    BuildLinksTable("Children", hierarchyLinkTypeName, "outwardIssue") +
                     BuildLinksTable("Related", "Relates", null);
 
                 string historyHtml = "";
@@ -991,15 +1337,15 @@ function showDiffOverlay(from, to) {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <!-- Include IBM Plex Sans font -->
-<link href=""https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"" rel=""stylesheet"">
+<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
 
 <style>
   body {{
     font-family: 'IBM Plex Sans', sans-serif;
     margin: 30px;
-    background: #ffffff;
+    background: #f8fcf8;
     color: #1b3a1b;
-    font-size: 16px;
+    font-size: 18px;
     line-height: 1.7;
   }}
 
@@ -1043,7 +1389,7 @@ function showDiffOverlay(from, to) {
     border-collapse: separate;
     border-spacing: 0;
     border-radius: 8px;
-    background: #ffffff;
+    background: #f8fcf8;
     box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
     margin-bottom: 20px;
     overflow: hidden;
@@ -1329,6 +1675,8 @@ function showDiffOverlay(from, to) {
   <h2>{headerLine}</h2>
 
 <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
+  <div>🧰 <strong>Type:</strong> {issueType}</div>
+
   <div>📅 <strong>Updated:</strong> 
                 {lastUpdated}</div>
   <div>
@@ -1344,18 +1692,7 @@ function showDiffOverlay(from, to) {
     <section>{resolvedDesc}</section>
   </details>
 
-  <details>
-    <summary>Attachments</summary>
-    <section>
-      <div class='attachment-strip-wrapper'>
-        <div class='attachment-nav left' onclick='scrollStrip(-1)'>&lt;</div>
-        <div class='attachment-strip' id='attachmentStrip'>
-          {attachmentsHtml}
-        </div>
-        <div class='attachment-nav right' onclick='scrollStrip(1)'>&gt;</div>
-      </div>
-    </section>
-  </details>
+  {attachmentsHtml}
 
   <details open>
     <summary>Links</summary>
@@ -1880,7 +2217,7 @@ function showDiffOverlay(from, to) {
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == (Keys.Control | Keys.Shift | Keys.S))
+            if (keyData == (Keys.Control | Keys.S))
             {
                 ShowSearchDialog();
                 return true;
@@ -1918,5 +2255,15 @@ function showDiffOverlay(from, to) {
         {
             await LoadAllProjectsToTreeAsync(true);
         }
+
+        private void configurationToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            using (var configForm = new ConfigForm())
+            {
+                configForm.StartPosition = FormStartPosition.CenterParent;
+                configForm.ShowDialog(this);
+            }
+        }
+
     }
 }

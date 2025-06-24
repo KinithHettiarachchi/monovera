@@ -228,7 +228,7 @@ namespace Monovera
             return null;
         }
 
-        private async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
+        public static async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
         {
             var list = new List<JiraIssueDto>();
 
@@ -246,7 +246,7 @@ namespace Monovera
 
                 while (startAt < total)
                 {
-                    var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,status";
+                    var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,status,updated";
 
                     var res = await client.GetAsync(url);
                     res.EnsureSuccessStatusCode();
@@ -263,7 +263,21 @@ namespace Monovera
                         var fields = issue.GetProperty("fields");
                         var summary = fields.GetProperty("summary").GetString();
                         var type = fields.GetProperty("issuetype").GetProperty("name").GetString();
-                        list.Add(new JiraIssueDto { Key = key, Summary = summary, Type = type });
+
+                        DateTime? updated = null;
+                        if (fields.TryGetProperty("updated", out var updatedProp) &&
+                            DateTime.TryParse(updatedProp.GetString(), out var dt))
+                        {
+                            updated = dt;
+                        }
+
+                        list.Add(new JiraIssueDto
+                        {
+                            Key = key,
+                            Summary = summary,
+                            Type = type,
+                            Updated = updated
+                        });
                     }
 
                     collected += root.GetProperty("issues").GetArrayLength();
@@ -303,7 +317,7 @@ namespace Monovera
                         {
                             byte[] bytes = File.ReadAllBytes(fullPath);
                             string base64 = Convert.ToBase64String(bytes);
-                            iconPath = $"<img src='data:image/png;base64,{base64}' width='16' height='16' style='vertical-align:middle;margin-right:8px;' />";
+                            iconPath = $"<img src='data:image/png;base64,{base64}' width='28' height='28' style='vertical-align:middle;margin-right:8px;' />";
                         }
                         catch
                         {
@@ -326,7 +340,7 @@ namespace Monovera
             if (matchedTitle.Length == 0 && matchedDesc.Length == 0)
             {
                 webViewResults.NavigateToString(@"
-        <html><body style='font-family:Segoe UI;padding:30px;font-size:16px;color:#444;'>
+        <html><body style='font-family:Segoe UI;padding:30px;font-size:18px;color:#444;'>
         <h3>Nothing was found!</h3>
         </body></html>");
                 return;
@@ -337,14 +351,15 @@ namespace Monovera
 <html>
 <head>
   <meta charset='UTF-8'>
-  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+ <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
 
 <style>
   body {{
-    font-family: 'IBM Plex Sans', sans-serif
-    font-size: 14px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 30px;
+    font-size: 18px;
     padding: 20px;
-    background-color: #fefefe;
+    background-color: #f8fcf8;
     color: #1c1c1c;
   }}
 
@@ -365,13 +380,13 @@ namespace Monovera
   }}
 
   section {{padding: 10px 20px;
-    background-color: #ffffff;
+    background-color: #f8fcf8;
   }}
 
   table {{width: 100%;
     border-collapse: collapse;
     margin-top: 10px;
-    background-color: #fff;
+    background-color: #f8fcf8;
     border: 1px solid #e0f2e0;
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0, 64, 0, 0.03);
@@ -384,24 +399,24 @@ namespace Monovera
   
             }}
 
-  th {{background - color: #e3f4e3;
+  th {{background-color: #e3f4e3;
     color: #1a3d1a;
     font-weight: 600;
     font-size: 0.95em;
   }}
 
-  tr:hover td {{background - color: #f1faf1;
+  tr:hover td {{background-color: #f1faf1;
   }}
 
   a {{color: #2e7d32;
     text-decoration: none;
   }}
 
-  a:hover {{text - decoration: underline;
+  a:hover {{text-decoration: underline;
     color: #1b5e20;
   }}
 
-  img {{vertical - align: middle;
+  img {{vertical-align: middle;
     margin-right: 8px;
   }}
 </style>
@@ -433,7 +448,9 @@ namespace Monovera
 
             try
             {
-                webViewResults.NavigateToString(html);
+                string tempFilePath = Path.Combine(Path.GetTempPath(), "monovera_results.html");
+                File.WriteAllText(tempFilePath, html);
+                webViewResults.CoreWebView2.Navigate(tempFilePath);
             }
             catch (Exception ex)
             {
@@ -442,7 +459,7 @@ namespace Monovera
 
                 // Show user-friendly message
                 MessageBox.Show(
-                    "Result list is too long to show.\nPlease filter your results to get more specific results.",
+                    $"Result list is too long to show.\nPlease filter your results to get more specific results.\n\n{ex.Message}",
                     "Too Many Results!",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information

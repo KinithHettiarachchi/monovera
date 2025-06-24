@@ -113,7 +113,7 @@
             webViewResults.Dock = DockStyle.Fill;
             webViewResults.Location = new Point(0, 70);
             webViewResults.Name = "webViewResults";
-            webViewResults.Size = new Size(1605, 608);
+            webViewResults.Size = new Size(1605, 568);
             webViewResults.TabIndex = 0;
             webViewResults.ZoomFactor = 1D;
             // 
@@ -160,7 +160,7 @@
             cmbProject.Location = new Point(725, 15);
             cmbProject.Name = "cmbProject";
             cmbProject.Size = new Size(141, 33);
-            cmbProject.TabIndex = 7;
+            cmbProject.TabIndex = 1;
             // 
             // label1
             // 
@@ -188,7 +188,7 @@
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1605, 678);
+            ClientSize = new Size(1605, 638);
             Controls.Add(webViewResults);
             Controls.Add(topPanel);
             Font = new Font("Segoe UI", 9F);

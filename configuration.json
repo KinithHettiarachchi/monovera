@@ -9,24 +9,27 @@
       "Project": "PROJECT1",
       "Root": "PRJ1-100",
       "Types": {
-        "Issue Type1": "type_icon1.png",
-        "Issue Type2": "type_icon2.png"
+        "Project": "type_project.png",
+        "Rule": "type_rule.png",
+        "User Story": "type_userreq.png"
       },
       "Status": {
-        "Status 1": "status_1.png",
-        "Status 2": "status_2.png"
+        "Draft": "status_draft.png",
+        "Published": "status_published.png",
+        "Rejected": "status_rejected.png"
       }
     },
     {
       "Project": "PROJECT2",
-      "Root": "PRJ2-1",
+      "Root": "PRJ2-100",
       "Types": {
-        "Issue Type3": "type_icon3.png",
-        "Issue Type4": "type_icon4.png"
+        "Folder": "type_folder.png",
+        "Test Case": "type_test.png"
       },
       "Status": {
-        "Status X": "status_X.png",
-        "Status Y": "status_Y.png"
+        "To Do": "status_todo.png",
+        "In Progress": "status_draft.png",
+        "Done": "status_published.png"
       }
     }
   ]

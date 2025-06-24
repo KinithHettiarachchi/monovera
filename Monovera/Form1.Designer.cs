@@ -39,6 +39,7 @@
             toolStripStatusLabel1 = new ToolStripStatusLabel();
             toolStripSplitButton1 = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
+            configurationToolStripMenuItem = new ToolStripMenuItem();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -106,14 +107,15 @@
             // 
             // toolStripStatusLabel1
             // 
+            toolStripStatusLabel1.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0);
             toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-            toolStripStatusLabel1.Size = new Size(133, 17);
-            toolStripStatusLabel1.Text = "Search = Ctrl + Shift + S";
+            toolStripStatusLabel1.Size = new Size(97, 17);
+            toolStripStatusLabel1.Text = "Search = Ctrl + S";
             // 
             // toolStripSplitButton1
             // 
             toolStripSplitButton1.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            toolStripSplitButton1.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy });
+            toolStripSplitButton1.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, configurationToolStripMenuItem });
             toolStripSplitButton1.Image = Properties.Resources.settings;
             toolStripSplitButton1.ImageTransparentColor = Color.Magenta;
             toolStripSplitButton1.Name = "toolStripSplitButton1";
@@ -128,6 +130,14 @@
             mnuUpdateHierarchy.Size = new Size(164, 22);
             mnuUpdateHierarchy.Text = "Update hierarchy";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
+            // 
+            // configurationToolStripMenuItem
+            // 
+            configurationToolStripMenuItem.Image = Properties.Resources.settings;
+            configurationToolStripMenuItem.Name = "configurationToolStripMenuItem";
+            configurationToolStripMenuItem.Size = new Size(164, 22);
+            configurationToolStripMenuItem.Text = "Configuration...";
+            configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
             // 
             // toolTip1
             // 
@@ -167,5 +177,6 @@
         private ToolStripStatusLabel toolStripStatusLabel1;
         private ToolStripSplitButton toolStripSplitButton1;
         private ToolStripMenuItem mnuUpdateHierarchy;
+        private ToolStripMenuItem configurationToolStripMenuItem;
     }
 }
