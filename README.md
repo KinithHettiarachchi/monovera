@@ -40,7 +40,7 @@ Before launching the app, create a `configuration.json` file in the application 
 ```json
 {
   "Jira": {
-    "Url": "https://YOUR_DOMAIN.atlassian.net",
+    "Url": "<https://YOUR_DOMAIN.atlassian.net>",
     "Email": "YOUR_EMAIL@YOUR_DOMAIN.com",
     "Token": "YOUR_TOKEN"
   },
@@ -48,6 +48,7 @@ Before launching the app, create a `configuration.json` file in the application 
     {
       "Project": "PROJECT1",
       "Root": "PRJ1-100",
+      "LinkTypeName": "Blocks",
       "Types": {
         "Issue Type1": "type_icon1.png",
         "Issue Type2": "type_icon2.png"
@@ -60,6 +61,7 @@ Before launching the app, create a `configuration.json` file in the application 
     {
       "Project": "PROJECT2",
       "Root": "PRJ2-1",
+      "LinkTypeName": "Blocks",
       "Types": {
         "Issue Type3": "type_icon3.png",
         "Issue Type4": "type_icon4.png"
