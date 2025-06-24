@@ -1,4 +1,3 @@
-
 # Monovera
 
 **Monovera** (One Truth) is an open-source Windows Forms application that allows users to efficiently **visualize**, **search**, and **navigate** a Jira requirement repository structured using **parent-child relationships**.
@@ -24,7 +23,7 @@ It is ideal for product development, QA, and business analysis teams working wit
   - Raw JSON response
 
 - 💡 **Icon Support**  
-  Rich icons for issue types and statuses for improved usability.
+  Rich icons for issue types and statuses, fully customizable via config.
 
 - 🔗 **Jira Link Detection**  
   Auto-converts inline Jira links and SVN-style links into clickable in-app links.
@@ -36,21 +35,49 @@ It is ideal for product development, QA, and business analysis teams working wit
 
 ## 🛠 Configuration
 
-Before launching, set up your Jira connection by creating a `configuration.properties` file in the application directory with the following content:
+Before launching the app, create a `configuration.json` file in the application directory with the following structure:
 
-```properties
-JIRA_HOME=https://YOUR_DOMAIN.atlassian.net
-JIRA_EMAIL=YOUR_EMAIL@YOUR_DOMAIN.com
-JIRA_TOKEN=YOUR_JIRA_TOKEN
-JIRA_PROJECTS=YOUR_PROJECT1,YOUR_PROJECT2
-JIRA_PROJECT_ROOTS=PRJ1-100,PRJ2-1
+```json
+{
+  "Jira": {
+    "Url": "https://YOUR_DOMAIN.atlassian.net",
+    "Email": "YOUR_EMAIL@YOUR_DOMAIN.com",
+    "Token": "YOUR_TOKEN"
+  },
+  "Projects": [
+    {
+      "Project": "PROJECT1",
+      "Root": "PRJ1-100",
+      "Types": {
+        "Issue Type1": "type_icon1.png",
+        "Issue Type2": "type_icon2.png"
+      },
+      "Status": {
+        "Status 1": "status_1.png",
+        "Status 2": "status_2.png"
+      }
+    },
+    {
+      "Project": "PROJECT2",
+      "Root": "PRJ2-1",
+      "Types": {
+        "Issue Type3": "type_icon3.png",
+        "Issue Type4": "type_icon4.png"
+      },
+      "Status": {
+        "Status X": "status_X.png",
+        "Status Y": "status_Y.png"
+      }
+    }
+  ]
+}
 ```
 
-- `JIRA_PROJECTS`: Comma-separated list of Jira project keys to be loaded.
-- `JIRA_PROJECT_ROOTS`: Root issue keys to initialize the tree from (e.g., top-level User Reqs).
-- `JIRA_TOKEN`: Personal Access Token (PAT) from your Atlassian account.
+- `Jira.Url`: Your Jira instance base URL  
+- `Projects`: List of projects to load with root issue key, type and status icons  
+- `Types` & `Status`: Maps for custom icons used for each type/status
 
-🔒 **Note**: Your credentials are only used locally — no cloud storage or telemetry.
+🔒 **Note**: Your credentials are used locally only — no telemetry or remote logging.
 
 ---
 
@@ -59,11 +86,11 @@ JIRA_PROJECT_ROOTS=PRJ1-100,PRJ2-1
 Press `Ctrl+Shift+S` to open the search dialog.
 
 You can:
-- Enter an issue key to jump directly.
-- Or search by text across selected projects.
+- Enter an issue key to jump directly
+- Or search by text across selected projects
 - Filter by Issue Type and Status
 
-Results appear in a collapsible viewer with clickable links styled as:
+Results appear in a collapsible viewer with clickable links like:
 
 ```text
 🧑 Add login validation [PRJ1-123]
@@ -76,9 +103,9 @@ Clicking a result auto-navigates the tree to that issue.
 
 ## 📁 Project Structure
 
-- **Form1.cs**: Main form. Loads tree view, handles issue detail rendering, icons, caching, attachments, history.
-- **SearchDialog.cs**: Search interface with filters and result presentation.
-- **configuration.properties**: Connection and project configuration.
+- **Form1.cs** – Main form: loads tree, handles detail view, icons, history, and attachments  
+- **SearchDialog.cs** – Dialog to search issues across loaded projects  
+- **configuration.json** – Your Jira credentials, project roots, and icon mappings
 
 ---
 
@@ -99,11 +126,11 @@ Clicking a result auto-navigates the tree to that issue.
 
 2. Open the solution in **Visual Studio**.
 
-3. Make sure you have:
-   - .NET 6+ or .NET Framework (depending on your version)
+3. Requirements:
+   - .NET 6+ or compatible .NET Framework
    - WebView2 runtime installed
 
-4. Create the `images/` folder in your app directory and place the required icons (`type_userreq.png`, etc.).
+4. Create the `images/` folder in your app directory and place the icons defined in your `configuration.json`.
 
 5. Run the application.
 
@@ -111,8 +138,8 @@ Clicking a result auto-navigates the tree to that issue.
 
 ## 🧱 Dependencies
 
-- **WebView2** – For rendering HTML-based views
-- **SharpSVN** – To pull `.feature` file content from SVN repositories
+- **WebView2** – For rendering HTML-based views  
+- **SharpSVN** – To pull `.feature` file content from SVN repositories  
 - **System.Text.Json**, **HttpClient** – For Jira API communication
 
 ---
@@ -129,8 +156,8 @@ You are free to use, modify, and distribute this software. Contributions welcome
 
 We welcome contributions to improve Monovera!
 
-- Create feature branches
-- Write clear commit messages
+- Create feature branches  
+- Write clear commit messages  
 - Submit a pull request
 
 For major changes, please open an issue first to discuss the proposal.
@@ -139,4 +166,4 @@ For major changes, please open an issue first to discuss the proposal.
 
 ## 📬 Contact
 
-If you use Monovera or would like to contribute, feel free to get in touch via GitHub issues.
+If you use Monovera or would like to contribute, feel free to reach out via GitHub Issues or Discussions.
