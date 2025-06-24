@@ -76,7 +76,8 @@ Before launching the app, create a `configuration.json` file in the application 
 ```
 
 - `Jira.Url`: Your Jira instance base URL  
-- `Projects`: List of projects to load with root issue key, Linke type name, type and status icons  
+- `Projects`: List of projects to load with root issue key, Linke type name, type and status icons
+- `LinkT Type Name`: Link tpye name used to build the issue hierarchy tree. This can be a default one like 'Blocks' where you have linked a child to parent as 'Blocks' or a custom link type like 'Parent/Child' with hierarchy.
 - `Types` & `Status`: Maps for custom icons used for each type/status
 
 🔒 **Note**: Your credentials are used locally only — no telemetry or remote logging.
