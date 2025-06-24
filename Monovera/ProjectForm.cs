@@ -27,6 +27,7 @@ namespace Monovera
             {
                 txtProject.Text = existing.Project;
                 txtRoot.Text = existing.Root;
+                txtLinkType.Text=existing.LinkTypeName;
                 foreach (var kv in existing.Types)
                     dgvTypes.Rows.Add(kv.Key, kv.Value);
                 foreach (var kv in existing.Status)
@@ -37,6 +38,7 @@ namespace Monovera
             {
                 Project.Project = txtProject.Text;
                 Project.Root = txtRoot.Text;
+                Project.LinkTypeName = txtLinkType.Text;
                 Project.Types = ReadFromGrid(dgvTypes);
                 Project.Status = ReadFromGrid(dgvStatus);
                 DialogResult = DialogResult.OK;
@@ -68,19 +70,10 @@ namespace Monovera
             {
                 Project = original.Project,
                 Root = original.Root,
+                LinkTypeName = original.LinkTypeName,
                 Types = new Dictionary<string, string>(original.Types),
                 Status = new Dictionary<string, string>(original.Status)
             };
-        }
-
-        private void btnOk_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void ProjectForm_Load(object sender, EventArgs e)
-        {
-
         }
     }
 }

@@ -23,6 +23,8 @@ namespace Monovera
     {
         public string Project { get; set; }
         public string Root { get; set; }
+
+        public string LinkTypeName { get; set; }
         public Dictionary<string, string> Types { get; set; } = new();
         public Dictionary<string, string> Status { get; set; } = new();
     }

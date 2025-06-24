@@ -32,9 +32,7 @@ namespace Monovera
         public static Dictionary<string, string> typeIcons;
         public static Dictionary<string, string> statusIcons;
         public static JiraConfigRoot config;
-        public static string hierarchyLinkTypeName = "Parent/Child";//"Parent/Child","Blocks";
-        //public static string hierarchyLinkTypeInward = "is blocked by";//"inwardIssue";
-        //public static string hierarchyLinkTypeOutward = "blocks";
+        public static string hierarchyLinkTypeName="";// = "Blocks";//"Parent/Child","Blocks";
 
         private TabControl tabDetails;
 
@@ -56,6 +54,8 @@ namespace Monovera
         {
             public string Project { get; set; }
             public string Root { get; set; }
+
+            public string LinkTypeName { get; set; }
             public Dictionary<string, string> Types { get; set; }
             public Dictionary<string, string> Status { get; set; }
         }
@@ -282,6 +282,7 @@ namespace Monovera
 
             projectList = config.Projects.Select(p => p.Project).ToList();
             root_key = string.Join(",", config.Projects.Select(p => p.Root));
+            hierarchyLinkTypeName = string.Join(",", config.Projects.Select(p => p.LinkTypeName));
 
             // ✅ Merge icons from all projects
             typeIcons = new Dictionary<string, string>();
@@ -321,6 +322,8 @@ namespace Monovera
 
             foreach (var project in projectList)
             {
+                lblProgress.Text = $"Loading Project {project}...";
+
                 string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{project}.json");
                 List<JiraIssueDto> issues;
 
@@ -400,7 +403,7 @@ namespace Monovera
             {
                 foreach (var link in issue.IssueLinks)
                 {
-                    if (link.LinkTypeName == hierarchyLinkTypeName)
+                    if (link.LinkTypeName == hierarchyLinkTypeName.Split(",")[0].ToString())
                     {
                         if (issueDict.TryGetValue(link.OutwardIssueKey, out var child))
                         {
@@ -765,7 +768,7 @@ namespace Monovera
                     foreach (var link in links.EnumerateArray())
                     {
                         var linkTypeName = link.GetProperty("type").GetProperty("name").GetString();
-                        if (linkTypeName == hierarchyLinkTypeName && link.TryGetProperty("outwardIssue", out var outward))
+                        if (linkTypeName == hierarchyLinkTypeName.Split(",")[0].ToString() && link.TryGetProperty("outwardIssue", out var outward))
                         {
                             var outwardKey = outward.GetProperty("key").GetString();
                             var outwardFields = outward.GetProperty("fields");
@@ -1188,8 +1191,8 @@ function scrollAttachments(id, direction) {{
 
 
                 string linksHtml =
-                    BuildLinksTable("Parent", hierarchyLinkTypeName, "inwardIssue") +
-                    BuildLinksTable("Children", hierarchyLinkTypeName, "outwardIssue") +
+                    BuildLinksTable("Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                    BuildLinksTable("Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
                     BuildLinksTable("Related", "Relates", null);
 
                 string historyHtml = "";

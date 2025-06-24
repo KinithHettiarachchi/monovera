@@ -8,6 +8,7 @@
     {
       "Project": "PROJECT1",
       "Root": "PRJ1-100",
+      "LinkTypeName": "Blocks",
       "Types": {
         "Project": "type_project.png",
         "Rule": "type_rule.png",
@@ -22,6 +23,7 @@
     {
       "Project": "PROJECT2",
       "Root": "PRJ2-100",
+      "LinkTypeName": "Blocks",
       "Types": {
         "Folder": "type_folder.png",
         "Test Case": "type_test.png"
