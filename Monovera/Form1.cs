@@ -38,6 +38,8 @@ namespace Monovera
 
         private TabControl tabDetails;
 
+        string appDir ="";
+        string tempDir = "";
 
         public class JiraConfigRoot
         {
@@ -91,11 +93,18 @@ namespace Monovera
 
             public DateTime? Updated { get; set; }
 
+            public DateTime? Created { get; set; }
+
         }
 
         public frmMain()
         {
             InitializeComponent();
+
+            appDir = AppDomain.CurrentDomain.BaseDirectory;
+            tempDir = Path.Combine(appDir, "temp");
+            Directory.CreateDirectory(tempDir);
+
             InitializeContextMenu();
 
             //Tabs for right side
@@ -801,25 +810,27 @@ namespace Monovera
             DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
             string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -30d ORDER BY updated DESC";
 
-            var updatedIssues = await SearchDialog.SearchJiraIssues(jql, null);
-
-            //Debug.WriteLine($"Total issues fetched: {updatedIssues.Count}");
-            //Debug.WriteLine($"With Updated: {updatedIssues.Count(i => i.Updated.HasValue)}");
-
-            foreach (var i in updatedIssues)
+            var rawIssues = await SearchDialog.SearchJiraIssues(jql, null);
+            var tasks = rawIssues.Select(async issue =>
             {
-                Debug.WriteLine($"Key={i.Key}, Updated={i.Updated}");
-            }
+                if (await HasSummaryOrDescriptionChangeAsync(issue.Key))
+                    return issue;
+                return null;
+            });
+
+            var withChanges = await Task.WhenAll(tasks);
+            var filteredIssues = withChanges.Where(i => i != null).ToList();
 
 
             IEnumerable<IGrouping<DateTime, JiraIssueDto>> grouped;
 
             try
             {
-                grouped = updatedIssues
-                    .Where(i => i.Updated.HasValue)
-                    .GroupBy(i => i.Updated.Value.ToLocalTime().Date)
-                    .OrderByDescending(g => g.Key);
+                grouped = filteredIssues
+     .Where(i => i.Updated.HasValue)
+     .GroupBy(i => i.Updated.Value.ToLocalTime().Date)
+     .OrderByDescending(g => g.Key);
+
             }
             catch (Exception ex)
             {
@@ -978,11 +989,52 @@ namespace Monovera
             tabDetails.TabPages.Add(updatePage);
             tabDetails.SelectedTab = updatePage;
 
-            string tempFilePath = Path.Combine(Path.GetTempPath(), "monovera_updated.html");
+            string tempFilePath = Path.Combine(tempDir, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
         }
 
+        private async Task<bool> HasSummaryOrDescriptionChangeAsync(string issueKey)
+        {
+            var url = $"{jiraBaseUrl}/rest/api/3/issue/{issueKey}?expand=changelog";
+            using var client = new HttpClient();
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
+
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                return false;
+
+            var content = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(content);
+
+            if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
+                changelog.TryGetProperty("histories", out var histories))
+            {
+                foreach (var history in histories.EnumerateArray())
+                {
+                    if (history.TryGetProperty("created", out var createdProp) &&
+                        DateTime.TryParse(createdProp.GetString(), out var created) &&
+                        created >= DateTime.UtcNow.AddDays(-30))
+                    {
+                        if (history.TryGetProperty("items", out var items))
+                        {
+                            foreach (var item in items.EnumerateArray())
+                            {
+                                if (item.TryGetProperty("field", out var fieldName))
+                                {
+                                    string field = fieldName.GetString();
+                                    if (field == "summary" || field == "description")
+                                        return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
 
 
         private void AddChildNodesRecursively(TreeNode parentNode, string parentKey)
@@ -1184,6 +1236,12 @@ namespace Monovera
                                     : updatedProp.GetString()
                                 : "N/A";
 
+                string createdDate = fields.TryGetProperty("created", out var issueCreatedProp)
+                                ? DateTime.TryParse(issueCreatedProp.GetString(), out var IssueCreatedDt)
+                                    ? IssueCreatedDt.ToString("yyyy-MM-dd HH:mm")
+                                    : issueCreatedProp.GetString()
+                                : "N/A";
+
                 string statusIcon = "";
                 string iconKeyStatus = GetIconForStatus(status);
                 if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
@@ -1310,7 +1368,7 @@ namespace Monovera
                         clientAttachment.BaseAddress = new Uri(jiraBaseUrl);
                         clientAttachment.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authTokenAttachment);
 
-                        var tempDir = Path.Combine(Path.GetTempPath(), "JiraAttachments");
+                        tempDir = Path.Combine(tempDir, "JiraAttachments");
                         Directory.CreateDirectory(tempDir);
 
                         var sb = new StringBuilder();
@@ -1446,82 +1504,146 @@ function scrollAttachments(id, direction) {{
                     BuildLinksTable("Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
                     BuildLinksTable("Related", "Relates", null);
 
-                string historyHtml = "";
-                if (root.TryGetProperty("changelog", out var changelog) &&
-                    changelog.TryGetProperty("histories", out var histories))
+                string historyHtml = BuildHistoryHtml(root);
+
+                string html = BuildIssueHtml(headerLine,issueType,statusIcon,status,createdDate,lastUpdated,issueUrl,resolvedDesc,attachmentsHtml,linksHtml,historyHtml,encodedJson);
+
+                var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                await webView.EnsureCoreWebView2Async();
+
+                webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
                 {
-                    var grouped = histories.EnumerateArray()
-                        .Select(h =>
+                    var deferral = args.GetDeferral();
+                    try { args.Accept(); } finally { deferral.Complete(); }
+                };
+
+                webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
+                if (tabDetails.ImageList == null)
+                {
+                    tabDetails.ImageList = new ImageList();
+                    tabDetails.ImageList.ImageSize = new Size(16, 16);
+                }
+
+                System.Drawing.Image iconImage = null;
+                string iconKey = issueKey;
+                if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
+                {
+                    try
+                    {
+                        string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
+                        byte[] bytes = Convert.FromBase64String(base64);
+                        using var ms = new MemoryStream(bytes);
+                        iconImage = System.Drawing.Image.FromStream(ms);
+                        if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                            tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+
+                var page = new TabPage(issueKey)
+                {
+                    ImageKey = iconKey,
+                    ToolTipText = $"{summary} [{issueKey}]"
+                };
+
+                page.Controls.Add(webView);
+                tabDetails.TabPages.Add(page);
+                tabDetails.SelectedTab = page;
+
+                webView.NavigateToString(html);
+
+                tree.SelectedNode = e.Node;
+                e.Node.EnsureVisible();
+                tree.Focus();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        public static string BuildHistoryHtml(JsonElement root)
+        {
+            if (!root.TryGetProperty("changelog", out var changelog) ||
+                !changelog.TryGetProperty("histories", out var histories))
+                return "";
+
+            var grouped = histories.EnumerateArray()
+                .Select(h =>
+                {
+                    var createdRaw = h.GetProperty("created").GetString();
+                    if (!DateTime.TryParse(createdRaw, out var created))
+                        created = DateTime.MinValue;
+
+                    var author = "";
+                    if (h.TryGetProperty("author", out var authorProp) &&
+                        authorProp.TryGetProperty("displayName", out var displayNameProp))
+                        author = displayNameProp.GetString() ?? "";
+
+                    var items = h.GetProperty("items").EnumerateArray()
+                        .Select(item =>
                         {
-                            var createdRaw = h.GetProperty("created").GetString();
-                            if (!DateTime.TryParse(createdRaw, out var created))
-                                created = DateTime.MinValue;
+                            var field = item.GetProperty("field").GetString();
+                            var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
+                            var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
 
-                            var author = "";
-                            if (h.TryGetProperty("author", out var authorProp) &&
-                                authorProp.TryGetProperty("displayName", out var displayNameProp))
-                                author = displayNameProp.GetString() ?? "";
-
-                            var items = h.GetProperty("items").EnumerateArray()
-                                .Select(item =>
-                                {
-                                    var field = item.GetProperty("field").GetString();
-                                    var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
-                                    var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
-
-                                    string icon = field?.ToLower() switch
-                                    {
-                                        "status" => "🟢",
-                                        "assignee" => "👤",
-                                        "priority" => "⚡",
-                                        "summary" => "📝",
-                                        "description" => "📄",
-                                        _ => "🔧"
-                                    };
-
-                                    string highlight = field?.ToLower() switch
-                                    {
-                                        "status" => "highlight-status",
-                                        "assignee" => "highlight-assignee",
-                                        "priority" => "highlight-priority",
-                                        _ => ""
-                                    };
-
-                                    string inlineDiff = DiffText(from, to);
-
-                                    string fromEsc = HttpUtility.JavaScriptStringEncode(from);
-                                    string toEsc = HttpUtility.JavaScriptStringEncode(to);
-
-                                    string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View</button>";
-
-                                    return $@"<li class='history-item {highlight}'>{icon} <strong>{HttpUtility.HtmlEncode(field)}</strong>: 
-<span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
-                                });
-
-                            return new
+                            string icon = field?.ToLower() switch
                             {
-                                Day = created.Date,
-                                Html = $@"
+                                "status" => "🟢",
+                                "assignee" => "👤",
+                                "priority" => "⚡",
+                                "summary" => "📝",
+                                "description" => "📄",
+                                _ => "🔧"
+                            };
+
+                            string highlight = field?.ToLower() switch
+                            {
+                                "status" => "highlight-status",
+                                "assignee" => "highlight-assignee",
+                                "priority" => "highlight-priority",
+                                _ => ""
+                            };
+
+                            string inlineDiff = DiffText(from, to); // assumes you have this method
+                            string fromEsc = HttpUtility.JavaScriptStringEncode(from);
+                            string toEsc = HttpUtility.JavaScriptStringEncode(to);
+
+                            string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View</button>";
+
+                            return $@"<li class='history-item {highlight}'>{icon} <strong>{HttpUtility.HtmlEncode(field)}</strong>: 
+<span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
+                        });
+
+                    return new
+                    {
+                        Day = created.Date,
+                        Html = $@"
 <div class='history-block'>
     <div class='change-header'>{created:HH:mm} by <strong>{HttpUtility.HtmlEncode(author)}</strong></div>
     <ul>{string.Join("", items)}</ul>
 </div>"
-                            };
-                        })
-                        .GroupBy(x => x.Day)
-                        .OrderByDescending(g => g.Key);
+                    };
+                })
+                .GroupBy(x => x.Day)
+                .OrderByDescending(g => g.Key);
 
-                    var sb = new StringBuilder();
+            var sb = new StringBuilder();
 
-
-                    foreach (var group in grouped)
-                    {
-                        sb.AppendLine($@"<div class='history-day'>
+            foreach (var group in grouped)
+            {
+                sb.AppendLine($@"<div class='history-day'>
 <h5>{group.Key:yyyy-MM-dd}</h5>
 {string.Join("\n", group.Select(g => g.Html))}</div>");
-                    }
+            }
 
-                    sb.AppendLine(@"
+            // Append diff overlay HTML + JS
+            sb.AppendLine(@"
 <div class='diff-overlay' id='diffOverlay'>
     <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
     <div class='diff-columns'>
@@ -1531,7 +1653,6 @@ function scrollAttachments(id, direction) {{
 </div>
 
 <script>
-// Simple char-level diff highlighter (similar to C# DiffText)
 function simpleDiffHtml(from, to) {
   let i = 0;
   let minLen = Math.min(from.length, to.length);
@@ -1545,7 +1666,6 @@ function simpleDiffHtml(from, to) {
   let fromDeleted = from.slice(i);
   let toAdded = to.slice(i);
 
-  // Escape HTML helper
   function escapeHtml(text) {
     return text.replace(/&/g, ""&amp;"")
                .replace(/</g, ""&lt;"")
@@ -1569,19 +1689,30 @@ function simpleDiffHtml(from, to) {
 
 function showDiffOverlay(from, to) {
   const diffs = simpleDiffHtml(from, to);
-
   document.getElementById('diffFrom').innerHTML = diffs.htmlFrom;
   document.getElementById('diffTo').innerHTML = diffs.htmlTo;
   document.getElementById('diffOverlay').style.display = 'block';
 }
-</script>
+</script>");
 
-");
+            return sb.ToString();
+        }
 
-                    historyHtml = sb.ToString();
-                }
-
-                string html = $@"
+        public string BuildIssueHtml(
+    string headerLine,
+    string issueType,
+    string statusIcon,
+    string status,
+    string createdDate,
+    string lastUpdated,
+    string issueUrl,
+    string resolvedDesc,
+    string attachmentsHtml,
+    string linksHtml,
+    string historyHtml,
+    string encodedJson)
+        {
+            return $@"
 <!DOCTYPE html>
 <html>
 <head>
@@ -1590,8 +1721,7 @@ function showDiffOverlay(from, to) {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
-  <!-- Include IBM Plex Sans font -->
-<link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet' />
 
 <style>
   body {{
@@ -1737,7 +1867,7 @@ function showDiffOverlay(from, to) {
   }}
 
   .from-val {{
-    color: #b71c1c;
+    color: #000000;
   }}
 
   .to-val {{
@@ -1745,12 +1875,14 @@ function showDiffOverlay(from, to) {
   }}
 
   .diff-added {{
-    color: #1b5e20;
-    font-weight: bold;
+    background-color: #e8f5e9;
+    color: #2e7d32;
+    font-weight: normal;
   }}
 
   .diff-deleted {{
-    color: #888;
+    background-color: #ffebee;
+    color: #d32f2f;
     text-decoration: line-through;
   }}
 
@@ -1921,25 +2053,16 @@ function showDiffOverlay(from, to) {
     background-color: #c8e6c9;
   }}
 </style>
-
-
-
 </head>
 <body>
   <h2>{headerLine}</h2>
-
-<div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
-  <div>🧰 <strong>Type:</strong> {issueType}</div>
-
-  <div>📅 <strong>Updated:</strong> 
-                {lastUpdated}</div>
-  <div>
-    {statusIcon} {HttpUtility.HtmlEncode(status)}
+  <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
+    <div>🧰 <strong>Type:</strong> {issueType}</div>
+    <div>{statusIcon} {System.Web.HttpUtility.HtmlEncode(status)}</div>
+    <div>📅 <strong>Created:</strong> {createdDate}</div>
+    <div>📅 <strong>Updated:</strong> {lastUpdated}</div>
+    <div>🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a></div>
   </div>
-  <div>
-  🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a>
-  </div>
-</div>
 
   <details open>
     <summary>Description</summary>
@@ -2009,83 +2132,24 @@ function showDiffOverlay(from, to) {
 
     function scrollStrip(direction) {{
       const strip = document.getElementById('attachmentStrip');
-      const scrollAmount = 160; // width + margin
+      const scrollAmount = 160;
       strip.scrollLeft += direction * scrollAmount;
     }}
- 
- function openInBrowser(url) {{
-  if (window.chrome?.webview) {{
-    window.chrome.webview.postMessage({{ action: 'openInBrowser', url }});
-  }}
-}}
 
-</script>
-
+    function openInBrowser(url) {{
+      if (window.chrome?.webview) {{
+        window.chrome.webview.postMessage({{ action: 'openInBrowser', url }});
+      }}
+    }}
+  </script>
 </body>
 </html>";
-
-                var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-                await webView.EnsureCoreWebView2Async();
-
-                webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
-                {
-                    var deferral = args.GetDeferral();
-                    try { args.Accept(); } finally { deferral.Complete(); }
-                };
-
-                webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
-                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-
-                if (tabDetails.ImageList == null)
-                {
-                    tabDetails.ImageList = new ImageList();
-                    tabDetails.ImageList.ImageSize = new Size(16, 16);
-                }
-
-                System.Drawing.Image iconImage = null;
-                string iconKey = issueKey;
-                if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
-                {
-                    try
-                    {
-                        string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
-                        byte[] bytes = Convert.FromBase64String(base64);
-                        using var ms = new MemoryStream(bytes);
-                        iconImage = System.Drawing.Image.FromStream(ms);
-                        if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
-                            tabDetails.ImageList.Images.Add(iconKey, iconImage);
-                    }
-                    catch
-                    {
-                        // ignore
-                    }
-                }
-
-                var page = new TabPage(issueKey)
-                {
-                    ImageKey = iconKey,
-                    ToolTipText = $"{summary} [{issueKey}]"
-                };
-
-                page.Controls.Add(webView);
-                tabDetails.TabPages.Add(page);
-                tabDetails.SelectedTab = page;
-
-                webView.NavigateToString(html);
-
-                tree.SelectedNode = e.Node;
-                e.Node.EnsureVisible();
-                tree.Focus();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
         }
+
 
         private static string DiffText(string? from, string? to)
         {
-            if (from == to) return $"<span>{WebUtility.HtmlEncode(from ?? "")}</span>";
+            if (from == to) return "";
 
             from ??= "";
             to ??= "";
@@ -2097,7 +2161,6 @@ function showDiffOverlay(from, to) {
             // Find common prefix
             while (i < minLen && from[i] == to[i])
             {
-                diff.Append(WebUtility.HtmlEncode(from[i].ToString()));
                 i++;
             }
 
@@ -2105,18 +2168,19 @@ function showDiffOverlay(from, to) {
             if (i < from.Length)
             {
                 var deleted = WebUtility.HtmlEncode(from.Substring(i));
-                diff.Append($@"<span class='diff-deleted'>{deleted}</span>");
+                diff.Append($@"<br/><br/>Removed <br/><span class='diff-deleted'>{deleted}</span>");
             }
 
             // Added part (to)
             if (i < to.Length)
             {
                 var added = WebUtility.HtmlEncode(to.Substring(i));
-                diff.Append($@"<span class='diff-added'>{added}</span>");
+                diff.Append($@"<br/><br/>Added <br/><span class='diff-added'>{added}</span>");
             }
 
             return diff.ToString();
         }
+
 
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
@@ -2406,19 +2470,30 @@ function showDiffOverlay(from, to) {
             }
         }
 
-        private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key)
+        private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key, bool showMessage = true)
         {
             foreach (TreeNode node in nodes)
             {
                 if (node.Tag?.ToString() == key)
                     return node;
 
-                var child = FindNodeByKey(node.Nodes, key);
+                var child = FindNodeByKey(node.Nodes, key, false);
                 if (child != null)
                     return child;
             }
+
+            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to")  && showMessage)
+            {
+                MessageBox.Show(
+                    $"{key} was not found to select in the tree.\n\nThis could be a newly added ticket. Please update the hierarchy to view it.",
+                    "Node Not Found!",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
             return null;
         }
+
 
         private string FormatJson(string rawJson)
         {
@@ -2472,8 +2547,8 @@ function showDiffOverlay(from, to) {
         private void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
         {
             var result = MessageBox.Show(
-          "Are you sure you want to sync the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
-          "Sync Hierarchy",
+          "Are you sure you want to update the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
+          "Update Hierarchy",
           MessageBoxButtons.YesNo,
           MessageBoxIcon.Warning
       );
