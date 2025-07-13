@@ -1,111 +1,95 @@
-# Monovera
+# 🌐 Monovera
 
-**Monovera** (One Truth) is an open-source Windows Forms application that allows users to efficiently **visualize**, **search**, and **navigate** a Jira requirement repository structured using **parent-child relationships**.
-
-It is ideal for product development, QA, and business analysis teams working with structured Jira data. Monovera provides a user-friendly interface to explore hierarchical issue relationships and access detailed issue information — including attachments, links, history, and even embedded `.feature` files from SVN.
-
----
-
-## ✨ Features
-
-- 🧭 **Visual Tree View of Requirements**  
-  Displays the full parent-child issue hierarchy using collapsible tree nodes.
-
-- 🔍 **Powerful Search Dialog (Ctrl+Shift+S)**  
-  Search by text, issue type, and status across selected projects — shows results grouped by **Title match** and **Description match**.
-
-- 📋 **Issue Details Viewer**  
-  Clicking an issue displays full detail:
-  - Summary and rendered description
-  - Linked issues (Parent, Children, Related)
-  - Inline change history with diff
-  - Attachments with previews and downloads
-  - Raw JSON response
-
-- 💡 **Icon Support**  
-  Rich icons for issue types and statuses, fully customizable via config.
-
-- 🔗 **Jira Link Detection**  
-  Auto-converts inline Jira links and SVN-style links into clickable in-app links.
-
-- 🧩 **SVN Integration**  
-  Automatically fetches and embeds `.feature` file content referenced via SVN links in descriptions.
+**Monovera** _(Latin: "One Truth")_ is a powerful **Windows Forms application** that lets you **visualize, search, and explore Jira requirement hierarchies** with ease.  
+Built for **Product Managers**, **QA Engineers**, and **Business Analysts**, Monovera simplifies structured Jira data and lets you **see the full story, from epics to sub-tasks — in one interactive UI**.
 
 ---
 
-## 🛠 Configuration
+## 🚀 Overview
 
-Before launching the app, create a `configuration.json` file in the application directory with the following structure:
+🔐 Securely connect to your Jira cloud instance, configure project roots, and **explore issues in a visual tree**.  
+📂 Select any issue to view a **beautifully rendered HTML preview** — including its description, attachments, history, links, and even `.feature` files referenced from your SVN repositories.
+
+Monovera helps teams gain **deep insights into requirements** — without clicking through dozens of Jira pages.
+
+---
+
+## ✨ Features at a Glance
+
+- 🌲 **Hierarchical Tree View**  
+  Intuitively view full parent–child Jira issue structures.
+
+- 🔍 **Advanced Search**  
+  Search across projects by **text, type, and status**, with results categorized by where the match occurred (title vs. description).
+
+- 📄 **Detailed HTML Viewer**  
+  See:
+  - ✅ Summary and rendered **Jira description** (with markup and colors)
+  - 🔗 **Linked Issues** (Parents, Children, Related)
+  - 📜 **Change History** with inline visual diffs
+  - 📎 **Attachments** (view, download, and open)
+  - 🧩 Embedded **`.feature` files** from SVN
+  - 🧠 Raw **JSON** for power users
+
+- 🎨 **Custom Icons**  
+  Use personalized icons for issue types and statuses.
+
+- 🔗 **Inline Jira & SVN Link Handling**  
+  Automatically renders issue keys and SVN references as clickable links.
+
+- 🛠️ **Configuration UI**  
+  Manage your credentials, project list, and icon mappings with a built-in GUI.
+
+---
+
+## ⚙️ Quick Configuration
+
+Create a file named `configuration.json` in the app directory:
 
 ```json
 {
   "Jira": {
     "Url": "https://YOUR_DOMAIN.atlassian.net",
-    "Email": "YOUR_EMAIL@YOUR_DOMAIN.com",
-    "Token": "YOUR_TOKEN"
+    "Email": "YOUR_EMAIL@domain.com",
+    "Token": "YOUR_API_TOKEN"
   },
   "Projects": [
     {
-      "Project": "PROJECT1",
-      "Root": "PRJ1-100",
+      "Project": "PROJ1",
+      "Root": "PROJ1-100",
       "Types": {
-        "Issue Type1": "type_icon1.png",
-        "Issue Type2": "type_icon2.png"
+        "Story": "story_icon.png",
+        "Bug": "bug_icon.png"
       },
       "Status": {
-        "Status 1": "status_1.png",
-        "Status 2": "status_2.png"
-      }
-    },
-    {
-      "Project": "PROJECT2",
-      "Root": "PRJ2-1",
-      "Types": {
-        "Issue Type3": "type_icon3.png",
-        "Issue Type4": "type_icon4.png"
-      },
-      "Status": {
-        "Status X": "status_X.png",
-        "Status Y": "status_Y.png"
+        "To Do": "todo_icon.png",
+        "Done": "done_icon.png"
       }
     }
   ]
 }
 ```
 
-- `Jira.Url`: Your Jira instance base URL  
-- `Projects`: List of projects to load with root issue key, type and status icons  
-- `Types` & `Status`: Maps for custom icons used for each type/status
+💡 **Tips**:  
+- `Types` and `Status` sections let you define custom icons.  
+- Place all icons in an `images/` folder within your application directory.
 
-🔒 **Note**: Your credentials are used locally only — no telemetry or remote logging.
-
----
-
-## 🔎 Search Example
-
-Click on the tree area and press `Ctrl+Shift+Q` to open the search dialog.
-
-You can:
-- Enter an issue key to jump directly
-- Or search by text across selected projects
-- Filter by Issue Type and Status
-
-Results appear in a collapsible viewer with clickable links like:
-
-```text
-🧑 Add login validation [PRJ1-123]
-🧑 Setup error messages [PRJ2-124]
-```
-
-Clicking a result auto-navigates the tree to that issue.
+🔒 **Note**: Your credentials are stored locally and never transmitted or logged externally.
 
 ---
 
-## 📁 Project Structure
+## 🧱 Project Structure
 
-- **Form1.cs** – Main form: loads tree, handles detail view, icons, history, and attachments  
-- **SearchDialog.cs** – Dialog to search issues across loaded projects  
-- **configuration.json** – Your Jira credentials, project roots, and icon mappings
+| File | Purpose |
+|------|---------|
+| `frmMain.cs` | Main UI and Jira integration logic |
+| `ConfigForm.cs` | Dialog to configure Jira credentials and projects |
+| `frmProject.cs` | Per-project editor for issue types, icons, and status |
+| `frmSearch.cs` | Search dialog with live results in WebView2 |
+| `JiraConfigRoot.cs` | Models for JSON config and internal mapping |
+| `JiraHtmlReportGenerator.cs` | Generates full HTML reports for selected issue trees |
+| `configuration.json` | Your project + credential settings |
+| `images/` | Folder for all icons used in the UI |
 
 ---
 
@@ -117,53 +101,69 @@ Clicking a result auto-navigates the tree to that issue.
 
 ---
 
-## 🧑‍💻 Build Instructions
+## 🧑‍💻 Build & Run
 
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/KinithHettiarachchi/monovera.git
-   ```
+### 🛠 Requirements
 
-2. Open the solution in **Visual Studio**.
+- [.NET 6+ SDK](https://dotnet.microsoft.com/download)
+- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
 
-3. Requirements:
-   - .NET 6+ or compatible .NET Framework
-   - WebView2 runtime installed
+### 🚧 Steps
 
-4. Create the `images/` folder in your app directory and place the icons defined in your `configuration.json`.
+```bash
+# 1. Clone the repo
+git clone https://github.com/KinithHettiarachchi/monovera.git
 
-5. Run the application.
+# 2. Open in Visual Studio
+# (Double-click the .sln file or open via File > Open > Project)
 
----
+# 3. Add icon images to: images/
 
-## 🧱 Dependencies
+# 4. Create your configuration.json
 
-- **WebView2** – For rendering HTML-based views  
-- **SharpSVN** – To pull `.feature` file content from SVN repositories  
-- **System.Text.Json**, **HttpClient** – For Jira API communication
+# 5. Build & Run
+```
 
 ---
 
-## 🔓 License
+## 📦 Dependencies
 
-Monovera is open-source and released under the [MIT License](LICENSE).
-
-You are free to use, modify, and distribute this software. Contributions welcome!
+| Library | Purpose |
+|--------|---------|
+| **WebView2** | Render HTML views with modern browser support |
+| **SharpSVN** | Read `.feature` files from SVN repositories |
+| **System.Text.Json** | Fast and flexible JSON handling |
+| **HttpClient** | Communicate with Jira's REST API |
 
 ---
 
-## 🙌 Contributing
+## 📄 License
 
-We welcome contributions to improve Monovera!
+Licensed under the [MIT License](LICENSE).  
+You're free to **use, modify, and distribute** Monovera.
 
-- Create feature branches  
-- Write clear commit messages  
-- Submit a pull request
+---
 
-For major changes, please open an issue first to discuss the proposal.
+## 🤝 Contributing
+
+We welcome improvements, ideas, and PRs!
+
+### ✅ How to contribute:
+1. Fork this repository  
+2. Create a new branch: `feature/your-feature-name`  
+3. Commit your changes with clear messages  
+4. Submit a pull request 🙌
+
+📌 For major changes, **please open an issue** first to discuss your ideas.
 
 ---
 
 ## 📬 Contact
 
-If you use Monovera or would like to contribute, feel free to reach out via GitHub Issues or Discussions.
+Have feedback, need help, or want to collaborate?  
+📮 [Open an Issue](https://github.com/KinithHettiarachchi/monovera/issues)
+
+---
+
+> _“Truth is ever to be found in simplicity.” – Isaac Newton_  
+> Let Monovera help you find that truth in your Jira data.
