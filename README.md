@@ -1,7 +1,7 @@
 # 🌐 Monovera
 
 **Monovera** _(Latin: "One Truth")_ is a powerful **Windows Forms application** that lets you **visualize, search, and explore Jira requirement hierarchies** with ease.  
-Built for **Product Managers**, **QA Engineers**, and **Business Analysts**, Monovera simplifies structured Jira data and lets you **see the full story, from epics to sub-tasks — in one interactive UI**.
+Built for **Product Managers**, **QA Engineers**, and **Business Analysts**, Monovera simplifies structured Jira data and lets you **see the full story as a hieararchy — in one interactive UI**.
 
 ---
 
