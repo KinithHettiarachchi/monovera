@@ -33,6 +33,10 @@ Monovera helps teams gain **deep insights into requirements** — without clicki
   - 🧩 Embedded **`.feature` files** from SVN
   - 🧠 Raw **JSON** for power users
 
+- 🧾 Generate Hierarchical Reports
+Export a comprehensive, structured report starting from any selected issue, capturing the full hierarchy beneath it. The report maintains the parent–child structure so readers can seamlessly follow the flow of requirements in a single, continuous document.
+This approach provides a clear and fast overview of the entire scope — much more effective than navigating separate pages for each issue, which can be fragmented and tiring to read. Ideal for reviews, stakeholder presentations, or documentation.
+
 - 🎨 **Custom Icons**  
   Use personalized icons for issue types and statuses.
 
