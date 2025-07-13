@@ -18,6 +18,8 @@ Monovera helps teams gain **deep insights into requirements** — without clicki
 
 - 🌲 **Hierarchical Tree View**  
   Intuitively view full parent–child Jira issue structures.
+  The relationship to be used in determining the hierarchy can be easily configured in the configuration file.
+  _i.e. Blocks or any other relationship that denotes your parent-child way of hiearchy_ 
 
 - 🔍 **Advanced Search**  
   Search across projects by **text, type, and status**, with results categorized by where the match occurred (title vs. description).
