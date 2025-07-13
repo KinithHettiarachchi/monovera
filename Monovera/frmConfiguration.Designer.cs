@@ -1,6 +1,6 @@
 ﻿namespace Monovera
 {
-    partial class ConfigForm
+    partial class frmConfiguration
     {
         /// <summary>
         /// Required designer variable.
@@ -28,7 +28,7 @@
         /// </summary>
         private void InitializeComponent()
         {
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ConfigForm));
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmConfiguration));
             label1 = new Label();
             label2 = new Label();
             label3 = new Label();

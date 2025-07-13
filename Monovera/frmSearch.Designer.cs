@@ -1,6 +1,6 @@
 ﻿namespace Monovera
 {
-    partial class SearchDialog
+    partial class frmSearch
     {
         private System.ComponentModel.IContainer components = null;
 
@@ -24,7 +24,7 @@
 
         private void InitializeComponent()
         {
-            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(SearchDialog));
+            System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(frmSearch));
             txtSearch = new TextBox();
             btnSearch = new Button();
             cmbType = new ComboBox();

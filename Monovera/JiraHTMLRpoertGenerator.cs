@@ -6,15 +6,26 @@ using System.Windows.Forms;
 using System.Drawing;
 using static Monovera.frmMain;
 
+/// <summary>
+/// Generates a hierarchical HTML report for Jira issues.
+/// Traverses the issue tree, fetches descriptions and attachments, and produces a styled HTML file.
+/// </summary>
 public class JiraHtmlReportGenerator
 {
+    // Lookup for all issues by key
     private readonly Dictionary<string, JiraIssue> issueDict;
+    // Maps parent issue keys to their child issues
     private readonly Dictionary<string, List<JiraIssue>> childrenByParent;
+    // Jira authentication details
     private readonly string jiraEmail;
     private readonly string jiraToken;
     private readonly string jiraBaseUrl;
+    // Reference to the tree view for icons and navigation
     private readonly TreeView tree;
 
+    /// <summary>
+    /// Initializes the report generator with required data and UI references.
+    /// </summary>
     public JiraHtmlReportGenerator(
         Dictionary<string, JiraIssue> issueDict,
         Dictionary<string, List<JiraIssue>> childrenByParent,
@@ -31,19 +42,30 @@ public class JiraHtmlReportGenerator
         this.tree = tree;
     }
 
+    /// <summary>
+    /// Generates the HTML report for the hierarchy starting from the given root issue key.
+    /// </summary>
+    /// <param name="rootKey">The root issue key to start the report from.</param>
+    /// <param name="progress">Optional progress reporter for UI feedback.</param>
+    /// <returns>Path to the generated HTML file.</returns>
     public async Task<string> GenerateAsync(string rootKey, IProgress<string>? progress = null)
     {
         progress?.Report("Collecting issues...");
         var flatList = new List<(JiraIssue issue, string html, int level)>();
         await CollectIssuesRecursively(rootKey, 0, flatList, progress);
 
-        // Assign outline numbers
+        // Assign outline numbers for hierarchical display (e.g. 1, 1.1, 1.2, 2, ...)
         var numbered = GenerateOutlineNumbers(flatList);
 
         progress?.Report("Creating HTML report...");
         return await CreateHtmlReport(numbered);
     }
 
+    /// <summary>
+    /// Generates outline numbers for each issue in the hierarchy (e.g. 1, 1.1, 1.2, 2, ...).
+    /// </summary>
+    /// <param name="flatList">Flat list of issues with their HTML and hierarchy level.</param>
+    /// <returns>List of issues with outline numbers.</returns>
     private List<(JiraIssue issue, string html, string number)> GenerateOutlineNumbers(List<(JiraIssue issue, string html, int level)> flatList)
     {
         var numbers = new int[10];
@@ -60,22 +82,30 @@ public class JiraHtmlReportGenerator
         return result;
     }
 
-
+    /// <summary>
+    /// Recursively collects issues and their HTML descriptions, starting from the given key.
+    /// Adds each issue to the result list with its hierarchy level.
+    /// </summary>
+    /// <param name="key">Issue key to start from.</param>
+    /// <param name="level">Hierarchy level (depth).</param>
+    /// <param name="result">List to accumulate results.</param>
+    /// <param name="progress">Optional progress reporter.</param>
     private async Task CollectIssuesRecursively(string key, int level, List<(JiraIssue, string, int)> result, IProgress<string>? progress)
     {
         if (!issueDict.TryGetValue(key, out var issue)) return;
 
-        // Unpack the related keys as well
+        // Fetch description HTML, attachments, and related issue keys
         var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
         html = ReplaceAttachmentImageUrls(html, attachments);
         html = RewriteImageUrls(html);
 
-        // Assign related keys to issue property
+        // Assign related keys to the issue for later rendering
         issue.RelatedIssueKeys = relatedKeys;
 
         result.Add((issue, html, level));
         progress?.Report($"Report generation in progress : Added {issue.Key}...");
 
+        // Recursively collect child issues
         if (childrenByParent.TryGetValue(key, out var children))
         {
             foreach (var child in children)
@@ -83,6 +113,11 @@ public class JiraHtmlReportGenerator
         }
     }
 
+    /// <summary>
+    /// Fetches the rendered HTML description, attachment URLs, and related issue keys for a Jira issue.
+    /// </summary>
+    /// <param name="issueKey">The Jira issue key.</param>
+    /// <returns>Tuple of HTML description, attachment URLs, and related issue keys.</returns>
     private async Task<(string html, Dictionary<string, string> attachmentUrls, List<string> relatedIssueKeys)> FetchDescriptionAndAttachmentsAsync(string issueKey)
     {
         var attachmentUrls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -90,11 +125,13 @@ public class JiraHtmlReportGenerator
 
         try
         {
+            // Prepare Jira REST API client
             var authToken = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
             using var client = new HttpClient();
             client.BaseAddress = new Uri(jiraBaseUrl);
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
+            // Fetch issue details with rendered description and attachments
             var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields&fields=summary,description,attachment,issuelinks");
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
@@ -102,6 +139,7 @@ public class JiraHtmlReportGenerator
             using var doc = JsonDocument.Parse(json);
             string? html = null;
 
+            // Extract rendered HTML description
             if (doc.RootElement.TryGetProperty("renderedFields", out var rendered) &&
                 rendered.TryGetProperty("description", out var desc) &&
                 desc.ValueKind == JsonValueKind.String)
@@ -112,11 +150,9 @@ public class JiraHtmlReportGenerator
             if (string.IsNullOrEmpty(html))
                 html = "<i>No description available</i>";
 
-
-            // Trim leading/trailing whitespace but keep content otherwise
             html = html.Trim();
 
-            // Get attachments
+            // Extract attachment URLs
             if (doc.RootElement.TryGetProperty("fields", out var fields) &&
                 fields.TryGetProperty("attachment", out var attachments) &&
                 attachments.ValueKind == JsonValueKind.Array)
@@ -136,14 +172,13 @@ public class JiraHtmlReportGenerator
                 }
             }
 
-            // Get only "Relates" issue links
+            // Extract related issue keys ("Relates" links)
             if (doc.RootElement.TryGetProperty("fields", out fields) &&
                 fields.TryGetProperty("issuelinks", out var issueLinks) &&
                 issueLinks.ValueKind == JsonValueKind.Array)
             {
                 foreach (var link in issueLinks.EnumerateArray())
                 {
-                    // Filter by link type name
                     if (link.TryGetProperty("type", out var type) &&
                         type.TryGetProperty("name", out var typeNameProp) &&
                         typeNameProp.GetString()?.Equals("Relates", StringComparison.OrdinalIgnoreCase) == true)
@@ -162,7 +197,6 @@ public class JiraHtmlReportGenerator
                 }
             }
 
-
             return (html, attachmentUrls, relatedIssueKeys);
         }
         catch (Exception ex)
@@ -173,19 +207,22 @@ public class JiraHtmlReportGenerator
         return ("", new Dictionary<string, string>(), new List<string>());
     }
 
-
-private string ReplaceAttachmentImageUrls(string html, Dictionary<string, string> attachmentUrls)
+    /// <summary>
+    /// Replaces image URLs in the HTML description with full attachment URLs.
+    /// </summary>
+    /// <param name="html">HTML description string.</param>
+    /// <param name="attachmentUrls">Dictionary of attachment filenames to URLs.</param>
+    /// <returns>HTML with image src attributes replaced by full URLs.</returns>
+    private string ReplaceAttachmentImageUrls(string html, Dictionary<string, string> attachmentUrls)
     {
         if (string.IsNullOrWhiteSpace(html))
             return "<i>No description available</i>";
 
-        // Replace img src that is exactly an attachment filename with full URL
+        // Replace <img src="filename"> with <img src="full_url">
         foreach (var kvp in attachmentUrls)
         {
             string filename = Regex.Escape(kvp.Key);
             string url = kvp.Value;
-
-            // This pattern matches <img src="filename" ...> or <img src='filename' ...>
             var pattern = $"(<img[^>]+src=[\"']){filename}([\"'][^>]*>)";
             html = Regex.Replace(html, pattern, $"$1{url}$2", RegexOptions.IgnoreCase);
         }
@@ -193,7 +230,12 @@ private string ReplaceAttachmentImageUrls(string html, Dictionary<string, string
         return html;
     }
 
-  
+    /// <summary>
+    /// Creates the final HTML report file from the collected issues.
+    /// Includes a table of contents, collapsible sections, and related issues.
+    /// </summary>
+    /// <param name="issues">List of issues with HTML and outline numbers.</param>
+    /// <returns>Path to the generated HTML file.</returns>
     private async Task<string> CreateHtmlReport(List<(JiraIssue issue, string html, string number)> issues)
     {
         string filename = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), $"{issues[0].issue.Key}_Report.html");
@@ -333,7 +375,7 @@ pre[class*='language-'] {
         sb.AppendLine(css);
         sb.AppendLine("</style>");
 
-        // Generate TOC with two levels
+        // Generate table of contents (TOC) with outline numbers
         sb.AppendLine($"<h1>Monovera Report - {issues[0].issue.Summary} [{issues[0].issue.Key}]</h1>");
         sb.AppendLine("<ul>");
 
@@ -358,15 +400,11 @@ pre[class*='language-'] {
             sb.AppendLine($"<li><a href='#{anchor}'>{number} {title} [{issue.Key}]</a></li>");
             previousLevel = level;
         }
-
-        // Close remaining open <ul>
         for (int i = 0; i < previousLevel; i++)
             sb.AppendLine("</ul>");
-
         sb.AppendLine("</ul><hr>");
 
-
-        // Render issues with collapsible sections
+        // Render each issue as a collapsible section with description and related issues
         foreach (var (issue, html, number) in issues)
         {
             int level = number.Count(c => c == '.');
@@ -382,7 +420,7 @@ pre[class*='language-'] {
   <section class="desc">{html}</section>
 """);
 
-            // Add related issues section here
+            // Add related issues section
             if (issue.RelatedIssueKeys?.Count > 0)
             {
                 int count = issue.RelatedIssueKeys.Count;
@@ -408,15 +446,18 @@ pre[class*='language-'] {
             }
 
             sb.AppendLine("</details>");
-
         }
-
 
         sb.AppendLine("</body></html>");
         await File.WriteAllTextAsync(filename, sb.ToString());
         return filename;
     }
 
+    /// <summary>
+    /// Gets the base64-encoded PNG icon for the given issue key from the tree's ImageList.
+    /// </summary>
+    /// <param name="key">Issue key to find the icon for.</param>
+    /// <returns>Base64 string of the icon image, or empty if not found.</returns>
     private string GetIconBase64(string key)
     {
         var node = FindTreeNode(tree.Nodes, key);
@@ -429,6 +470,12 @@ pre[class*='language-'] {
         return "";
     }
 
+    /// <summary>
+    /// Recursively searches the tree for a node with the given issue key.
+    /// </summary>
+    /// <param name="nodes">TreeNodeCollection to search.</param>
+    /// <param name="key">Issue key to find.</param>
+    /// <returns>The matching TreeNode, or null if not found.</returns>
     private TreeNode? FindTreeNode(TreeNodeCollection nodes, string key)
     {
         foreach (TreeNode node in nodes)
@@ -441,6 +488,11 @@ pre[class*='language-'] {
         return null;
     }
 
+    /// <summary>
+    /// Rewrites relative image URLs in the HTML to absolute URLs using the Jira base URL.
+    /// </summary>
+    /// <param name="html">HTML string to process.</param>
+    /// <returns>HTML with image src attributes rewritten to absolute URLs.</returns>
     private string RewriteImageUrls(string html)
     {
         if (string.IsNullOrWhiteSpace(html))
@@ -461,5 +513,4 @@ pre[class*='language-'] {
 
         return replaced;
     }
-
 }

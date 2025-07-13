@@ -13,24 +13,45 @@ using static Monovera.frmMain;
 
 namespace Monovera
 {
-    public partial class ConfigForm : Form
+    /// <summary>
+    /// Configuration form for Monovera.
+    /// Allows users to view, add, edit, and delete Jira projects and update Jira authentication settings.
+    /// Reads and writes configuration to configuration.json.
+    /// </summary>
+    public partial class frmConfiguration : Form
     {
+        /// <summary>
+        /// Holds the current configuration loaded from or to be saved to disk.
+        /// </summary>
         private JiraConfigRoot _config = new JiraConfigRoot();
+
+        /// <summary>
+        /// Path to the configuration file.
+        /// </summary>
         private const string ConfigFilePath = "configuration.json";
-        public ConfigForm()
+
+        /// <summary>
+        /// Initializes the configuration form, sets up UI and event handlers.
+        /// </summary>
+        public frmConfiguration()
         {
             InitializeComponent();
             InitializeUI();
             this.Load += ConfigForm_Load;
         }
 
+        /// <summary>
+        /// Sets up UI controls and attaches event handlers for project management and saving.
+        /// </summary>
         private void InitializeUI()
         {
+            // Hide Jira token with password character
             txtToken.PasswordChar = '*';
 
+            // Add Project button: opens ProjectForm, adds new project to config and list
             btnAddProject.Click += (s, e) =>
             {
-                var dlg = new ProjectForm();
+                var dlg = new frmProject();
                 if (dlg.ShowDialog() == DialogResult.OK)
                 {
                     _config.Projects.Add(dlg.Project);
@@ -38,12 +59,13 @@ namespace Monovera
                 }
             };
 
+            // Edit Project button: opens ProjectForm for selected project, updates config and list
             btnEditProject.Click += (s, e) =>
             {
                 int idx = lstProjects.SelectedIndex;
                 if (idx >= 0)
                 {
-                    var dlg = new ProjectForm(_config.Projects[idx]);
+                    var dlg = new frmProject(_config.Projects[idx]);
                     if (dlg.ShowDialog() == DialogResult.OK)
                     {
                         _config.Projects[idx] = dlg.Project;
@@ -52,6 +74,7 @@ namespace Monovera
                 }
             };
 
+            // Delete Project button: confirms and removes selected project from config and list
             btnDeleteProject.Click += (s, e) =>
             {
                 int idx = lstProjects.SelectedIndex;
@@ -73,12 +96,17 @@ namespace Monovera
                 }
             };
 
-
+            // Save button: saves configuration to disk
             btnSave.Click += (s, e) => SaveConfig();
         }
 
+        /// <summary>
+        /// Saves the current configuration to configuration.json.
+        /// Updates Jira authentication info from text fields.
+        /// </summary>
         private void SaveConfig()
         {
+            // Update Jira authentication info from UI fields
             _config.Jira = new JiraInfo
             {
                 Url = txtUrl.Text,
@@ -88,11 +116,12 @@ namespace Monovera
 
             try
             {
+                // Serialize config to JSON and write to file
                 var json = JsonSerializer.Serialize(_config, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(ConfigFilePath, json);
 
                 MessageBox.Show("Configuration saved. Please restart the application for changes to take effect.", "Saved", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                //Application.Exit();
+                //Application.Exit(); // Optionally exit after saving
             }
             catch (Exception ex)
             {
@@ -100,19 +129,26 @@ namespace Monovera
             }
         }
 
+        /// <summary>
+        /// Loads configuration from configuration.json when the form is loaded.
+        /// Populates UI fields and project list from loaded config.
+        /// </summary>
         private void ConfigForm_Load(object sender, EventArgs e)
         {
             if (File.Exists(ConfigFilePath))
             {
                 try
                 {
+                    // Read and deserialize configuration file
                     var json = File.ReadAllText(ConfigFilePath);
                     _config = JsonSerializer.Deserialize<JiraConfigRoot>(json) ?? new JiraConfigRoot();
 
+                    // Populate Jira authentication fields
                     txtUrl.Text = _config.Jira?.Url ?? "";
                     txtEmail.Text = _config.Jira?.Email ?? "";
                     txtToken.Text = _config.Jira?.Token ?? "";
 
+                    // Populate project list
                     lstProjects.Items.Clear();
                     foreach (var project in _config.Projects)
                     {
@@ -125,7 +161,5 @@ namespace Monovera
                 }
             }
         }
-
-       
     }
 }

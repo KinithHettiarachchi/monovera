@@ -11,7 +11,7 @@ using System.Drawing.Drawing2D;
 using System.Xml.Linq;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using System.Drawing;
-using System.Windows.Forms;
+using System.Windows.Forms; 
 using System.Diagnostics;
 using static System.Net.Mime.MediaTypeNames;
 using System.Security.Policy;
@@ -22,116 +22,184 @@ using Font = System.Drawing.Font;
 
 namespace Monovera
 {
+    /// <summary>
+    /// Main application form for Monovera.
+    /// Handles Jira integration, UI setup, and user interactions.
+    /// </summary>
     public partial class frmMain : Form
     {
+        /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
+        /// <summary>Maps issue keys to JiraIssue objects for quick lookup.</summary>
         public static Dictionary<string, JiraIssue> issueDict = new();
+        /// <summary>Comma-separated root issue keys for all configured projects.</summary>
         public static string root_key = "";
+        /// <summary>List of Jira project keys loaded from configuration.</summary>
         public static List<string> projectList = new();
+        /// <summary>Base URL for Jira REST API.</summary>
         public static string jiraBaseUrl = "";
+        /// <summary>Jira user email for authentication.</summary>
         public static string jiraEmail = "";
+        /// <summary>Jira API token for authentication.</summary>
         public static string jiraToken = "";
+        /// <summary>Maps issue type names to icon filenames.</summary>
         public static Dictionary<string, string> typeIcons;
+        /// <summary>Maps issue status names to icon filenames.</summary>
         public static Dictionary<string, string> statusIcons;
+        /// <summary>Loaded Jira configuration object.</summary>
         public static JiraConfigRoot config;
-        public static string hierarchyLinkTypeName="";// = "Blocks";//"Parent/Child","Blocks";
+        /// <summary>Comma-separated link type names used for hierarchy (e.g. "Blocks").</summary>
+        public static string hierarchyLinkTypeName = "";
 
+        /// <summary>Tab control for displaying issue details and other pages.</summary>
         private TabControl tabDetails;
-
-        string appDir ="";
+        /// <summary>Application directory path.</summary>
+        string appDir = "";
+        /// <summary>Temporary directory path for storing files.</summary>
         string tempDir = "";
 
+        /// <summary>
+        /// Root configuration for Jira integration.
+        /// </summary>
         public class JiraConfigRoot
         {
+            /// <summary>Jira authentication information.</summary>
             public JiraAuth Jira { get; set; }
+            /// <summary>List of project-specific configuration objects.</summary>
             public List<JiraProjectConfig> Projects { get; set; }
         }
 
+        /// <summary>
+        /// Jira authentication details.
+        /// </summary>
         public class JiraAuth
         {
+            /// <summary>Jira instance base URL.</summary>
             public string Url { get; set; }
+            /// <summary>Jira user email.</summary>
             public string Email { get; set; }
+            /// <summary>Jira API token.</summary>
             public string Token { get; set; }
         }
 
+        /// <summary>
+        /// Configuration for a single Jira project.
+        /// </summary>
         public class JiraProjectConfig
         {
+            /// <summary>Project key (e.g. "PROJECT1").</summary>
             public string Project { get; set; }
+            /// <summary>Root issue key for the project.</summary>
             public string Root { get; set; }
-
+            /// <summary>Link type name used for hierarchy (e.g. "Blocks").</summary>
             public string LinkTypeName { get; set; }
+            /// <summary>Maps issue type names to icon filenames.</summary>
             public Dictionary<string, string> Types { get; set; }
+            /// <summary>Maps status names to icon filenames.</summary>
             public Dictionary<string, string> Status { get; set; }
         }
 
-
-       public class JiraIssue
+        /// <summary>
+        /// Represents a Jira issue for hierarchy and tree display.
+        /// </summary>
+        public class JiraIssue
         {
+            /// <summary>Issue key (e.g. "PRJ1-100").</summary>
             public string Key { get; set; }
+            /// <summary>Issue summary/title.</summary>
             public string Summary { get; set; }
+            /// <summary>Issue type name.</summary>
             public string Type { get; set; }
+            /// <summary>Parent issue key, if any.</summary>
             public string ParentKey { get; set; }
-
-            // New property to store related issue keys (issue links)
+            /// <summary>List of related issue keys (issue links).</summary>
             public List<string> RelatedIssueKeys { get; set; } = new List<string>();
         }
 
+        /// <summary>
+        /// Represents a link between Jira issues.
+        /// </summary>
         public class JiraIssueLink
         {
+            /// <summary>Link type name (e.g. "Blocks").</summary>
             public string LinkTypeName { get; set; } = "";
+            /// <summary>Outward issue key (the linked issue).</summary>
             public string OutwardIssueKey { get; set; } = "";
+            /// <summary>Outward issue summary/title.</summary>
             public string OutwardIssueSummary { get; set; } = "";
+            /// <summary>Outward issue type name.</summary>
             public string OutwardIssueType { get; set; } = "";
         }
 
+        /// <summary>
+        /// Data transfer object for Jira issues, including links and timestamps.
+        /// Used for parsing and caching.
+        /// </summary>
         public class JiraIssueDto
         {
+            /// <summary>Issue key.</summary>
             public string Key { get; set; }
+            /// <summary>Issue summary/title.</summary>
             public string Summary { get; set; }
+            /// <summary>Issue type name.</summary>
             public string Type { get; set; }
+            /// <summary>List of issue links.</summary>
             public List<JiraIssueLink> IssueLinks { get; set; } = new();
-
+            /// <summary>Last updated timestamp.</summary>
             public DateTime? Updated { get; set; }
-
+            /// <summary>Created timestamp.</summary>
             public DateTime? Created { get; set; }
-
         }
 
+        /// <summary>
+        /// Initializes the main form, sets up UI controls, event handlers, and directories.
+        /// </summary>
         public frmMain()
         {
             InitializeComponent();
 
+            // Set up application and temp directories
             appDir = AppDomain.CurrentDomain.BaseDirectory;
             tempDir = Path.Combine(appDir, "temp");
             Directory.CreateDirectory(tempDir);
 
+            // Initialize context menu for tree
             InitializeContextMenu();
 
-            //Tabs for right side
+            // Set up tab control for details panel
             tabDetails = new TabControl
             {
                 Dock = DockStyle.Fill,
                 Name = "tabDetails"
             };
-
             tabDetails.SelectedIndexChanged += TabDetails_SelectedIndexChanged;
             tabDetails.ShowToolTips = true;
             tabDetails.DrawMode = TabDrawMode.OwnerDrawFixed;
             tabDetails.DrawItem += TabDetails_DrawItem;
             tabDetails.MouseDown += tabDetails_MouseDown;
-            tabDetails.ItemSize = new Size(200, 30); // ← Set your custom width and height
-            tabDetails.Padding = new Point(40, 5); // space for X button
+            tabDetails.ItemSize = new Size(200, 30);
+            tabDetails.Padding = new Point(40, 5);
             panelTabs.Controls.Add(tabDetails);
-                 tree.MouseDown += tree_MouseDown;
 
+            // Tree mouse event for context menu
+            tree.MouseDown += tree_MouseDown;
+
+            // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
         }
+
+        /// <summary>
+        /// Handles keyboard shortcuts for search and report generation.
+        /// </summary>
         private void frmMain_KeyDown(object sender, KeyEventArgs e)
         {
             handleShortcuts(e);
         }
 
+        /// <summary>
+        /// Processes keyboard shortcuts asynchronously.
+        /// </summary>
         private async Task handleShortcuts(KeyEventArgs e)
         {
             if (e.Control && e.KeyCode == Keys.Q)
@@ -146,6 +214,9 @@ namespace Monovera
             }
         }
 
+        /// <summary>
+        /// Handles right-click selection in the tree view.
+        /// </summary>
         private void tree_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Right)
@@ -158,18 +229,34 @@ namespace Monovera
             }
         }
 
-
+        /// <summary>
+        /// Context menu for the tree view, providing search and report actions.
+        /// </summary>
         private ContextMenuStrip treeContextMenu;
+
+        /// <summary>
+        /// Menu item for searching issues in the tree.
+        /// </summary>
         private ToolStripMenuItem searchMenuItem;
+
+        /// <summary>
+        /// Menu item for generating a hierarchical report.
+        /// </summary>
         private ToolStripMenuItem reportMenuItem;
 
+        /// <summary>
+        /// Initializes the context menu for the tree view, including search and report options.
+        /// </summary>
         private void InitializeContextMenu()
         {
+            // Create the context menu strip
             treeContextMenu = new ContextMenuStrip();
 
+            // Create icons for menu items using Unicode characters
             var iconSearch = CreateUnicodeIcon("🔍");
             var iconReport = CreateUnicodeIcon("📄");
 
+            // Create the search menu item with shortcut and icon
             searchMenuItem = new ToolStripMenuItem("Search")
             {
                 Image = iconSearch,
@@ -177,6 +264,7 @@ namespace Monovera
                 ShowShortcutKeys = true
             };
 
+            // Create the report menu item with shortcut and icon
             reportMenuItem = new ToolStripMenuItem("Generate Report")
             {
                 Image = iconReport,
@@ -184,6 +272,7 @@ namespace Monovera
                 ShowShortcutKeys = true
             };
 
+            // Attach event handlers for menu item clicks
             searchMenuItem.Click += (s, e) => ShowSearchDialog(tree);
 
             reportMenuItem.Click += async (s, e) =>
@@ -191,16 +280,24 @@ namespace Monovera
                 GenerateReport();
             };
 
+            // Add menu items to the context menu
             treeContextMenu.Items.Add(searchMenuItem);
             treeContextMenu.Items.Add(reportMenuItem);
+
+            // Assign the context menu to the tree view
             tree.ContextMenuStrip = treeContextMenu;
         }
 
-
+        /// <summary>
+        /// Creates a bitmap icon from a Unicode character for use in menu items.
+        /// </summary>
+        /// <param name="unicodeChar">The Unicode character to render as an icon.</param>
+        /// <param name="font">Optional font to use for rendering.</param>
+        /// <returns>Bitmap containing the rendered icon.</returns>
         private Bitmap CreateUnicodeIcon(string unicodeChar, Font? font = null)
         {
             font ??= new Font("Segoe UI Emoji", 16, FontStyle.Regular, GraphicsUnit.Pixel);
-            var bmp = new Bitmap(24, 24); // adjust size as needed
+            var bmp = new Bitmap(24, 24); // Icon size
             using var g = Graphics.FromImage(bmp);
             g.Clear(Color.Transparent);
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
@@ -208,15 +305,21 @@ namespace Monovera
             return bmp;
         }
 
-
+        /// <summary>
+        /// Displays the search dialog for the tree view, allowing users to search for issues.
+        /// </summary>
+        /// <param name="tree">The tree view to search within.</param>
         private void ShowSearchDialog(System.Windows.Forms.TreeView tree)
         {
-            using (var dlg = new SearchDialog(tree))
+            using (var dlg = new frmSearch(tree))
             {
                 dlg.ShowDialog(this);
             }
         }
 
+        /// <summary>
+        /// Generates a hierarchical HTML report for the selected Jira issue and its children.
+        /// </summary>
         private async void GenerateReport()
         {
             if (tree.SelectedNode?.Tag is string rootKey)
@@ -230,11 +333,13 @@ namespace Monovera
                 if (result != DialogResult.Yes)
                     return;
 
+                // Show progress UI
                 lblProgress.Text = "Generating document...";
                 lblProgress.Visible = true;
                 pbProgress.Visible = true;
                 pbProgress.Style = ProgressBarStyle.Marquee;
 
+                // Create the report generator and generate the report
                 var generator = new JiraHtmlReportGenerator(
                     issueDict,
                     childrenByParent,
@@ -244,13 +349,18 @@ namespace Monovera
                     tree);
                 var path = await generator.GenerateAsync(rootKey, new Progress<string>(t => lblProgress.Text = t));
 
+                // Hide progress UI and open the generated report
                 lblProgress.Visible = false;
                 pbProgress.Visible = false;
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
             }
         }
 
-
+        /// <summary>
+        /// Custom drawing for tab items in the details panel, including icon and close button.
+        /// </summary>
+        /// <param name="sender">The tab control being drawn.</param>
+        /// <param name="e">Draw item event arguments.</param>
         private void TabDetails_DrawItem(object sender, DrawItemEventArgs e)
         {
             var tabControl = sender as TabControl;
@@ -262,7 +372,7 @@ namespace Monovera
 
             bool isSelected = tabControl.SelectedIndex == e.Index;
 
-            // Background
+            // Draw tab background
             using var background = new SolidBrush(isSelected ? Color.White : Color.LightGray);
             g.FillRectangle(background, tabRect);
 
@@ -270,7 +380,6 @@ namespace Monovera
             int iconSize = 16;
             int closeSize = 16;
             int spacing = 6;
-
             int xOffset = tabRect.X + padding;
 
             // Draw icon if available
@@ -292,14 +401,14 @@ namespace Monovera
             g.DrawString(text, font, textBrush, xOffset, textY);
             xOffset += (int)textSize.Width + spacing;
 
-            // Draw close "X" button as square with rounded corners
+            // Draw close "X" button with rounded corners
             int closeX = tabRect.Right - closeSize - padding;
             int closeY = tabRect.Y + (tabRect.Height - closeSize) / 2;
             var closeRect = new Rectangle(closeX, closeY, closeSize, closeSize);
 
             using var closeBg = new SolidBrush(Color.FromArgb(220, 50, 50));
             using var closeFg = new SolidBrush(Color.White);
-            using (var path = RoundedRect(closeRect, 4)) // Rounded square with 4px corner radius
+            using (var path = RoundedRect(closeRect, 4))
             {
                 g.FillPath(closeBg, path);
             }
@@ -308,10 +417,16 @@ namespace Monovera
             var stringFormat = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
             g.DrawString("×", closeFont, closeFg, closeRect, stringFormat);
 
-            // Store the close rect for MouseDown event
+            // Store the close rect for MouseDown event to detect tab close clicks
             tabPage.Tag = closeRect;
         }
 
+        /// <summary>
+        /// Creates a rounded rectangle graphics path for drawing UI elements.
+        /// </summary>
+        /// <param name="bounds">Rectangle bounds.</param>
+        /// <param name="radius">Corner radius.</param>
+        /// <returns>GraphicsPath representing the rounded rectangle.</returns>
         private GraphicsPath RoundedRect(Rectangle bounds, int radius)
         {
             int diameter = radius * 2;
@@ -333,6 +448,11 @@ namespace Monovera
             return path;
         }
 
+        /// <summary>
+        /// Handles mouse down events on the tab control, closes tab if close button is clicked.
+        /// </summary>
+        /// <param name="sender">Tab control.</param>
+        /// <param name="e">Mouse event arguments.</param>
         private void tabDetails_MouseDown(object sender, MouseEventArgs e)
         {
             for (int i = 0; i < tabDetails.TabPages.Count; i++)
@@ -346,6 +466,9 @@ namespace Monovera
             }
         }
 
+        /// <summary>
+        /// Initializes icons for issue types and statuses and assigns them to the tree view.
+        /// </summary>
         private void InitializeIcons()
         {
             ImageList icons = new ImageList();
@@ -369,17 +492,19 @@ namespace Monovera
             tree.ImageList = icons;
         }
 
-
+        /// <summary>
+        /// Returns the icon key for a given issue type, using full or partial match.
+        /// </summary>
+        /// <param name="issueType">The issue type name.</param>
+        /// <returns>Icon key string or empty if not found.</returns>
         public static string GetIconForType(string issueType)
         {
             if (string.IsNullOrWhiteSpace(issueType))
                 return "";
 
-            // Try full match
             if (typeIcons.ContainsKey(issueType))
                 return issueType;
 
-            // Try startsWith (fallback, case-insensitive)
             foreach (var key in typeIcons.Keys)
             {
                 if (issueType.StartsWith(key, StringComparison.OrdinalIgnoreCase))
@@ -389,6 +514,11 @@ namespace Monovera
             return "";
         }
 
+        /// <summary>
+        /// Returns the icon key for a given status, using full or partial match.
+        /// </summary>
+        /// <param name="status">The status name.</param>
+        /// <returns>Icon key string or empty if not found.</returns>
         public static string GetIconForStatus(string status)
         {
             if (string.IsNullOrWhiteSpace(status))
@@ -406,6 +536,9 @@ namespace Monovera
             return "";
         }
 
+        /// <summary>
+        /// Loads configuration from configuration.json, validates, and initializes settings.
+        /// </summary>
         private void LoadConfigurationFromJson()
         {
             string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.json");
@@ -424,12 +557,9 @@ namespace Monovera
                 return;
             }
 
-            //JiraConfigRoot config;
-
             try
             {
                 string configText = File.ReadAllText(path);
-                //config = JsonSerializer.Deserialize<JiraConfigRoot>(configText);
                 config = JsonSerializer.Deserialize<JiraConfigRoot>(configText, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true
@@ -475,9 +605,7 @@ namespace Monovera
                 return;
             }
 
-            // ✅ Load config data
-             //config = JsonSerializer.Deserialize<JiraConfigRoot>(configText);
-
+            // Load config data
             jiraBaseUrl = config.Jira.Url;
             jiraEmail = config.Jira.Email;
             jiraToken = config.Jira.Token;
@@ -501,7 +629,10 @@ namespace Monovera
             AddHomeTabAsync(tabDetails);
         }
 
-        // Default config JSON
+        /// <summary>
+        /// Returns the default configuration JSON string.
+        /// </summary>
+        /// <returns>Default configuration JSON.</returns>
         private string GetDefaultConfigJson()
         {
             return
@@ -531,7 +662,14 @@ namespace Monovera
 }";
         }
 
-        // Simple connection check
+        /// <summary>
+        /// Checks Jira connection using provided credentials.
+        /// </summary>
+        /// <param name="url">Jira base URL.</param>
+        /// <param name="email">Jira user email.</param>
+        /// <param name="token">Jira API token.</param>
+        /// <param name="error">Error message if connection fails.</param>
+        /// <returns>True if connection is successful, false otherwise.</returns>
         private bool TryConnectToJira(string url, string email, string token, out string error)
         {
             try
@@ -559,27 +697,45 @@ namespace Monovera
             }
         }
 
-
-
-
+        /// <summary>
+        /// Handles the form load event. Initializes configuration, icons, loads all projects into the tree,
+        /// and displays recently updated issues.
+        /// </summary>
+        /// <param name="sender">The source of the event (frmMain).</param>
+        /// <param name="e">Event arguments.</param>
         private async void frmMain_Load(object sender, EventArgs e)
         {
+            // Load configuration from file and validate
             LoadConfigurationFromJson();
+
+            // Initialize icons for issue types and statuses
             InitializeIcons();
+
+            // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync();
+
+            // Show a tab with recently updated issues
             ShowRecentlyUpdatedIssuesAsync(tabDetails);
         }
 
+        /// <summary>
+        /// Loads all Jira projects and their issues into the tree view.
+        /// Optionally forces a fresh sync from the server, bypassing cache.
+        /// </summary>
+        /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
         private async Task LoadAllProjectsToTreeAsync(bool forceSync = false)
         {
+            // Show progress bar and label
             pbProgress.Visible = true;
             pbProgress.Value = 0;
             lblProgress.Visible = true;
             lblProgress.Text = "Loading...";
 
+            // Clear previous issue data
             issueDict.Clear();
             childrenByParent.Clear();
 
+            // Load issues for each configured project
             foreach (var project in projectList)
             {
                 lblProgress.Text = $"Loading Project {project}...";
@@ -589,7 +745,7 @@ namespace Monovera
 
                 if (!forceSync && File.Exists(cacheFile))
                 {
-                    // Load from cache
+                    // Load issues from cache file
                     string cachedJson = await File.ReadAllTextAsync(cacheFile);
                     issues = ParseIssuesFromJson(cachedJson);
                 }
@@ -599,13 +755,16 @@ namespace Monovera
                     if (File.Exists(cacheFile))
                         File.Delete(cacheFile);
 
+                    // Prepare Jira REST API client
                     var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
                     using var client = new HttpClient();
                     client.BaseAddress = new Uri(jiraBaseUrl);
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
+                    // JQL to fetch all issues for the project
                     string jql = $"project={project} ORDER BY key ASC";
 
+                    // Progress callback for UI
                     var progress = new Progress<(int completed, int total)>(p =>
                     {
                         pbProgress.Maximum = p.total;
@@ -613,17 +772,21 @@ namespace Monovera
                         lblProgress.Text = $"{p.completed} / {p.total} ({(p.completed * 100 / p.total)}%)";
                     });
 
+                    // Download all issues from Jira and cache them
                     string allJson = await DownloadAllIssuesJson(client, jql, progress);
                     await File.WriteAllTextAsync(cacheFile, allJson);
                     issues = ParseIssuesFromJson(allJson);
                 }
 
+                // Build lookup and hierarchy dictionaries
                 BuildDictionaries(issues);
             }
 
+            // Hide progress bar and label
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
+            // Populate the tree view with root issues and their children
             tree.Invoke(() =>
             {
                 tree.Nodes.Clear();
@@ -645,9 +808,13 @@ namespace Monovera
             });
         }
 
-
+        /// <summary>
+        /// Builds the issue lookup and parent-child hierarchy dictionaries from a list of Jira issues.
+        /// </summary>
+        /// <param name="issues">List of JiraIssueDto objects to process.</param>
         private void BuildDictionaries(List<JiraIssueDto> issues)
         {
+            // Add all issues to the lookup dictionary
             foreach (var issue in issues)
             {
                 issueDict[issue.Key] = new JiraIssue
@@ -659,6 +826,7 @@ namespace Monovera
                 };
             }
 
+            // Build parent-child relationships based on issue links
             foreach (var issue in issues)
             {
                 foreach (var link in issue.IssueLinks)
@@ -681,34 +849,52 @@ namespace Monovera
             }
         }
 
-        public async Task AddHomeTabAsync(TabControl tabDetails)
+        /// <summary>
+        /// Adds a "Home" tab to the provided TabControl, displaying a welcome banner for Monovera.
+        /// This tab uses a WebView2 control to render a styled HTML page with a banner image.
+        /// </summary>
+        /// <param name="tabDetails">The TabControl to which the home tab will be added.</param>
+        /// <remarks>
+        /// - Ensures the WebView2 control is initialized before navigation.
+        /// - Loads a local PNG image, encodes it as base64, and embeds it in the HTML.
+        /// - Optionally sets a tab icon if the image exists.
+        /// - The tab is selected after creation.
+        /// </remarks>
+        public static async Task AddHomeTabAsync(TabControl tabDetails)
         {
+            // Create and configure the WebView2 control for HTML rendering
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2
             {
                 Dock = DockStyle.Fill
             };
 
+            // Ensure WebView2 is initialized before use
             await webView.EnsureCoreWebView2Async();
 
+            // Handle script dialogs (e.g., alert, confirm) in the embedded browser
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
             {
                 var deferral = args.GetDeferral();
                 try { args.Accept(); } finally { deferral.Complete(); }
             };
 
-            // Prepare the image path relative to application directory
+            // Prepare the path to the banner image
             string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "MonoveraBanner.png");
 
+            // If the image is missing, show a warning and abort tab creation
             if (!File.Exists(imagePath))
             {
                 MessageBox.Show("Image not found: images/MonoveraBanner.png", "Missing Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
+            // Read the image file and encode it as a base64 data URI for embedding in HTML
             string base64 = Convert.ToBase64String(File.ReadAllBytes(imagePath));
             string imageUri = $"data:image/webp;base64,{base64}";
 
-            // Build HTML content with light green background and image
+            // Build the HTML content for the home tab
+            // - Uses a light green background
+            // - Centers the banner image both vertically and horizontally
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -735,14 +921,14 @@ namespace Monovera
 </body>
 </html>";
 
-            // Set up ImageList if not already done
+            // Ensure the TabControl has an ImageList for tab icons
             if (tabDetails.ImageList == null)
             {
                 tabDetails.ImageList = new ImageList();
                 tabDetails.ImageList.ImageSize = new Size(16, 16);
             }
 
-            // Optionally load an icon (or reuse monovera.webp thumbnail)
+            // Optionally load a tab icon from a local PNG file
             string iconKey = "home";
             System.Drawing.Image iconImage = null;
             string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
@@ -758,36 +944,49 @@ namespace Monovera
                 }
                 catch
                 {
-                    // Ignore icon load failure
+                    // Ignore icon load failure to avoid crashing the UI
                 }
             }
 
+            // Create the TabPage for the home tab
             var homePage = new TabPage("Welcome to Monovera!")
             {
-                ImageKey = iconKey,
+                ImageKey = iconKey, // Set the tab icon if available
                 ToolTipText = "Welcome to Monovera!"
             };
 
+            // Add the WebView2 control to the tab
             homePage.Controls.Add(webView);
+
+            // Add the tab to the TabControl and select it
             tabDetails.TabPages.Add(homePage);
             tabDetails.SelectedTab = homePage;
 
+            // Navigate the WebView2 to the generated HTML content
             webView.NavigateToString(html);
         }
 
 
+        /// <summary>
+        /// Displays a tab with a list of recently updated Jira issues for all configured projects.
+        /// Issues are grouped by update date and filtered to show only those with summary or description changes.
+        /// The tab uses a WebView2 control to render a styled HTML report, with clickable links to load issue details.
+        /// </summary>
+        /// <param name="tabDetails">The TabControl to which the "Recent Updates" tab will be added.</param>
         public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails)
         {
+            // Create and configure the WebView2 control for HTML rendering
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
             await webView.EnsureCoreWebView2Async();
 
+            // Handle script dialogs (e.g., alert, confirm) in the embedded browser
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
             {
                 var deferral = args.GetDeferral();
                 try { args.Accept(); } finally { deferral.Complete(); }
             };
 
-            // Handle messages from WebView
+            // Handle messages sent from the HTML (e.g., clicking an issue link)
             webView.CoreWebView2.WebMessageReceived += (s, args) =>
             {
                 try
@@ -796,8 +995,8 @@ namespace Monovera
 
                     if (!string.IsNullOrWhiteSpace(message))
                     {
-                        // For simplicity, assume it's the Jira key (like "REQ-123")
-                        SelectAndLoadTreeNode(message); // Your existing method
+                        // Assume the message is a Jira issue key (e.g., "REQ-123")
+                        SelectAndLoadTreeNode(message);
                     }
                 }
                 catch (Exception ex)
@@ -806,11 +1005,14 @@ namespace Monovera
                 }
             };
 
-
+            // Build JQL to fetch issues updated in the last 30 days for all projects
             DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
             string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -30d ORDER BY updated DESC";
 
-            var rawIssues = await SearchDialog.SearchJiraIssues(jql, null);
+            // Fetch issues from Jira using the SearchDialog helper
+            var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
+
+            // Filter issues to only those with summary or description changes in the last 30 days
             var tasks = rawIssues.Select(async issue =>
             {
                 if (await HasSummaryOrDescriptionChangeAsync(issue.Key))
@@ -821,16 +1023,14 @@ namespace Monovera
             var withChanges = await Task.WhenAll(tasks);
             var filteredIssues = withChanges.Where(i => i != null).ToList();
 
-
+            // Group issues by update date (local time), descending
             IEnumerable<IGrouping<DateTime, JiraIssueDto>> grouped;
-
             try
             {
                 grouped = filteredIssues
-     .Where(i => i.Updated.HasValue)
-     .GroupBy(i => i.Updated.Value.ToLocalTime().Date)
-     .OrderByDescending(g => g.Key);
-
+                    .Where(i => i.Updated.HasValue)
+                    .GroupBy(i => i.Updated.Value.ToLocalTime().Date)
+                    .OrderByDescending(g => g.Key);
             }
             catch (Exception ex)
             {
@@ -838,14 +1038,14 @@ namespace Monovera
                 return;
             }
 
-
+            // If no issues found, show a message and exit
             if (grouped == null || !grouped.Any())
             {
                 MessageBox.Show("No recently updated issues were found.", "No Data", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-
+            // Build the HTML report for the tab
             var sb = new StringBuilder();
 
             if (!grouped.Any())
@@ -854,6 +1054,7 @@ namespace Monovera
             }
             else
             {
+                // For each date group, create a collapsible section
                 foreach (var group in grouped)
                 {
                     sb.AppendLine($@"
@@ -862,12 +1063,14 @@ namespace Monovera
   <section>
     <table>");
 
+                    // For each issue, render a row with icon and summary
                     foreach (var issue in group)
                     {
                         string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                         string key = issue.Key;
                         string iconPath = "";
 
+                        // Try to get the icon for the issue type
                         string typeIconKey = frmMain.GetIconForType(issue.Type);
                         if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                         {
@@ -884,6 +1087,7 @@ namespace Monovera
                             }
                         }
 
+                        // Render clickable link for the issue
                         sb.AppendLine($"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath} {summary} [{key}]</a></td></tr>");
                     }
 
@@ -891,6 +1095,7 @@ namespace Monovera
                 }
             }
 
+            // Compose the final HTML, including styles and JavaScript for link handling
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -949,6 +1154,7 @@ namespace Monovera
 <body>
 {sb}
 <script>
+  // Add click handlers to all issue links to send the Jira key to the host app
   document.querySelectorAll('a').forEach(link => {{
     link.addEventListener('click', e => {{
       e.preventDefault();
@@ -960,6 +1166,8 @@ namespace Monovera
 </script>
 </body>
 </html>";
+
+            // Set up the tab icon (if available)
             string iconKey = "updates";
             System.Drawing.Image iconImage = null;
             string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
@@ -979,44 +1187,61 @@ namespace Monovera
                 }
             }
 
+            // Create the tab page for recent updates
             var updatePage = new TabPage("Recent Updates!")
             {
                 ImageKey = iconKey,
                 ToolTipText = "Issues that were updated during past 30 days!"
             };
 
+            // Add the WebView2 control to the tab
             updatePage.Controls.Add(webView);
             tabDetails.TabPages.Add(updatePage);
             tabDetails.SelectedTab = updatePage;
 
+            // Save the HTML to a temp file and navigate the WebView2 to it
             string tempFilePath = Path.Combine(tempDir, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
         }
 
+             /// <summary>
+        /// Checks if a Jira issue has had its summary or description changed in the last 30 days.
+        /// This is used to filter issues for the "Recently Updated" tab.
+        /// </summary>
+        /// <param name="issueKey">The Jira issue key (e.g. "REQ-123").</param>
+        /// <returns>
+        /// True if the issue's summary or description was changed in the last 30 days; otherwise, false.
+        /// </returns>
         private async Task<bool> HasSummaryOrDescriptionChangeAsync(string issueKey)
         {
+            // Build the REST API URL to fetch issue changelog
             var url = $"{jiraBaseUrl}/rest/api/3/issue/{issueKey}?expand=changelog";
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
                 Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
 
+            // Request the issue data from Jira
             var response = await client.GetAsync(url);
             if (!response.IsSuccessStatusCode)
                 return false;
 
+            // Parse the JSON response
             var content = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(content);
 
+            // Look for changelog histories
             if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
                 changelog.TryGetProperty("histories", out var histories))
             {
                 foreach (var history in histories.EnumerateArray())
                 {
+                    // Check if the change was made in the last 30 days
                     if (history.TryGetProperty("created", out var createdProp) &&
                         DateTime.TryParse(createdProp.GetString(), out var created) &&
                         created >= DateTime.UtcNow.AddDays(-30))
                     {
+                        // Check if the change was to summary or description
                         if (history.TryGetProperty("items", out var items))
                         {
                             foreach (var item in items.EnumerateArray())
@@ -1036,13 +1261,20 @@ namespace Monovera
             return false;
         }
 
-
+        /// <summary>
+        /// Recursively adds child nodes to a parent TreeNode based on the parentKey.
+        /// This builds the hierarchical tree structure for Jira issues.
+        /// </summary>
+        /// <param name="parentNode">The parent TreeNode to add children to.</param>
+        /// <param name="parentKey">The key of the parent issue.</param>
         private void AddChildNodesRecursively(TreeNode parentNode, string parentKey)
         {
+            // Check if there are children for the given parentKey
             if (childrenByParent.TryGetValue(parentKey, out var children))
             {
                 foreach (var child in children)
                 {
+                    // Create a TreeNode for each child and add its own children recursively
                     var childNode = CreateTreeNode(child);
                     AddChildNodesRecursively(childNode, child.Key);
                     parentNode.Nodes.Add(childNode);
@@ -1050,6 +1282,12 @@ namespace Monovera
             }
         }
 
+        /// <summary>
+        /// Parses a JSON string containing Jira issues and returns a list of JiraIssueDto objects.
+        /// Only issues with summary, type, and hierarchy links are processed.
+        /// </summary>
+        /// <param name="json">The raw JSON string from Jira REST API.</param>
+        /// <returns>List of JiraIssueDto objects parsed from the JSON.</returns>
         private List<JiraIssueDto> ParseIssuesFromJson(string json)
         {
             var issues = new List<JiraIssueDto>();
@@ -1059,6 +1297,7 @@ namespace Monovera
 
             foreach (var issue in issuesArray)
             {
+                // Extract basic fields
                 var key = issue.GetProperty("key").GetString();
                 var fields = issue.GetProperty("fields");
                 var summary = fields.GetProperty("summary").GetString();
@@ -1066,6 +1305,7 @@ namespace Monovera
 
                 var issueLinksList = new List<JiraIssueLink>();
 
+                // Extract hierarchy links (e.g. "Blocks" outward links)
                 if (fields.TryGetProperty("issuelinks", out var links) && links.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var link in links.EnumerateArray())
@@ -1089,6 +1329,7 @@ namespace Monovera
                     }
                 }
 
+                // Add the parsed issue to the result list
                 issues.Add(new JiraIssueDto
                 {
                     Key = key,
@@ -2147,6 +2388,16 @@ function showDiffOverlay(from, to) {
         }
 
 
+        /// <summary>
+        /// Generates a simple HTML diff between two strings, highlighting added and removed text.
+        /// Finds the common prefix, then marks removed text from the original and added text from the new value.
+        /// Used for inline change visualization in history views.
+        /// </summary>
+        /// <param name="from">The original string value (may be null).</param>
+        /// <param name="to">The new string value (may be null).</param>
+        /// <returns>
+        /// HTML string showing removed and added text, or empty string if values are identical.
+        /// </returns>
         private static string DiffText(string? from, string? to)
         {
             if (from == to) return "";
@@ -2182,20 +2433,27 @@ function showDiffOverlay(from, to) {
         }
 
 
+        /// <summary>
+        /// Handles messages received from the embedded WebView2 browser.
+        /// Supports navigation, file download, and node selection based on messages from the HTML UI.
+        /// - If the message is a JSON object, handles actions like 'openInBrowser' and 'download'.
+        /// - If the message is a plain string (e.g., Jira issue key), selects and loads the corresponding tree node.
+        /// </summary>
+        /// <param name="sender">The WebView2 control sending the message.</param>
+        /// <param name="e">CoreWebView2WebMessageReceivedEventArgs containing the message.</param>
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
             {
                 string message = null;
 
-                // Try to get as string
+                // Try to get as string, fallback to JSON if not possible
                 try
                 {
                     message = e.TryGetWebMessageAsString();
                 }
                 catch
                 {
-                    // Fall back to JSON
                     message = e.WebMessageAsJson;
                 }
 
@@ -2208,7 +2466,7 @@ function showDiffOverlay(from, to) {
                     using var jsonDoc = JsonDocument.Parse(message);
                     var root = jsonDoc.RootElement;
 
-                    // Handle openInBrowser
+                    // Handle browser navigation requests
                     if (root.TryGetProperty("action", out var actionProp) &&
                         actionProp.GetString() == "openInBrowser")
                     {
@@ -2238,7 +2496,7 @@ function showDiffOverlay(from, to) {
                         return;
                     }
 
-                    // Handle download
+                    // Handle file download requests
                     if (root.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "download")
                     {
                         var filePath = root.GetProperty("path").GetString();
@@ -2248,7 +2506,7 @@ function showDiffOverlay(from, to) {
                             if (filePath.StartsWith("file:///"))
                                 filePath = Uri.UnescapeDataString(filePath.Substring(8));
 
-                            SaveFile(filePath); // Your file handling logic
+                            SaveFile(filePath);
                         }
 
                         return;
@@ -2256,7 +2514,7 @@ function showDiffOverlay(from, to) {
                 }
                 else
                 {
-                    // Handle plain string messages (e.g. REQ-123)
+                    // Handle plain string messages (e.g. Jira issue key)
                     SelectAndLoadTreeNode(message);
                 }
             }
@@ -2268,6 +2526,12 @@ function showDiffOverlay(from, to) {
 
 
 
+        /// <summary>
+        /// Saves a file to the application's temp directory and opens it with the default application.
+        /// If a file with the same name exists, it is replaced.
+        /// Used for handling file downloads from the WebView2 interface.
+        /// </summary>
+        /// <param name="sourceFilePath">The full path to the source file to be saved and opened.</param>
         private void SaveFile(string sourceFilePath)
         {
             if (!File.Exists(sourceFilePath)) return;
@@ -2289,7 +2553,7 @@ function showDiffOverlay(from, to) {
                 }
 
                 // Copy file to temp folder
-                File.Copy(sourceFilePath, destFilePath, overwrite: false); // overwrite not needed now
+                File.Copy(sourceFilePath, destFilePath, overwrite: false);
 
                 // Open the saved file with default app
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -2304,8 +2568,17 @@ function showDiffOverlay(from, to) {
             }
         }
 
-
-
+        /// <summary>
+        /// Replaces Jira links, SVN feature references, and color macros in an HTML description string.
+        /// - Converts Jira issue links to clickable links with summary and key.
+        /// - Embeds SVN feature file contents as code blocks.
+        /// - Inlines Jira attachment images as base64-encoded images.
+        /// - Handles color macros for dark mode compatibility.
+        /// </summary>
+        /// <param name="htmlDesc">The raw HTML description from Jira.</param>
+        /// <returns>
+        /// HTML string with Jira links, SVN features, and color macros replaced for display.
+        /// </returns>
         private string ReplaceJiraLinksAndSVNFeatures(string htmlDesc)
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
@@ -2329,7 +2602,6 @@ function showDiffOverlay(from, to) {
             // Replace closing {color} with </span>
             htmlDesc = Regex.Replace(htmlDesc, @"\{color\}", "</span>", RegexOptions.IgnoreCase);
 
-
             // Replace Jira <a href=".../browse/REQ-####"...>...</a> links
             htmlDesc = Regex.Replace(htmlDesc, @"<a\s+[^>]*href\s*=\s*[""'](https?://[^""']+/browse/(\w+-\d+))[""'][^>]*>.*?</a>", match =>
             {
@@ -2339,7 +2611,6 @@ function showDiffOverlay(from, to) {
                 if (issueDict.TryGetValue(key, out var issue))
                 {
                     return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
-
                 }
 
                 return $"<a href=\"#\">[{key}]</a>";
@@ -2363,8 +2634,7 @@ function showDiffOverlay(from, to) {
                 return HttpUtility.HtmlEncode(label);
             });
 
-            // Handle complex nested Jira macro links like:
-            // <a ...><font>Summary <span><a ...>REQ-####</a><span>Status</span></span></font></a>
+            // Handle complex nested Jira macro links
             htmlDesc = Regex.Replace(htmlDesc, @"
     <a[^>]*href\s*=\s*[""']https?://[^""']+/browse/(\w+-\d+)[""'][^>]*>      # outer <a> with href to issue
     (?:.*?<title=[""']([^""']+)[""'])?                                       # optional title attribute with summary
@@ -2383,7 +2653,6 @@ function showDiffOverlay(from, to) {
                 return $"<a href=\"#\">{HttpUtility.HtmlEncode(title)} [{key}]</a>";
             }, RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace | RegexOptions.Singleline);
 
-
             // Replace raw URLs like https://.../browse/REQ-xxxx
             htmlDesc = Regex.Replace(htmlDesc, @"https?://[^\s""<>]+/browse/(\w+-\d+)", match =>
             {
@@ -2397,8 +2666,7 @@ function showDiffOverlay(from, to) {
                 return $"<a href=\"#\">[{key}]</a>";
             });
 
-
-            // Replace [svn://...feature|...] style SVN links// Replace encoded [svn://...feature|svn://...feature] or just [svn://...feature]
+            // Replace [svn://...feature|...] style SVN links
             htmlDesc = Regex.Replace(htmlDesc, @"&#91;(svn://[^\|\]]+\.feature)(?:\|svn://[^\]]+\.feature)?&#93;", match =>
             {
                 string svnUrl = match.Groups[1].Value;
@@ -2453,11 +2721,15 @@ function showDiffOverlay(from, to) {
                 }
             });
 
-
-
             return htmlDesc;
         }
 
+        /// <summary>
+        /// Selects and loads a tree node by its Jira issue key.
+        /// If the node is found, it is selected, made visible, and focused in the tree view.
+        /// Used for navigation from WebView2 messages and other UI actions.
+        /// </summary>
+        /// <param name="key">The Jira issue key to select (e.g. "REQ-123").</param>
         private void SelectAndLoadTreeNode(string key)
         {
             var node = FindNodeByKey(tree.Nodes, key);
@@ -2465,8 +2737,8 @@ function showDiffOverlay(from, to) {
             {
                 tree.SelectedNode = node;
                 node.EnsureVisible();
-                tree.Focus();                      // ✅ Return focus to tree
-                tree.SelectedNode = node;        // ✅ Restore visual highlight
+                tree.Focus();                      // Return focus to tree
+                tree.SelectedNode = node;          // Restore visual highlight
             }
         }
 
@@ -2482,7 +2754,7 @@ function showDiffOverlay(from, to) {
                     return child;
             }
 
-            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to")  && showMessage)
+            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && showMessage)
             {
                 MessageBox.Show(
                     $"{key} was not found to select in the tree.\n\nThis could be a newly added ticket. Please update the hierarchy to view it.",
@@ -2495,6 +2767,14 @@ function showDiffOverlay(from, to) {
         }
 
 
+        /// <summary>
+        /// Formats a raw JSON string with indentation for improved readability.
+        /// If the input is not valid JSON, returns the original string.
+        /// </summary>
+        /// <param name="rawJson">The raw JSON string to format.</param>
+        /// <returns>
+        /// A pretty-printed JSON string, or the original string if parsing fails.
+        /// </returns>
         private string FormatJson(string rawJson)
         {
             try
@@ -2513,6 +2793,15 @@ function showDiffOverlay(from, to) {
             }
         }
 
+        /// <summary>
+        /// Recursively selects a TreeNode by Jira issue key, expanding and focusing the node if found.
+        /// Returns true if the node was found and selected; otherwise, false.
+        /// </summary>
+        /// <param name="node">The root TreeNode to start searching from.</param>
+        /// <param name="issueKey">The Jira issue key to select.</param>
+        /// <returns>
+        /// True if the node was found and selected; otherwise, false.
+        /// </returns>
         private bool SelectNodeRecursive(TreeNode node, string issueKey)
         {
             if (node.Tag is JiraIssue issue && issue.Key.Equals(issueKey, StringComparison.OrdinalIgnoreCase))
@@ -2533,6 +2822,12 @@ function showDiffOverlay(from, to) {
             return false;
         }
 
+        /// <summary>
+        /// Handles the tab selection change event for the details TabControl.
+        /// When a tab is selected, attempts to select and focus the corresponding issue node in the tree.
+        /// </summary>
+        /// <param name="sender">The TabControl whose selected tab changed.</param>
+        /// <param name="e">Event arguments.</param>
         private void TabDetails_SelectedIndexChanged(object sender, EventArgs e)
         {
             var selectedTab = tabDetails.SelectedTab;
@@ -2544,14 +2839,20 @@ function showDiffOverlay(from, to) {
             //SelectTreeNodeByKey(issueKey);
         }
 
+        /// <summary>
+        /// Handles the click event for the "Update Hierarchy" menu item.
+        /// Prompts the user for confirmation, then triggers a full hierarchy sync if confirmed.
+        /// </summary>
+        /// <param name="sender">The menu item clicked.</param>
+        /// <param name="e">Event arguments.</param>
         private void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
         {
             var result = MessageBox.Show(
-          "Are you sure you want to update the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
-          "Update Hierarchy",
-          MessageBoxButtons.YesNo,
-          MessageBoxIcon.Warning
-      );
+                "Are you sure you want to update the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
+                "Update Hierarchy",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning
+            );
 
             if (result == DialogResult.Yes)
             {
@@ -2559,19 +2860,33 @@ function showDiffOverlay(from, to) {
             }
         }
 
+        /// <summary>
+        /// Performs a full hierarchy sync by reloading all Jira projects and issues from the server.
+        /// Forces a fresh sync, bypassing any cached data.
+        /// </summary>
         private async void SyncHierarchy()
         {
             await LoadAllProjectsToTreeAsync(true);
         }
 
+        /// <summary>
+        /// Handles the click event for the "Configuration" menu item.
+        /// Opens the configuration form for editing Jira and project settings.
+        /// </summary>
+        /// <param name="sender">The menu item clicked.</param>
+        /// <param name="e">Event arguments.</param>
         private void configurationToolStripMenuItem_Click(object sender, EventArgs e)
         {
             LaunchConfigForm();
         }
 
-            private void LaunchConfigForm()
+        /// <summary>
+        /// Launches the configuration form as a modal dialog, centered on the parent form.
+        /// Allows the user to view and edit Jira and project configuration settings.
+        /// </summary>
+        private void LaunchConfigForm()
         {
-            using (var configForm = new ConfigForm())
+            using (var configForm = new frmConfiguration())
             {
                 configForm.StartPosition = FormStartPosition.CenterParent;
                 configForm.ShowDialog(this);

@@ -19,82 +19,100 @@ using static Monovera.frmMain;
 
 namespace Monovera
 {
-    public partial class SearchDialog : Form
+    /// <summary>
+    /// Search dialog for Monovera.
+    /// Allows users to search Jira issues by text, project, type, and status.
+    /// Displays results in a WebView2 browser and supports navigation to issues in the tree.
+    /// </summary>
+    public partial class frmSearch : Form
     {
-        public SearchDialog()
+        /// <summary>
+        /// Default constructor for designer support.
+        /// </summary>
+        public frmSearch()
         {
             InitializeComponent();
         }
 
-        private void SearchDialog_Load(object sender, EventArgs e)
-        {
-
-        }
-
+        /// <summary>
+        /// Reference to the tree view used for selecting and focusing issues.
+        /// </summary>
         private readonly TreeView tree;
 
-        public SearchDialog(TreeView tree)
+        /// <summary>
+        /// Main constructor. Initializes UI, combo boxes, event handlers, and WebView2.
+        /// </summary>
+        /// <param name="tree">The TreeView control to use for navigation.</param>
+        public frmSearch(TreeView tree)
         {
             InitializeComponent();
-
             this.tree = tree;
 
+            // Set up type and status combo boxes for custom drawing and item height
             cmbType.DrawMode = DrawMode.OwnerDrawFixed;
             cmbType.ItemHeight = 28;
-
             cmbStatus.DrawMode = DrawMode.OwnerDrawFixed;
             cmbStatus.ItemHeight = 28;
 
+            // Attach custom draw handlers for icons
             cmbType.DrawItem += (s, e) => DrawComboItem(s, e, typeIcons);
             cmbStatus.DrawItem += (s, e) => DrawComboItem(s, e, statusIcons);
 
+            // Populate project combo box
             cmbProject.Items.Clear();
             cmbProject.Items.Add("All");
             cmbProject.Items.AddRange(config.Projects.Select(p => p.Project).ToArray());
 
-            // Subscribe event before setting SelectedIndex
+            // Subscribe to project selection change before setting index
             cmbProject.SelectedIndexChanged += CmbProject_SelectedIndexChanged;
+            cmbProject.SelectedIndex = 0; // Triggers handler
 
-            // Set selected index AFTER event subscription to trigger the handler
-            cmbProject.SelectedIndex = 0;
-
-            // Just in case event doesn’t fire on setting SelectedIndex, call handler explicitly
+            // Ensure handler runs even if event doesn't fire
             CmbProject_SelectedIndexChanged(cmbProject, EventArgs.Empty);
 
+            // Attach search box and button handlers
             txtSearch.KeyDown += TxtSearch_KeyDown;
-
             btnSearch.Click += BtnSearch_Click;
             btnClose.Click += (s, e) => Close();
 
+            // Initialize WebView2 and attach message handler
             webViewResults.EnsureCoreWebView2Async().ContinueWith(_ =>
             {
                 webViewResults.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
+            // Focus search box when dialog is shown
             this.Shown += (s, e) => txtSearch.Focus();
         }
 
-
+        /// <summary>
+        /// Handles the search box key down event.
+        /// Triggers search when Enter is pressed.
+        /// </summary>
         private void TxtSearch_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Enter)
             {
                 e.Handled = true;
                 e.SuppressKeyPress = true; // Prevents the ding sound
-
-                BtnSearch_Click(sender, e); // Call your method here
+                BtnSearch_Click(sender, e); // Trigger search
             }
         }
 
+        /// <summary>
+        /// Handles project selection change.
+        /// Updates type and status combo boxes to show only relevant options for the selected project.
+        /// </summary>
         private void CmbProject_SelectedIndexChanged(object sender, EventArgs e)
         {
             string selectedProject = cmbProject.SelectedItem.ToString();
 
+            // Determine which projects to merge types/statuses from
             var selectedProjects = selectedProject == "All"
                 ? config.Projects
                 : config.Projects.Where(p => p.Project == selectedProject);
 
-            // Merge all types
+            // Merge all types for selected projects
             var mergedTypes = selectedProjects
                 .Where(p => p.Types != null)
                 .SelectMany(p => p.Types.Keys)
@@ -107,7 +125,7 @@ namespace Monovera
             cmbType.Items.AddRange(mergedTypes.ToArray());
             cmbType.SelectedIndex = 0;
 
-            // Merge all statuses
+            // Merge all statuses for selected projects
             var mergedStatuses = selectedProjects
                 .Where(p => p.Status != null)
                 .SelectMany(p => p.Status.Keys)
@@ -121,7 +139,13 @@ namespace Monovera
             cmbStatus.SelectedIndex = 0;
         }
 
-
+        /// <summary>
+        /// Custom draw handler for combo box items.
+        /// Draws an icon next to the text if available.
+        /// </summary>
+        /// <param name="sender">ComboBox being drawn.</param>
+        /// <param name="e">DrawItemEventArgs for drawing.</param>
+        /// <param name="iconMap">Dictionary mapping item text to icon filenames.</param>
         private void DrawComboItem(object sender, DrawItemEventArgs e, Dictionary<string, string> iconMap)
         {
             if (e.Index < 0) return;
@@ -139,16 +163,21 @@ namespace Monovera
                 }
             }
 
+            // Draw icon if available
             if (img != null)
                 e.Graphics.DrawImage(img, e.Bounds.Left + 2, e.Bounds.Top + 2, 24, 24);
 
+            // Draw text
             using var brush = new SolidBrush(e.ForeColor);
             float textX = e.Bounds.Left + (img != null ? 28 : 2);
             e.Graphics.DrawString(text, e.Font, brush, textX, e.Bounds.Top + 2);
             e.DrawFocusRectangle();
         }
 
-
+        /// <summary>
+        /// Handles the search button click event.
+        /// Builds a JQL query from UI selections, performs the search, and displays results.
+        /// </summary>
         private async void BtnSearch_Click(object sender, EventArgs e)
         {
             string query = txtSearch.Text.Trim();
@@ -158,7 +187,7 @@ namespace Monovera
             string selectedType = cmbType.SelectedItem?.ToString() ?? "All";
             string selectedStatus = cmbStatus.SelectedItem?.ToString() ?? "All";
 
-            // Local key match
+            // If the query matches a local issue key, select it in the tree and close dialog
             if (!string.IsNullOrWhiteSpace(queryKey) && issueDict.ContainsKey(queryKey))
             {
                 tree.Invoke(() =>
@@ -181,7 +210,7 @@ namespace Monovera
             lblProgress.Text = "Searching...";
             System.Windows.Forms.Application.DoEvents(); // Let UI render the progress state
 
-            // Build JQL filters
+            // Build JQL filters based on UI selections
             List<string> jqlFilters = new();
             if (selectedProject == "All")
                 jqlFilters.Add($"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))})");
@@ -199,6 +228,7 @@ namespace Monovera
 
             string jql = $"{string.Join(" AND ", jqlFilters)} ORDER BY key ASC";
 
+            // Perform Jira search and report progress
             var matches = await SearchJiraIssues(jql, new Progress<(int, int)>(p =>
             {
                 lblProgress.Invoke(() => lblProgress.Text = $"Loading {p.Item1} / {p.Item2}");
@@ -213,10 +243,16 @@ namespace Monovera
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
+            // Display results in WebView2
             ShowResults(matches, query);
         }
 
-
+        /// <summary>
+        /// Recursively searches a TreeNodeCollection for a node with the specified key.
+        /// </summary>
+        /// <param name="nodes">TreeNodeCollection to search.</param>
+        /// <param name="key">Issue key to find.</param>
+        /// <returns>The matching TreeNode, or null if not found.</returns>
         private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key)
         {
             foreach (TreeNode node in nodes)
@@ -228,12 +264,20 @@ namespace Monovera
             return null;
         }
 
+        /// <summary>
+        /// Performs a Jira search using the provided JQL and returns a list of matching issues.
+        /// Handles paging and progress reporting.
+        /// </summary>
+        /// <param name="jql">Jira Query Language string.</param>
+        /// <param name="progress">Optional progress reporter for UI updates.</param>
+        /// <returns>List of JiraIssueDto objects matching the query.</returns>
         public static async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
         {
             var list = new List<JiraIssueDto>();
 
             try
             {
+                // Set up Jira REST API client
                 var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri(jiraBaseUrl);
@@ -244,6 +288,7 @@ namespace Monovera
                 int total = int.MaxValue;
                 int collected = 0;
 
+                // Fetch results in pages
                 while (startAt < total)
                 {
                     var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,status,updated";
@@ -257,6 +302,7 @@ namespace Monovera
                     var root = doc.RootElement;
                     total = root.GetProperty("total").GetInt32();
 
+                    // Parse issues from response
                     foreach (var issue in root.GetProperty("issues").EnumerateArray())
                     {
                         var key = issue.GetProperty("key").GetString();
@@ -294,19 +340,26 @@ namespace Monovera
             return list;
         }
 
-
+        /// <summary>
+        /// Displays the search results in the WebView2 browser.
+        /// Results are grouped by title and description matches, and rendered as HTML.
+        /// </summary>
+        /// <param name="issues">List of JiraIssueDto results.</param>
+        /// <param name="query">Search query string.</param>
         private void ShowResults(List<JiraIssueDto> issues, string query)
         {
             var matchedTitle = new StringBuilder();
             var matchedDesc = new StringBuilder();
             bool hasQuery = !string.IsNullOrWhiteSpace(query);
 
+            // Group results by title and description match
             foreach (var issue in issues)
             {
                 string key = issue.Key;
                 string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                 string iconPath = "";
 
+                // Get icon for issue type
                 string typeIconKey = frmMain.GetIconForType(issue.Type);
                 if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                 {
@@ -336,7 +389,7 @@ namespace Monovera
                     matchedDesc.AppendLine(htmlLink);
             }
 
-            // If nothing matched
+            // If nothing matched, show a message
             if (matchedTitle.Length == 0 && matchedDesc.Length == 0)
             {
                 webViewResults.NavigateToString(@"
@@ -346,6 +399,7 @@ namespace Monovera
                 return;
             }
 
+            // Build HTML for results
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -448,6 +502,7 @@ namespace Monovera
 
             try
             {
+                // Write HTML to temp file and navigate WebView2 to it
                 string tempFilePath = Path.Combine(Path.GetTempPath(), "monovera_results.html");
                 File.WriteAllText(tempFilePath, html);
                 webViewResults.CoreWebView2.Navigate(tempFilePath);
@@ -465,9 +520,12 @@ namespace Monovera
                     MessageBoxIcon.Information
                 );
             }
-
         }
 
+        /// <summary>
+        /// Handles messages from the WebView2 browser.
+        /// Selects and focuses the corresponding issue node in the tree when a result is clicked.
+        /// </summary>
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             string key = e.TryGetWebMessageAsString();
