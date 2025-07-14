@@ -63,6 +63,8 @@ Create a file named `configuration.json` in the app directory:
     {
       "Project": "PROJ1",
       "Root": "PROJ1-100",
+      "LinkTypeName": "Blocks",
+      "SortingField": "created",
       "Types": {
         "Story": "story_icon.png",
         "Bug": "bug_icon.png"
