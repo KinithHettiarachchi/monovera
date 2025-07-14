@@ -69,6 +69,11 @@ namespace Monovera
         public string LinkTypeName { get; set; }
 
         /// <summary>
+        /// Field name used for sorting issues (e.g. "Priority").
+        /// </summary>
+        public string SortingField { get; set; } // <-- Add this
+
+        /// <summary>
         /// Maps issue type names to icon filenames (e.g. "User Story" => "type_userreq.png").
         /// Used for displaying icons in the UI.
         /// </summary>

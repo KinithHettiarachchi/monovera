@@ -41,6 +41,7 @@ namespace Monovera
                 txtProject.Text = existing.Project;
                 txtRoot.Text = existing.Root;
                 txtLinkType.Text = existing.LinkTypeName;
+                txtSortingField.Text = existing.SortingField; // <-- Add this
 
                 // Populate types mapping grid
                 foreach (var kv in existing.Types)
@@ -58,6 +59,7 @@ namespace Monovera
                 Project.Project = txtProject.Text;
                 Project.Root = txtRoot.Text;
                 Project.LinkTypeName = txtLinkType.Text;
+                Project.SortingField = txtSortingField.Text; // <-- Add this
 
                 // Read type and status mappings from grids
                 Project.Types = ReadFromGrid(dgvTypes);
@@ -111,6 +113,7 @@ namespace Monovera
                 Project = original.Project,
                 Root = original.Root,
                 LinkTypeName = original.LinkTypeName,
+                SortingField = original.SortingField, // <-- Add this
                 Types = new Dictionary<string, string>(original.Types),
                 Status = new Dictionary<string, string>(original.Status)
             };

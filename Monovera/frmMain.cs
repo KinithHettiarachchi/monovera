@@ -19,6 +19,8 @@ using System.Drawing;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using System.Drawing.Text;
 using Font = System.Drawing.Font;
+using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace Monovera
 {
@@ -93,6 +95,8 @@ namespace Monovera
             public string Root { get; set; }
             /// <summary>Link type name used for hierarchy (e.g. "Blocks").</summary>
             public string LinkTypeName { get; set; }
+            /// <summary>Field name to sort child nodes by (e.g. "created", "summary", "customfield_12345").</summary>
+            public string SortingField { get; set; } // <-- Add this line
             /// <summary>Maps issue type names to icon filenames.</summary>
             public Dictionary<string, string> Types { get; set; }
             /// <summary>Maps status names to icon filenames.</summary>
@@ -149,6 +153,45 @@ namespace Monovera
             public DateTime? Updated { get; set; }
             /// <summary>Created timestamp.</summary>
             public DateTime? Created { get; set; }
+
+            public Dictionary<string, object> CustomFields { get; set; } = new();
+        }
+
+
+        /// <summary>
+        /// Alphanumeric comparer for natural sorting (e.g. 1,2,10,11).
+        /// </summary>
+        private class AlphanumericComparer : IComparer<object>
+        {
+            public int Compare(object x, object y)
+            {
+                string sx = x?.ToString() ?? "";
+                string sy = y?.ToString() ?? "";
+                return AlphanumericCompare(sx, sy);
+            }
+
+            // Natural sort implementation
+            private static int AlphanumericCompare(string s1, string s2)
+            {
+                var regex = new Regex(@"\d+|\D+");
+                var e1 = regex.Matches(s1);
+                var e2 = regex.Matches(s2);
+                int i = 0;
+                while (i < e1.Count && i < e2.Count)
+                {
+                    string a = e1[i].Value;
+                    string b = e2[i].Value;
+                    int result;
+                    if (int.TryParse(a, out int na) && int.TryParse(b, out int nb))
+                        result = na.CompareTo(nb);
+                    else
+                        result = string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+                    if (result != 0)
+                        return result;
+                    i++;
+                }
+                return e1.Count.CompareTo(e2.Count);
+            }
         }
 
         /// <summary>
@@ -243,7 +286,8 @@ namespace Monovera
         /// Menu item for generating a hierarchical report.
         /// </summary>
         private ToolStripMenuItem reportMenuItem;
-
+        // Add this field to frmMain
+        private static Dictionary<string, JiraIssueDto> issueDtoDict = new();
         /// <summary>
         /// Initializes the context menu for the tree view, including search and report options.
         /// </summary>
@@ -647,6 +691,7 @@ namespace Monovera
       ""Project"": ""PROJECT1"",
       ""Root"": ""PRJ1-100"",
       ""LinkTypeName"": ""Blocks"",
+      ""SortingField"": ""created"",
       ""Types"": {
         ""Project"": ""type_project.png"",
         ""Rule"": ""type_rule.png"",
@@ -738,6 +783,10 @@ namespace Monovera
             // Load issues for each configured project
             foreach (var project in projectList)
             {
+                // Get the sorting field for this project
+                var projectConfig = config.Projects.FirstOrDefault(p => p.Project == project);
+                string sortingField = projectConfig?.SortingField ?? "summary";
+
                 lblProgress.Text = $"Loading Project {project}...";
 
                 string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{project}.json");
@@ -747,7 +796,7 @@ namespace Monovera
                 {
                     // Load issues from cache file
                     string cachedJson = await File.ReadAllTextAsync(cacheFile);
-                    issues = ParseIssuesFromJson(cachedJson);
+                    issues = ParseIssuesFromJson(cachedJson, projectConfig);
                 }
                 else
                 {
@@ -773,9 +822,16 @@ namespace Monovera
                     });
 
                     // Download all issues from Jira and cache them
-                    string allJson = await DownloadAllIssuesJson(client, jql, progress);
+                   
+
+                    // Build the fields list for the query
+                    var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
+                    string fieldsParam = string.Join(",", fieldsList.Distinct());
+
+                    // Pass fieldsParam to DownloadAllIssuesJson
+                    string allJson = await DownloadAllIssuesJson(client, jql, fieldsParam, progress);
                     await File.WriteAllTextAsync(cacheFile, allJson);
-                    issues = ParseIssuesFromJson(allJson);
+                    issues = ParseIssuesFromJson(allJson, projectConfig);
                 }
 
                 // Build lookup and hierarchy dictionaries
@@ -798,8 +854,9 @@ namespace Monovera
                 {
                     if (!rootKeys.Contains(rootIssue.Key)) continue;
 
+                    var projectConfig = config.Projects.FirstOrDefault(p => rootIssue.Key.StartsWith(p.Root));
                     var rootNode = CreateTreeNode(rootIssue);
-                    AddChildNodesRecursively(rootNode, rootIssue.Key);
+                    AddChildNodesRecursively(rootNode, rootIssue.Key, projectConfig);
                     tree.Nodes.Add(rootNode);
                     rootNode.Expand();
                 }
@@ -824,6 +881,7 @@ namespace Monovera
                     Type = issue.Type,
                     ParentKey = null
                 };
+                issueDtoDict[issue.Key] = issue; // <-- Add this line
             }
 
             // Build parent-child relationships based on issue links
@@ -1262,33 +1320,12 @@ namespace Monovera
         }
 
         /// <summary>
-        /// Recursively adds child nodes to a parent TreeNode based on the parentKey.
-        /// This builds the hierarchical tree structure for Jira issues.
-        /// </summary>
-        /// <param name="parentNode">The parent TreeNode to add children to.</param>
-        /// <param name="parentKey">The key of the parent issue.</param>
-        private void AddChildNodesRecursively(TreeNode parentNode, string parentKey)
-        {
-            // Check if there are children for the given parentKey
-            if (childrenByParent.TryGetValue(parentKey, out var children))
-            {
-                foreach (var child in children)
-                {
-                    // Create a TreeNode for each child and add its own children recursively
-                    var childNode = CreateTreeNode(child);
-                    AddChildNodesRecursively(childNode, child.Key);
-                    parentNode.Nodes.Add(childNode);
-                }
-            }
-        }
-
-        /// <summary>
         /// Parses a JSON string containing Jira issues and returns a list of JiraIssueDto objects.
         /// Only issues with summary, type, and hierarchy links are processed.
         /// </summary>
         /// <param name="json">The raw JSON string from Jira REST API.</param>
         /// <returns>List of JiraIssueDto objects parsed from the JSON.</returns>
-        private List<JiraIssueDto> ParseIssuesFromJson(string json)
+        private List<JiraIssueDto> ParseIssuesFromJson(string json, JiraProjectConfig projectConfig)
         {
             var issues = new List<JiraIssueDto>();
             using var doc = JsonDocument.Parse(json);
@@ -1302,7 +1339,18 @@ namespace Monovera
                 var fields = issue.GetProperty("fields");
                 var summary = fields.GetProperty("summary").GetString();
                 var type = fields.GetProperty("issuetype").GetProperty("name").GetString();
-
+                var customFields = new Dictionary<string, object>();
+                
+                if (projectConfig?.SortingField != null)
+                {
+                    if (fields.TryGetProperty(projectConfig.SortingField, out var sortProp))
+                    {
+                        // Store as string or DateTime as needed
+                        customFields[projectConfig.SortingField] = sortProp.ValueKind == JsonValueKind.String
+                            ? sortProp.GetString()
+                            : sortProp.ToString();
+                    }
+                }
                 var issueLinksList = new List<JiraIssueLink>();
 
                 // Extract hierarchy links (e.g. "Blocks" outward links)
@@ -1335,14 +1383,15 @@ namespace Monovera
                     Key = key,
                     Summary = summary,
                     Type = type,
-                    IssueLinks = issueLinksList
+                    IssueLinks = issueLinksList,
+                    CustomFields = customFields
                 });
             }
 
             return issues;
         }
 
-        private async Task<string> DownloadAllIssuesJson(HttpClient client, string jql, IProgress<(int completed, int total)> progress)
+        private async Task<string> DownloadAllIssuesJson(HttpClient client, string jql, string fields, IProgress<(int completed, int total)> progress)
         {
             const int pageSize = 100;
             const int maxParallelism = 5;
@@ -1368,7 +1417,7 @@ namespace Monovera
                     int startAt = (batchStart + i) * pageSize;
                     batchTasks.Add(Task.Run(async () =>
                     {
-                        var res = await client.GetAsync($"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,issuelinks");
+                        var res = await client.GetAsync($"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields={fields}");
                         res.EnsureSuccessStatusCode();
                         var json = await res.Content.ReadAsStringAsync();
                         using var doc = JsonDocument.Parse(json);
@@ -2902,5 +2951,61 @@ function showDiffOverlay(from, to) {
             }
         }
 
+        private void AddChildNodesRecursively(TreeNode parentNode, string parentKey, JiraProjectConfig projectConfig)
+        {
+            if (childrenByParent.TryGetValue(parentKey, out var children))
+            {
+                string sortingField = projectConfig?.SortingField ?? "summary";
+
+                var sortedChildren = children.OrderBy(child =>
+                {
+                    if (issueDtoDict.TryGetValue(child.Key, out var dto))
+                    {
+                        var prop = typeof(JiraIssueDto).GetProperty(sortingField, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (prop != null)
+                        {
+                            var value = prop.GetValue(dto);
+                            return value ?? "";
+                        }
+                        if (dto.CustomFields != null && dto.CustomFields.TryGetValue(sortingField, out var customValue))
+                            return customValue ?? "";
+                    }
+                    return child.Summary ?? "";
+                }, new AlphanumericComparer()).ToList();
+
+                foreach (var child in sortedChildren)
+                {
+                    var childNode = CreateTreeNode(child);
+                    AddChildNodesRecursively(childNode, child.Key, projectConfig);
+                    parentNode.Nodes.Add(childNode);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Helper to get the value of a field for sorting.
+        /// Supports standard fields and custom fields if present in JiraIssueDto.
+        /// </summary>
+        /// <param name="issueKey">The Jira issue key.</param>
+        /// <param name="fieldName">The field name to retrieve (case-insensitive).</param>
+        /// <returns>The value of the field, or an empty string if not found.</returns>
+        private object GetFieldValue(string issueKey, string fieldName)
+        {
+            // Try to get the JiraIssueDto for this key
+            if (issueDtoDict.TryGetValue(issueKey, out var dto))
+            {
+                // Use reflection for custom fields if needed
+                var prop = typeof(JiraIssueDto).GetProperty(fieldName, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (prop != null)
+                    return prop.GetValue(dto) ?? "";
+                // For custom fields, you may need to parse from a dictionary or JSON
+                // If you store custom fields in a dictionary, add logic here
+            }
+            // Fallback to summary from issueDict
+            if (issueDict.TryGetValue(issueKey, out var issue))
+                return issue.Summary ?? "";
+            return "";
+        }
     }
 }
+

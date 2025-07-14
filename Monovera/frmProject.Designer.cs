@@ -48,6 +48,8 @@
             dataGridViewTextBoxColumn2 = new DataGridViewTextBoxColumn();
             txtLinkType = new TextBox();
             label5 = new Label();
+            txtSortingField = new TextBox();
+            label6 = new Label();
             ((System.ComponentModel.ISupportInitialize)dgvTypes).BeginInit();
             ((System.ComponentModel.ISupportInitialize)dgvStatus).BeginInit();
             SuspendLayout();
@@ -55,7 +57,7 @@
             // btnCancel
             // 
             btnCancel.Font = new Font("Segoe UI", 9.75F);
-            btnCancel.Location = new Point(327, 473);
+            btnCancel.Location = new Point(327, 529);
             btnCancel.Name = "btnCancel";
             btnCancel.Size = new Size(109, 40);
             btnCancel.TabIndex = 6;
@@ -65,7 +67,7 @@
             // btnOk
             // 
             btnOk.Font = new Font("Segoe UI", 9.75F);
-            btnOk.Location = new Point(212, 473);
+            btnOk.Location = new Point(212, 529);
             btnOk.Name = "btnOk";
             btnOk.Size = new Size(109, 40);
             btnOk.TabIndex = 4;
@@ -75,24 +77,24 @@
             // txtRoot
             // 
             txtRoot.Font = new Font("Segoe UI", 9.75F);
-            txtRoot.Location = new Point(94, 58);
+            txtRoot.Location = new Point(111, 58);
             txtRoot.Name = "txtRoot";
-            txtRoot.Size = new Size(342, 25);
+            txtRoot.Size = new Size(135, 25);
             txtRoot.TabIndex = 1;
             // 
             // txtProject
             // 
             txtProject.Font = new Font("Segoe UI", 9.75F);
-            txtProject.Location = new Point(94, 24);
+            txtProject.Location = new Point(111, 24);
             txtProject.Name = "txtProject";
-            txtProject.Size = new Size(342, 25);
+            txtProject.Size = new Size(389, 25);
             txtProject.TabIndex = 0;
             // 
             // label2
             // 
             label2.AutoSize = true;
             label2.Font = new Font("Segoe UI", 9.75F);
-            label2.Location = new Point(24, 61);
+            label2.Location = new Point(26, 64);
             label2.Name = "label2";
             label2.Size = new Size(69, 17);
             label2.TabIndex = 11;
@@ -131,9 +133,9 @@
             dataGridViewCellStyle5.SelectionForeColor = SystemColors.HighlightText;
             dataGridViewCellStyle5.WrapMode = DataGridViewTriState.False;
             dgvTypes.DefaultCellStyle = dataGridViewCellStyle5;
-            dgvTypes.Location = new Point(94, 142);
+            dgvTypes.Location = new Point(111, 147);
             dgvTypes.Name = "dgvTypes";
-            dgvTypes.Size = new Size(342, 150);
+            dgvTypes.Size = new Size(389, 168);
             dgvTypes.TabIndex = 2;
             // 
             // Names
@@ -152,7 +154,7 @@
             // 
             label3.AutoSize = true;
             label3.Font = new Font("Segoe UI", 9.75F);
-            label3.Location = new Point(24, 142);
+            label3.Location = new Point(24, 147);
             label3.Name = "label3";
             label3.Size = new Size(41, 17);
             label3.TabIndex = 17;
@@ -162,7 +164,7 @@
             // 
             label4.AutoSize = true;
             label4.Font = new Font("Segoe UI", 9.75F);
-            label4.Location = new Point(24, 309);
+            label4.Location = new Point(24, 330);
             label4.Name = "label4";
             label4.Size = new Size(56, 17);
             label4.TabIndex = 19;
@@ -183,9 +185,9 @@
             dataGridViewCellStyle6.SelectionForeColor = SystemColors.HighlightText;
             dataGridViewCellStyle6.WrapMode = DataGridViewTriState.False;
             dgvStatus.DefaultCellStyle = dataGridViewCellStyle6;
-            dgvStatus.Location = new Point(94, 309);
+            dgvStatus.Location = new Point(111, 330);
             dgvStatus.Name = "dgvStatus";
-            dgvStatus.Size = new Size(342, 150);
+            dgvStatus.Size = new Size(389, 150);
             dgvStatus.TabIndex = 3;
             // 
             // dataGridViewTextBoxColumn1
@@ -203,26 +205,46 @@
             // txtLinkType
             // 
             txtLinkType.Font = new Font("Segoe UI", 9.75F);
-            txtLinkType.Location = new Point(94, 97);
+            txtLinkType.Location = new Point(366, 58);
             txtLinkType.Name = "txtLinkType";
-            txtLinkType.Size = new Size(342, 25);
+            txtLinkType.Size = new Size(134, 25);
             txtLinkType.TabIndex = 20;
             // 
             // label5
             // 
             label5.AutoSize = true;
             label5.Font = new Font("Segoe UI", 9.75F);
-            label5.Location = new Point(24, 100);
+            label5.Location = new Point(279, 64);
             label5.Name = "label5";
             label5.Size = new Size(61, 17);
             label5.TabIndex = 21;
             label5.Text = "Link Type";
             // 
-            // ProjectForm
+            // txtSortingField
+            // 
+            txtSortingField.Font = new Font("Segoe UI", 9.75F);
+            txtSortingField.Location = new Point(111, 101);
+            txtSortingField.Name = "txtSortingField";
+            txtSortingField.Size = new Size(135, 25);
+            txtSortingField.TabIndex = 22;
+            // 
+            // label6
+            // 
+            label6.AutoSize = true;
+            label6.Font = new Font("Segoe UI", 9.75F);
+            label6.Location = new Point(24, 104);
+            label6.Name = "label6";
+            label6.Size = new Size(81, 17);
+            label6.TabIndex = 23;
+            label6.Text = "Sorting Field";
+            // 
+            // frmProject
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(464, 531);
+            ClientSize = new Size(513, 581);
+            Controls.Add(txtSortingField);
+            Controls.Add(label6);
             Controls.Add(txtLinkType);
             Controls.Add(label5);
             Controls.Add(label4);
@@ -239,10 +261,9 @@
             Icon = (Icon)resources.GetObject("$this.Icon");
             MaximizeBox = false;
             MinimizeBox = false;
-            Name = "ProjectForm";
+            Name = "frmProject";
             StartPosition = FormStartPosition.CenterScreen;
             Text = "M O N O V E R A - Project";
-            
             ((System.ComponentModel.ISupportInitialize)dgvTypes).EndInit();
             ((System.ComponentModel.ISupportInitialize)dgvStatus).EndInit();
             ResumeLayout(false);
@@ -267,5 +288,7 @@
         private DataGridViewTextBoxColumn dataGridViewTextBoxColumn2;
         private TextBox txtLinkType;
         private Label label5;
+        private TextBox txtSortingField;
+        private Label label6;
     }
 }
