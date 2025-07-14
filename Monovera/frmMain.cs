@@ -2124,7 +2124,6 @@ function showDiffOverlay(from, to) {
   .diff-deleted {{
     background-color: #ffebee;
     color: #d32f2f;
-    text-decoration: line-through;
   }}
 
   .diff-arrow {{
@@ -2405,33 +2404,43 @@ function showDiffOverlay(from, to) {
             from ??= "";
             to ??= "";
 
+            // Function to remove all {color} tags
+            string StripColorTags(string text) =>
+                Regex.Replace(text, @"\{color(:[^}]*)?\}", "", RegexOptions.IgnoreCase);
+
+            // Strip color tags for clean comparison
+            string fromClean = StripColorTags(from);
+            string toClean = StripColorTags(to);
+
+            if (fromClean == toClean)
+                return ""; // Only formatting changed
+
             var diff = new StringBuilder();
-            int minLen = Math.Min(from.Length, to.Length);
+            int minLen = Math.Min(fromClean.Length, toClean.Length);
             int i = 0;
 
             // Find common prefix
-            while (i < minLen && from[i] == to[i])
+            while (i < minLen && fromClean[i] == toClean[i])
             {
                 i++;
             }
 
             // Deleted part (from)
-            if (i < from.Length)
+            if (i < fromClean.Length)
             {
-                var deleted = WebUtility.HtmlEncode(from.Substring(i));
+                var deleted = WebUtility.HtmlEncode(fromClean.Substring(i));
                 diff.Append($@"<br/><br/>Removed <br/><span class='diff-deleted'>{deleted}</span>");
             }
 
             // Added part (to)
-            if (i < to.Length)
+            if (i < toClean.Length)
             {
-                var added = WebUtility.HtmlEncode(to.Substring(i));
+                var added = WebUtility.HtmlEncode(toClean.Substring(i));
                 diff.Append($@"<br/><br/>Added <br/><span class='diff-added'>{added}</span>");
             }
 
             return diff.ToString();
         }
-
 
         /// <summary>
         /// Handles messages received from the embedded WebView2 browser.
