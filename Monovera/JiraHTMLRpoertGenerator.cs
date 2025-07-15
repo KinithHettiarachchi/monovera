@@ -52,13 +52,35 @@ public class JiraHtmlReportGenerator
     {
         progress?.Report("Collecting issues...");
         var flatList = new List<(JiraIssue issue, string html, int level)>();
-        await CollectIssuesRecursively(rootKey, 0, flatList, progress);
 
-        // Assign outline numbers for hierarchical display (e.g. 1, 1.1, 1.2, 2, ...)
+        // Find the root node in the tree
+        var rootNode = FindTreeNode(tree.Nodes, rootKey);
+        if (rootNode != null)
+            await CollectIssuesFromTree(rootNode, 0, flatList, progress);
+
         var numbered = GenerateOutlineNumbers(flatList);
 
         progress?.Report("Creating HTML report...");
         return await CreateHtmlReport(numbered);
+    }
+
+    private async Task CollectIssuesFromTree(TreeNode node, int level, List<(JiraIssue, string, int)> result, IProgress<string>? progress)
+    {
+        if (node.Tag is string key && issueDict.TryGetValue(key, out var issue))
+        {
+            var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
+            html = ReplaceAttachmentImageUrls(html, attachments);
+            html = RewriteImageUrls(html);
+
+            issue.RelatedIssueKeys = relatedKeys;
+            result.Add((issue, html, level));
+            progress?.Report($"Report generation in progress : Added {issue.Key}...");
+
+            foreach (TreeNode child in node.Nodes)
+            {
+                await CollectIssuesFromTree(child, level + 1, result, progress);
+            }
+        }
     }
 
     /// <summary>

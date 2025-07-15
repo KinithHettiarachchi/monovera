@@ -3008,4 +3008,3 @@ function showDiffOverlay(from, to) {
         }
     }
 }
-
