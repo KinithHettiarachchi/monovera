@@ -209,7 +209,7 @@ namespace Monovera
             // Initialize context menu for tree
             InitializeContextMenu();
 
-            // Set up tab control for details panel
+             // Set up tab control for details panel
             tabDetails = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -223,6 +223,9 @@ namespace Monovera
             tabDetails.ItemSize = new Size(200, 30);
             tabDetails.Padding = new Point(40, 5);
             panelTabs.Controls.Add(tabDetails);
+
+            InitializeTabContextMenu();
+            EnableTabDragDrop();
 
             // Tree mouse event for context menu
             tree.MouseDown += tree_MouseDown;
@@ -288,6 +291,11 @@ namespace Monovera
         private ToolStripMenuItem reportMenuItem;
         // Add this field to frmMain
         private static Dictionary<string, JiraIssueDto> issueDtoDict = new();
+        // Add these fields to frmMain
+        private ContextMenuStrip tabContextMenu;
+        private TabPage rightClickedTab;
+        // Add these fields to frmMain
+        private int dragTabIndex = -1;
         /// <summary>
         /// Initializes the context menu for the tree view, including search and report options.
         /// </summary>
@@ -504,7 +512,15 @@ namespace Monovera
                 var tab = tabDetails.TabPages[i];
                 if (tab.Tag is Rectangle closeRect && closeRect.Contains(e.Location))
                 {
+                    // Select the tab to the left after closing
+                    int idx = i;
                     tabDetails.TabPages.Remove(tab);
+
+                    if (tabDetails.TabPages.Count > 0)
+                    {
+                        int newIdx = Math.Max(0, idx - 1);
+                        tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
+                    }
                     break;
                 }
             }
@@ -3005,6 +3021,129 @@ function showDiffOverlay(from, to) {
             if (issueDict.TryGetValue(issueKey, out var issue))
                 return issue.Summary ?? "";
             return "";
+        }
+
+        // In your frmMain constructor or initialization method:
+        private void InitializeTabContextMenu()
+        {
+            tabContextMenu = new ContextMenuStrip();
+            tabContextMenu.Items.Add("Close This Tab", null, (s, e) => CloseTab(rightClickedTab));
+            tabContextMenu.Items.Add("Close All Other Tabs", null, (s, e) => CloseAllOtherTabs(rightClickedTab));
+            tabContextMenu.Items.Add("Close Tabs on Left", null, (s, e) => CloseTabsOnLeft(rightClickedTab));
+            tabContextMenu.Items.Add("Close Tabs on Right", null, (s, e) => CloseTabsOnRight(rightClickedTab));
+            tabContextMenu.Items.Add("Close All Tabs", null, (s, e) => CloseAllTabs());
+
+            tabDetails.MouseUp += TabDetails_MouseUp;
+        }
+
+        private void TabDetails_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                for (int i = 0; i < tabDetails.TabCount; i++)
+                {
+                    Rectangle r = tabDetails.GetTabRect(i);
+                    if (r.Contains(e.Location))
+                    {
+                        rightClickedTab = tabDetails.TabPages[i];
+                        tabContextMenu.Show(tabDetails, e.Location);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Tab closing logic
+        private void CloseTab(TabPage tab)
+        {
+            if (tab == null) return;
+            int idx = tabDetails.TabPages.IndexOf(tab);
+            tabDetails.TabPages.Remove(tab);
+
+            // Select the tab to the left, if any; otherwise, select the first tab if any remain
+            if (tabDetails.TabPages.Count > 0)
+            {
+                int newIdx = Math.Max(0, idx - 1);
+                tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
+            }
+        }
+
+        private void CloseAllOtherTabs(TabPage tab)
+        {
+            foreach (TabPage t in tabDetails.TabPages.Cast<TabPage>().ToList())
+                if (t != tab) tabDetails.TabPages.Remove(t);
+        }
+
+        private void CloseTabsOnLeft(TabPage tab)
+        {
+            int idx = tabDetails.TabPages.IndexOf(tab);
+            for (int i = idx - 1; i >= 0; i--)
+                tabDetails.TabPages.RemoveAt(i);
+        }
+
+        private void CloseTabsOnRight(TabPage tab)
+        {
+            int idx = tabDetails.TabPages.IndexOf(tab);
+            for (int i = tabDetails.TabPages.Count - 1; i > idx; i--)
+                tabDetails.TabPages.RemoveAt(i);
+        }
+
+        private void CloseAllTabs()
+        {
+            tabDetails.TabPages.Clear();
+        }
+
+        // In your frmMain constructor or initialization method:
+        private void EnableTabDragDrop()    
+        {
+            tabDetails.AllowDrop = true;
+            tabDetails.MouseDown += TabDetails_MouseDown;
+            tabDetails.MouseMove += TabDetails_MouseMove;
+            tabDetails.DragOver += TabDetails_DragOver;
+            tabDetails.DragDrop += TabDetails_DragDrop;
+        }
+
+        private void TabDetails_MouseDown(object sender, MouseEventArgs e)
+        {
+            for (int i = 0; i < tabDetails.TabCount; i++)
+            {
+                if (tabDetails.GetTabRect(i).Contains(e.Location))
+                {
+                    dragTabIndex = i;
+                    break;
+                }
+            }
+        }
+
+        private void TabDetails_MouseMove(object sender, MouseEventArgs e)
+        {
+            // Prevent drag if dragTabIndex is out of bounds (can happen after tab close)
+            if (e.Button == MouseButtons.Left && dragTabIndex != -1 && dragTabIndex < tabDetails.TabPages.Count)
+            {
+                tabDetails.DoDragDrop(tabDetails.TabPages[dragTabIndex], DragDropEffects.Move);
+            }
+        }
+
+        private void TabDetails_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effect = DragDropEffects.Move;
+        }
+
+        private void TabDetails_DragDrop(object sender, DragEventArgs e)
+        {
+            TabPage draggedTab = (TabPage)e.Data.GetData(typeof(TabPage));
+            Point pt = tabDetails.PointToClient(new Point(e.X, e.Y));
+            for (int i = 0; i < tabDetails.TabCount; i++)
+            {
+                if (tabDetails.GetTabRect(i).Contains(pt))
+                {
+                    tabDetails.TabPages.Remove(draggedTab);
+                    tabDetails.TabPages.Insert(i, draggedTab);
+                    tabDetails.SelectedTab = draggedTab;
+                    break;
+                }
+            }
+            dragTabIndex = -1;
         }
     }
 }
