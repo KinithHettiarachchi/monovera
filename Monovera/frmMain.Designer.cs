@@ -34,12 +34,12 @@
             tree = new TreeView();
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
-            pbProgress = new ToolStripProgressBar();
-            lblProgress = new ToolStripStatusLabel();
             toolStripStatusLabel1 = new ToolStripStatusLabel();
             toolStripSplitButton1 = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             configurationToolStripMenuItem = new ToolStripMenuItem();
+            pbProgress = new ToolStripProgressBar();
+            lblProgress = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -94,23 +94,12 @@
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
-            // pbProgress
-            // 
-            pbProgress.Name = "pbProgress";
-            pbProgress.Size = new Size(100, 16);
-            // 
-            // lblProgress
-            // 
-            lblProgress.Name = "lblProgress";
-            lblProgress.Size = new Size(16, 17);
-            lblProgress.Text = "...";
-            // 
             // toolStripStatusLabel1
             // 
             toolStripStatusLabel1.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0);
             toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-            toolStripStatusLabel1.Size = new Size(97, 17);
-            toolStripStatusLabel1.Text = "Search = Ctrl + S";
+            toolStripStatusLabel1.Size = new Size(261, 17);
+            toolStripStatusLabel1.Text = "Press Ctrl + Q on the tree to load search dialog.";
             // 
             // toolStripSplitButton1
             // 
@@ -121,7 +110,6 @@
             toolStripSplitButton1.Name = "toolStripSplitButton1";
             toolStripSplitButton1.Size = new Size(32, 20);
             toolStripSplitButton1.Text = "Settings";
-           
             // 
             // mnuUpdateHierarchy
             // 
@@ -138,6 +126,17 @@
             configurationToolStripMenuItem.Size = new Size(164, 22);
             configurationToolStripMenuItem.Text = "Configuration...";
             configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
+            // 
+            // pbProgress
+            // 
+            pbProgress.Name = "pbProgress";
+            pbProgress.Size = new Size(100, 16);
+            // 
+            // lblProgress
+            // 
+            lblProgress.Name = "lblProgress";
+            lblProgress.Size = new Size(16, 17);
+            lblProgress.Text = "...";
             // 
             // toolTip1
             // 

@@ -158,6 +158,47 @@ namespace Monovera
         }
 
 
+        private const string LoadingHtml = @"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <style>
+    body {
+      font-family: 'IBM Plex Sans', sans-serif;
+      background: #f8fcf8;
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+    .spinner {
+      border: 8px solid #e0e0e0;
+      border-top: 8px solid #4caf50;
+      border-radius: 50%;
+      width: 60px;
+      height: 60px;
+      animation: spin 1s linear infinite;
+      margin-bottom: 24px;
+    }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
+    .loading-text {
+      color: #2e7d32;
+      font-size: 1.3em;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+  </style>
+</head>
+<body>
+  <div class='spinner'></div>
+  <div class='loading-text'>Loading, please wait...</div>
+</body>
+</html>
+";
+
         /// <summary>
         /// Alphanumeric comparer for natural sorting (e.g. 1,2,10,11).
         /// </summary>
@@ -936,39 +977,77 @@ namespace Monovera
         /// </remarks>
         public static async Task AddHomeTabAsync(TabControl tabDetails)
         {
-            // Create and configure the WebView2 control for HTML rendering
+            // Ensure the TabControl has an ImageList for tab icons
+            if (tabDetails.ImageList == null)
+            {
+                tabDetails.ImageList = new ImageList();
+                tabDetails.ImageList.ImageSize = new Size(16, 16);
+            }
+
+            // Load the tab icon
+            string iconKey = "home";
+            System.Drawing.Image iconImage = null;
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
+
+            if (File.Exists(iconFile))
+            {
+                try
+                {
+                    using var iconStream = File.OpenRead(iconFile);
+                    iconImage = System.Drawing.Image.FromStream(iconStream);
+                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                }
+                catch
+                {
+                    // Ignore icon load failure
+                }
+            }
+
+            // Create the TabPage and WebView2 control
+            var homePage = new TabPage("Welcome to Monovera!")
+            {
+                ImageKey = iconKey,
+                ToolTipText = "Welcome to Monovera!"
+            };
+
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2
             {
                 Dock = DockStyle.Fill
             };
 
-            // Ensure WebView2 is initialized before use
+            homePage.Controls.Add(webView);
+            tabDetails.TabPages.Add(homePage);
+            tabDetails.SelectedTab = homePage;
+
+            // Start initializing WebView2
             await webView.EnsureCoreWebView2Async();
 
-            // Handle script dialogs (e.g., alert, confirm) in the embedded browser
+            // Show loading page after WebView is ready and attached to UI
+            webView.NavigateToString(LoadingHtml);
+
+            // Handle script dialogs
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
             {
                 var deferral = args.GetDeferral();
                 try { args.Accept(); } finally { deferral.Complete(); }
             };
 
-            // Prepare the path to the banner image
+            // Delay a bit to simulate loading or let the user see loading animation
+            await Task.Delay(800); // Adjust delay as needed
+
+            // Prepare image and final HTML
             string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "MonoveraBanner.png");
 
-            // If the image is missing, show a warning and abort tab creation
             if (!File.Exists(imagePath))
             {
                 MessageBox.Show("Image not found: images/MonoveraBanner.png", "Missing Image", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            // Read the image file and encode it as a base64 data URI for embedding in HTML
             string base64 = Convert.ToBase64String(File.ReadAllBytes(imagePath));
             string imageUri = $"data:image/webp;base64,{base64}";
 
-            // Build the HTML content for the home tab
-            // - Uses a light green background
-            // - Centers the banner image both vertically and horizontally
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -995,50 +1074,10 @@ namespace Monovera
 </body>
 </html>";
 
-            // Ensure the TabControl has an ImageList for tab icons
-            if (tabDetails.ImageList == null)
-            {
-                tabDetails.ImageList = new ImageList();
-                tabDetails.ImageList.ImageSize = new Size(16, 16);
-            }
-
-            // Optionally load a tab icon from a local PNG file
-            string iconKey = "home";
-            System.Drawing.Image iconImage = null;
-            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
-
-            if (File.Exists(iconFile))
-            {
-                try
-                {
-                    using var iconStream = File.OpenRead(iconFile);
-                    iconImage = System.Drawing.Image.FromStream(iconStream);
-                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
-                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
-                }
-                catch
-                {
-                    // Ignore icon load failure to avoid crashing the UI
-                }
-            }
-
-            // Create the TabPage for the home tab
-            var homePage = new TabPage("Welcome to Monovera!")
-            {
-                ImageKey = iconKey, // Set the tab icon if available
-                ToolTipText = "Welcome to Monovera!"
-            };
-
-            // Add the WebView2 control to the tab
-            homePage.Controls.Add(webView);
-
-            // Add the tab to the TabControl and select it
-            tabDetails.TabPages.Add(homePage);
-            tabDetails.SelectedTab = homePage;
-
-            // Navigate the WebView2 to the generated HTML content
+            // Finally navigate to the final HTML
             webView.NavigateToString(html);
         }
+
 
 
         /// <summary>
@@ -1049,44 +1088,78 @@ namespace Monovera
         /// <param name="tabDetails">The TabControl to which the "Recent Updates" tab will be added.</param>
         public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails)
         {
-            // Create and configure the WebView2 control for HTML rendering
+            // --- Step 1: Prepare WebView2 control and TabPage first ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-            await webView.EnsureCoreWebView2Async();
 
-            // Handle script dialogs (e.g., alert, confirm) in the embedded browser
+            // Create the tab page immediately
+            var updatePage = new TabPage("Recent Updates!")
+            {
+                ImageKey = "updates",
+                ToolTipText = "Issues that were updated during past 30 days!"
+            };
+            updatePage.Controls.Add(webView);
+
+            // Add to tab control first, so loading screen is visible
+            tabDetails.TabPages.Add(updatePage);
+            tabDetails.SelectedTab = updatePage;
+
+            // Ensure the tab has an icon list
+            if (tabDetails.ImageList == null)
+            {
+                tabDetails.ImageList = new ImageList { ImageSize = new Size(16, 16) };
+            }
+
+            // Load icon if exists
+            string iconKey = "updates";
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
+
+            if (File.Exists(iconFile))
+            {
+                try
+                {
+                    using var iconStream = File.OpenRead(iconFile);
+                    var iconImage = System.Drawing.Image.FromStream(iconStream);
+                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                }
+                catch { }
+            }
+
+            // --- Step 2: Initialize WebView2 and show Loading ---
+            await webView.EnsureCoreWebView2Async();
+            webView.NavigateToString(LoadingHtml);
+
+            // Handle dialogs and messages
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
             {
                 var deferral = args.GetDeferral();
                 try { args.Accept(); } finally { deferral.Complete(); }
             };
 
-            // Handle messages sent from the HTML (e.g., clicking an issue link)
             webView.CoreWebView2.WebMessageReceived += (s, args) =>
             {
                 try
                 {
                     string message = args.TryGetWebMessageAsString()?.Trim();
-
                     if (!string.IsNullOrWhiteSpace(message))
                     {
-                        // Assume the message is a Jira issue key (e.g., "REQ-123")
                         SelectAndLoadTreeNode(message);
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.WriteLine("WebMessageReceived in RecentUpdates error: " + ex.Message);
+                    Debug.WriteLine("WebMessageReceived error: " + ex.Message);
                 }
             };
 
-            // Build JQL to fetch issues updated in the last 30 days for all projects
-            DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
-            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -30d ORDER BY updated DESC";
+            // Optional: delay a little so user sees loading
+            await Task.Delay(800);
 
-            // Fetch issues from Jira using the SearchDialog helper
+            // --- Step 3: Build the JQL and get issues ---
+            DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
+            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -14d ORDER BY updated DESC";
             var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
 
-            // Filter issues to only those with summary or description changes in the last 30 days
             var tasks = rawIssues.Select(async issue =>
             {
                 if (await HasSummaryOrDescriptionChangeAsync(issue.Key))
@@ -1097,7 +1170,6 @@ namespace Monovera
             var withChanges = await Task.WhenAll(tasks);
             var filteredIssues = withChanges.Where(i => i != null).ToList();
 
-            // Group issues by update date (local time), descending
             IEnumerable<IGrouping<DateTime, JiraIssueDto>> grouped;
             try
             {
@@ -1112,64 +1184,51 @@ namespace Monovera
                 return;
             }
 
-            // If no issues found, show a message and exit
-            if (grouped == null || !grouped.Any())
+            if (!grouped.Any())
             {
                 MessageBox.Show("No recently updated issues were found.", "No Data", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
 
-            // Build the HTML report for the tab
+            // --- Step 4: Generate the HTML content ---
             var sb = new StringBuilder();
 
-            if (!grouped.Any())
+            foreach (var group in grouped)
             {
-                sb.AppendLine("<p>No issues updated in the past 30 days.</p>");
-            }
-            else
-            {
-                // For each date group, create a collapsible section
-                foreach (var group in grouped)
-                {
-                    sb.AppendLine($@"
+                sb.AppendLine($@"
 <details open>
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <table>");
 
-                    // For each issue, render a row with icon and summary
-                    foreach (var issue in group)
+                foreach (var issue in group)
+                {
+                    string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
+                    string key = issue.Key;
+                    string iconPath = "";
+
+                    string typeIconKey = frmMain.GetIconForType(issue.Type);
+                    if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                     {
-                        string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
-                        string key = issue.Key;
-                        string iconPath = "";
-
-                        // Try to get the icon for the issue type
-                        string typeIconKey = frmMain.GetIconForType(issue.Type);
-                        if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
+                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                        if (File.Exists(fullPath))
                         {
-                            string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                            if (File.Exists(fullPath))
+                            try
                             {
-                                try
-                                {
-                                    byte[] bytes = File.ReadAllBytes(fullPath);
-                                    string base64 = Convert.ToBase64String(bytes);
-                                    iconPath = $"<img src='data:image/png;base64,{base64}' width='20' height='20' />";
-                                }
-                                catch { }
+                                byte[] bytes = File.ReadAllBytes(fullPath);
+                                string base64 = Convert.ToBase64String(bytes);
+                                iconPath = $"<img src='data:image/png;base64,{base64}' width='20' height='20' />";
                             }
+                            catch { }
                         }
-
-                        // Render clickable link for the issue
-                        sb.AppendLine($"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath} {summary} [{key}]</a></td></tr>");
                     }
 
-                    sb.AppendLine("</table></section></details>");
+                    sb.AppendLine($"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath} {summary} [{key}]</a></td></tr>");
                 }
+
+                sb.AppendLine("</table></section></details>");
             }
 
-            // Compose the final HTML, including styles and JavaScript for link handling
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -1228,7 +1287,6 @@ namespace Monovera
 <body>
 {sb}
 <script>
-  // Add click handlers to all issue links to send the Jira key to the host app
   document.querySelectorAll('a').forEach(link => {{
     link.addEventListener('click', e => {{
       e.preventDefault();
@@ -1241,45 +1299,14 @@ namespace Monovera
 </body>
 </html>";
 
-            // Set up the tab icon (if available)
-            string iconKey = "updates";
-            System.Drawing.Image iconImage = null;
-            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
-
-            if (File.Exists(iconFile))
-            {
-                try
-                {
-                    using var iconStream = File.OpenRead(iconFile);
-                    iconImage = System.Drawing.Image.FromStream(iconStream);
-                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
-                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
-                }
-                catch
-                {
-                    // Ignore icon load failure
-                }
-            }
-
-            // Create the tab page for recent updates
-            var updatePage = new TabPage("Recent Updates!")
-            {
-                ImageKey = iconKey,
-                ToolTipText = "Issues that were updated during past 30 days!"
-            };
-
-            // Add the WebView2 control to the tab
-            updatePage.Controls.Add(webView);
-            tabDetails.TabPages.Add(updatePage);
-            tabDetails.SelectedTab = updatePage;
-
-            // Save the HTML to a temp file and navigate the WebView2 to it
+            // --- Step 5: Show the final HTML ---
             string tempFilePath = Path.Combine(tempDir, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
         }
 
-             /// <summary>
+
+        /// <summary>
         /// Checks if a Jira issue has had its summary or description changed in the last 30 days.
         /// This is used to filter issues for the "Recently Updated" tab.
         /// </summary>
@@ -1409,6 +1436,8 @@ namespace Monovera
 
         private async Task<string> DownloadAllIssuesJson(HttpClient client, string jql, string fields, IProgress<(int completed, int total)> progress)
         {
+            //Load tab page first
+
             const int pageSize = 100;
             const int maxParallelism = 5;
             const int maxRequestsPerMinute = 300;
@@ -1500,6 +1529,7 @@ namespace Monovera
                 iconUrl = $"data:image/png;base64,{base64}";
             }
 
+            // Check if tab already exists
             foreach (TabPage page in tabDetails.TabPages)
             {
                 if (page.Text == issueKey)
@@ -1509,6 +1539,46 @@ namespace Monovera
                 }
             }
 
+            // --- Step 1: Create tab and show loading page immediately ---
+            var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+            await webView.EnsureCoreWebView2Async();
+            webView.NavigateToString(LoadingHtml);
+
+            if (tabDetails.ImageList == null)
+            {
+                tabDetails.ImageList = new ImageList();
+                tabDetails.ImageList.ImageSize = new Size(16, 16);
+            }
+
+            System.Drawing.Image iconImage = null;
+            string iconKey = issueKey;
+            if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
+            {
+                try
+                {
+                    string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
+                    byte[] bytes = Convert.FromBase64String(base64);
+                    using var ms = new MemoryStream(bytes);
+                    iconImage = System.Drawing.Image.FromStream(ms);
+                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                }
+                catch
+                {
+                    // ignore
+                }
+            }
+
+            var pageTab = new TabPage(issueKey)
+            {
+                ImageKey = iconKey,
+                ToolTipText = $"{e.Node.Text}"
+            };
+            pageTab.Controls.Add(webView);
+            tabDetails.TabPages.Add(pageTab);
+            tabDetails.SelectedTab = pageTab;
+
+            // --- Step 2: Process and load the JIRA issue in background ---
             try
             {
                 var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
@@ -1564,7 +1634,6 @@ namespace Monovera
                    typeProp.TryGetProperty("name", out var typeName)
                    ? typeName.GetString() ?? ""
                    : "";
-
 
                 string htmlDesc = "";
                 if (root.TryGetProperty("renderedFields", out var renderedFields) &&
@@ -1653,8 +1722,6 @@ namespace Monovera
                     sb.AppendLine("</div>");
                     return sb.ToString();
                 }
-
-
 
                 string attachmentsHtml = "";
                 if (root.TryGetProperty("fields", out var fieldsAttachment) &&
@@ -1802,9 +1869,6 @@ function scrollAttachments(id, direction) {{
                     }
                 }
 
-
-
-
                 string linksHtml =
                     BuildLinksTable("Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
                     BuildLinksTable("Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
@@ -1812,11 +1876,12 @@ function scrollAttachments(id, direction) {{
 
                 string historyHtml = BuildHistoryHtml(root);
 
-                string html = BuildIssueHtml(headerLine,issueType,statusIcon,status,createdDate,lastUpdated,issueUrl,resolvedDesc,attachmentsHtml,linksHtml,historyHtml,encodedJson);
+                string html = BuildIssueHtml(headerLine, issueType, statusIcon, status, createdDate, lastUpdated, issueUrl, resolvedDesc, attachmentsHtml, linksHtml, historyHtml, encodedJson);
 
-                var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-                await webView.EnsureCoreWebView2Async();
+                // --- Step 3: Replace loading page with actual content ---
+                webView.NavigateToString(html);
 
+                // Attach event handlers after content is loaded
                 webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
                 {
                     var deferral = args.GetDeferral();
@@ -1825,43 +1890,6 @@ function scrollAttachments(id, direction) {{
 
                 webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-
-                if (tabDetails.ImageList == null)
-                {
-                    tabDetails.ImageList = new ImageList();
-                    tabDetails.ImageList.ImageSize = new Size(16, 16);
-                }
-
-                System.Drawing.Image iconImage = null;
-                string iconKey = issueKey;
-                if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
-                {
-                    try
-                    {
-                        string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
-                        byte[] bytes = Convert.FromBase64String(base64);
-                        using var ms = new MemoryStream(bytes);
-                        iconImage = System.Drawing.Image.FromStream(ms);
-                        if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
-                            tabDetails.ImageList.Images.Add(iconKey, iconImage);
-                    }
-                    catch
-                    {
-                        // ignore
-                    }
-                }
-
-                var page = new TabPage(issueKey)
-                {
-                    ImageKey = iconKey,
-                    ToolTipText = $"{summary} [{issueKey}]"
-                };
-
-                page.Controls.Add(webView);
-                tabDetails.TabPages.Add(page);
-                tabDetails.SelectedTab = page;
-
-                webView.NavigateToString(html);
 
                 tree.SelectedNode = e.Node;
                 e.Node.EnsureVisible();
