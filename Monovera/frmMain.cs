@@ -25,7 +25,6 @@ using System.Text.RegularExpressions;
 namespace Monovera
 {
     /// <summary>
-    /// Main application form for Monovera.
     /// Handles Jira integration, UI setup, and user interactions.
     /// </summary>
     public partial class frmMain : Form
@@ -3055,6 +3054,7 @@ function showDiffOverlay(from, to) {
         private void InitializeTabContextMenu()
         {
             tabContextMenu = new ContextMenuStrip();
+            tabContextMenu.Items.Add("Edit", null, (s, e) => EditCurrentIssue());
             tabContextMenu.Items.Add("Close This Tab", null, (s, e) => CloseTab(rightClickedTab));
             tabContextMenu.Items.Add("Close All Other Tabs", null, (s, e) => CloseAllOtherTabs(rightClickedTab));
             tabContextMenu.Items.Add("Close Tabs on Left", null, (s, e) => CloseTabsOnLeft(rightClickedTab));
@@ -3081,8 +3081,44 @@ function showDiffOverlay(from, to) {
             }
         }
 
-        // Tab closing logic
-        private void CloseTab(TabPage tab)
+        private async void EditCurrentIssue()
+        {
+            if (tabDetails.SelectedTab == null) return;
+            string issueKey = tabDetails.SelectedTab.Text;
+            if (string.IsNullOrWhiteSpace(issueKey)) return;
+
+            // Fetch current summary and description
+            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+            using var client = new HttpClient();
+            client.BaseAddress = new Uri(jiraBaseUrl);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+            var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields");
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var fields = doc.RootElement.GetProperty("fields");
+            string summary = fields.GetProperty("summary").GetString() ?? "";
+            string description = "";
+            if (doc.RootElement.TryGetProperty("renderedFields", out var renderedFields) &&
+                renderedFields.TryGetProperty("description", out var descProp) &&
+                descProp.ValueKind == JsonValueKind.String)
+            {
+                description = descProp.GetString() ?? "";
+            }
+
+            // Show the editor dialog
+            using var editor = new frmIssueEditor(issueKey, summary, description, jiraBaseUrl, jiraEmail, jiraToken);
+            if (editor.ShowDialog(this) == DialogResult.OK)
+            {
+                // On save, reload the issue tab
+                TreeNode node = FindNodeByKey(tree.Nodes, issueKey, false);
+                if (node != null)
+                    Tree_AfterSelect(tree, new TreeViewEventArgs(node));
+            }
+        }
+
+        private async void CloseTab(TabPage tab)
         {
             if (tab == null) return;
             int idx = tabDetails.TabPages.IndexOf(tab);

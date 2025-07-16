@@ -4,6 +4,9 @@
     <Compile Update="frmConfiguration.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Update="frmIssueEditor.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Update="frmMain.cs">
       <SubType>Form</SubType>
     </Compile>
