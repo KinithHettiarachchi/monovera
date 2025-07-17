@@ -3053,13 +3053,18 @@ function showDiffOverlay(from, to) {
         // In your frmMain constructor or initialization method:
         private void InitializeTabContextMenu()
         {
-            tabContextMenu = new ContextMenuStrip();
-            tabContextMenu.Items.Add("Edit", null, (s, e) => EditCurrentIssue());
-            tabContextMenu.Items.Add("Close This Tab", null, (s, e) => CloseTab(rightClickedTab));
-            tabContextMenu.Items.Add("Close All Other Tabs", null, (s, e) => CloseAllOtherTabs(rightClickedTab));
-            tabContextMenu.Items.Add("Close Tabs on Left", null, (s, e) => CloseTabsOnLeft(rightClickedTab));
-            tabContextMenu.Items.Add("Close Tabs on Right", null, (s, e) => CloseTabsOnRight(rightClickedTab));
-            tabContextMenu.Items.Add("Close All Tabs", null, (s, e) => CloseAllTabs());
+            tabContextMenu = new ContextMenuStrip
+            {
+                ShowImageMargin = true, // Make sure image space is shown
+                ImageScalingSize = new Size(24, 24) // Increase image space if needed
+            };
+
+            //tabContextMenu.Items.Add("Edit", null, (s, e) => EditCurrentIssue());
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Close This Tab", CreateIconFromUnicode("❌"), (s, e) => CloseTab(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Close All Other Tabs", CreateIconFromUnicode("🔀"), (s, e) => CloseAllOtherTabs(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Close Tabs on Left", CreateIconFromUnicode("⬅️"), (s, e) => CloseTabsOnLeft(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Close Tabs on Right", CreateIconFromUnicode("➡️"), (s, e) => CloseTabsOnRight(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Close All Tabs", CreateIconFromUnicode("🗑"), (s, e) => CloseAllTabs()) { ImageScaling = ToolStripItemImageScaling.None });
 
             tabDetails.MouseUp += TabDetails_MouseUp;
         }
@@ -3079,6 +3084,26 @@ function showDiffOverlay(from, to) {
                     }
                 }
             }
+        }
+
+        private System.Drawing.Image CreateIconFromUnicode(string unicodeChar, int size = 24)
+        {
+            Bitmap bmp = new Bitmap(size, size);
+            using (Graphics g = Graphics.FromImage(bmp))
+            {
+                g.Clear(Color.Transparent);
+                using (Font font = new Font("Segoe UI Emoji", size - 4, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Brush brush = new SolidBrush(Color.Black))
+                {
+                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    // Draw centered
+                    SizeF textSize = g.MeasureString(unicodeChar, font);
+                    float x = (size - textSize.Width) / 2;
+                    float y = (size - textSize.Height) / 2;
+                    g.DrawString(unicodeChar, font, brush, x, y);
+                }
+            }
+            return bmp;
         }
 
         private async void EditCurrentIssue()
