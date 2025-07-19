@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Atlassian.SDK" Version="13.0.0" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.1901.235" />
     <PackageReference Include="SharpSvn" Version="1.14005.343" />
   </ItemGroup>

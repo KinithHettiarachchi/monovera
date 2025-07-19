@@ -29,6 +29,29 @@ namespace Monovera
     /// </summary>
     public partial class frmMain : Form
     {
+        /// <summary>
+        /// Represents a service for interacting with Jira.
+        /// </summary>
+        /// <remarks>This field provides access to Jira-related operations and functionalities. It is
+        /// intended to be used for managing and retrieving Jira issues, projects, and other related data.</remarks>
+        public JiraService jiraService;
+
+        /// <summary>
+        /// Base URL for Jira REST API.
+        /// </summary>
+        public static string jiraBaseUrl = "";
+
+        /// <summary>
+        /// Jira user email for authentication.
+        /// </summary>
+        public static string jiraEmail = "";
+
+        /// <summary>
+        /// Jira API token for authentication.
+        /// </summary>
+        public static string jiraToken = "";
+
+
         /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
         /// <summary>Maps issue keys to JiraIssue objects for quick lookup.</summary>
@@ -37,12 +60,7 @@ namespace Monovera
         public static string root_key = "";
         /// <summary>List of Jira project keys loaded from configuration.</summary>
         public static List<string> projectList = new();
-        /// <summary>Base URL for Jira REST API.</summary>
-        public static string jiraBaseUrl = "";
-        /// <summary>Jira user email for authentication.</summary>
-        public static string jiraEmail = "";
-        /// <summary>Jira API token for authentication.</summary>
-        public static string jiraToken = "";
+        
         /// <summary>Maps issue type names to icon filenames.</summary>
         public static Dictionary<string, string> typeIcons;
         /// <summary>Maps issue status names to icon filenames.</summary>
@@ -148,6 +166,9 @@ namespace Monovera
             public string Type { get; set; }
             /// <summary>List of issue links.</summary>
             public List<JiraIssueLink> IssueLinks { get; set; } = new();
+
+            public string SortingField { get; set; }
+
             /// <summary>Last updated timestamp.</summary>
             public DateTime? Updated { get; set; }
             /// <summary>Created timestamp.</summary>
@@ -336,6 +357,7 @@ namespace Monovera
         private TabPage rightClickedTab;
         // Add these fields to frmMain
         private int dragTabIndex = -1;
+        
         /// <summary>
         /// Initializes the context menu for the tree view, including search and report options.
         /// </summary>
@@ -639,7 +661,7 @@ namespace Monovera
         /// <summary>
         /// Loads configuration from configuration.json, validates, and initializes settings.
         /// </summary>
-        private void LoadConfigurationFromJson()
+        private async Task LoadConfigurationFromJsonAsync()
         {
             string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.json");
 
@@ -678,38 +700,12 @@ namespace Monovera
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(config?.Jira?.Url) ||
-                string.IsNullOrWhiteSpace(config?.Jira?.Email) ||
-                string.IsNullOrWhiteSpace(config?.Jira?.Token))
-            {
-                MessageBox.Show(
-                    $"The configuration file is missing Jira Url, Email or Token.\n\nPlease complete the configuration.",
-                    "Incomplete Configuration",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning
-                );
-                LaunchConfigForm();
-                return;
-            }
-
-            // Test Jira connection
-            if (!TryConnectToJira(config.Jira.Url, config.Jira.Email, config.Jira.Token, out string error))
-            {
-                MessageBox.Show(
-                    $"Failed to connect to Jira using the provided credentials.\nPlease check and configure your settings or check if the internet connection is available.\n\n{error}",
-                    "Jira Connection Failed",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error
-                );
-                LaunchConfigForm();
-                return;
-            }
-
-            // Load config data
+            // Load jira config data
             jiraBaseUrl = config.Jira.Url;
             jiraEmail = config.Jira.Email;
             jiraToken = config.Jira.Token;
 
+            // Load other config data
             projectList = config.Projects.Select(p => p.Project).ToList();
             root_key = string.Join(",", config.Projects.Select(p => p.Root));
             hierarchyLinkTypeName = string.Join(",", config.Projects.Select(p => p.LinkTypeName));
@@ -726,6 +722,39 @@ namespace Monovera
                     statusIcons[kvp.Key] = kvp.Value;
             }
 
+
+            if (string.IsNullOrWhiteSpace(jiraBaseUrl) || string.IsNullOrWhiteSpace(jiraEmail) || string.IsNullOrWhiteSpace(jiraToken))
+            {
+                MessageBox.Show(
+                    "Jira URL, Email or Token is not set in the configuration.\nPlease complete the configuration.",
+                    "Configuration Error!",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+                LaunchConfigForm();
+                return;
+            }
+            // Initiate and test connection to Jira
+            jiraService = new JiraService(jiraBaseUrl, jiraEmail, jiraToken);
+
+            bool isConnected = await jiraService.TestConnectionAsync();
+
+            if (isConnected)
+            {
+                lblUser.Text = $"👤 Connected as : {jiraService.GetConnectedUserNameAsync().Result}     ";
+            }
+            else
+            {
+                MessageBox.Show(
+                    $"Failed to connect to Jira using the provided credentials.\nPlease check and configure your settings or check if the internet connection is available.",
+                    "Jira Connection Failed",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error
+                );
+                LaunchConfigForm();
+                return;
+            }
+           
             AddHomeTabAsync(tabDetails);
         }
 
@@ -764,41 +793,6 @@ namespace Monovera
         }
 
         /// <summary>
-        /// Checks Jira connection using provided credentials.
-        /// </summary>
-        /// <param name="url">Jira base URL.</param>
-        /// <param name="email">Jira user email.</param>
-        /// <param name="token">Jira API token.</param>
-        /// <param name="error">Error message if connection fails.</param>
-        /// <returns>True if connection is successful, false otherwise.</returns>
-        private bool TryConnectToJira(string url, string email, string token, out string error)
-        {
-            try
-            {
-                using var client = new HttpClient();
-                var byteArray = System.Text.Encoding.ASCII.GetBytes($"{email}:{token}");
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
-
-                var response = client.GetAsync($"{url.TrimEnd('/')}/rest/api/3/myself").Result;
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    error = $"HTTP {(int)response.StatusCode}: {response.ReasonPhrase}";
-                    return false;
-                }
-
-                error = null;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = $"Exception: {ex.Message}";
-                return false;
-            }
-        }
-
-        /// <summary>
         /// Handles the form load event. Initializes configuration, icons, loads all projects into the tree,
         /// and displays recently updated issues.
         /// </summary>
@@ -807,7 +801,7 @@ namespace Monovera
         private async void frmMain_Load(object sender, EventArgs e)
         {
             // Load configuration from file and validate
-            LoadConfigurationFromJson();
+            LoadConfigurationFromJsonAsync();
 
             // Initialize icons for issue types and statuses
             InitializeIcons();
@@ -826,75 +820,70 @@ namespace Monovera
         /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
         private async Task LoadAllProjectsToTreeAsync(bool forceSync = false)
         {
-            // Show progress bar and label
             pbProgress.Visible = true;
             pbProgress.Value = 0;
+            pbProgress.Maximum = 100;
             lblProgress.Visible = true;
             lblProgress.Text = "Loading...";
 
-            // Clear previous issue data
             issueDict.Clear();
             childrenByParent.Clear();
+            issueDtoDict.Clear();
 
-            // Load issues for each configured project
+            int totalProjects = projectList.Count;
+            int currentProject = 0;
+
+            var allIssues = new List<JiraIssue>();
+
             foreach (var project in projectList)
             {
-                // Get the sorting field for this project
+                currentProject++;
                 var projectConfig = config.Projects.FirstOrDefault(p => p.Project == project);
                 string sortingField = projectConfig?.SortingField ?? "summary";
+                string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
+                lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project}...";
 
-                lblProgress.Text = $"Loading Project {project}...";
-
-                string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{project}.json");
-                List<JiraIssueDto> issues;
-
-                if (!forceSync && File.Exists(cacheFile))
+                var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
+                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName ,(completed, total, percent) =>
                 {
-                    // Load issues from cache file
-                    string cachedJson = await File.ReadAllTextAsync(cacheFile);
-                    issues = ParseIssuesFromJson(cachedJson, projectConfig);
-                }
-                else
+                    pbProgress.Value = (int)Math.Round(percent);
+                    lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project} : {completed}/{total} ({percent:0.0}%)...";
+                });
+
+
+
+                foreach (var myIssue in issues)
                 {
-                    // Delete cache if it exists
-                    if (File.Exists(cacheFile))
-                        File.Delete(cacheFile);
-
-                    // Prepare Jira REST API client
-                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                    using var client = new HttpClient();
-                    client.BaseAddress = new Uri(jiraBaseUrl);
-                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                    // JQL to fetch all issues for the project
-                    string jql = $"project={project} ORDER BY key ASC";
-
-                    // Progress callback for UI
-                    var progress = new Progress<(int completed, int total)>(p =>
+                    var issue = new JiraIssue
                     {
-                        pbProgress.Maximum = p.total;
-                        pbProgress.Value = Math.Min(p.completed, p.total);
-                        lblProgress.Text = $"{p.completed} / {p.total} ({(p.completed * 100 / p.total)}%)";
-                    });
+                        Key = myIssue.Key,
+                        Summary = myIssue.Summary,
+                        Type = myIssue.Type,
+                        ParentKey = null,
+                        RelatedIssueKeys = new List<string>()
+                    };
 
-                    // Download all issues from Jira and cache them
-                   
+                    // Use the correct LinkTypeName for this project
+                    if (myIssue.IssueLinks != null)
+                    {
+                        foreach (var link in myIssue.IssueLinks)
+                        {
+                            if (link.LinkTypeName == linkTypeName && !string.IsNullOrEmpty(link.OutwardIssueKey))
+                            {
+                                issue.RelatedIssueKeys.Add(link.OutwardIssueKey);
+                            }
+                        }
+                    }
 
-                    // Build the fields list for the query
-                    var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
-                    string fieldsParam = string.Join(",", fieldsList.Distinct());
+                    allIssues.Add(issue);
 
-                    // Pass fieldsParam to DownloadAllIssuesJson
-                    string allJson = await DownloadAllIssuesJson(client, jql, fieldsParam, progress);
-                    await File.WriteAllTextAsync(cacheFile, allJson);
-                    issues = ParseIssuesFromJson(allJson, projectConfig);
+                    issueDtoDict[myIssue.Key] = myIssue;
                 }
-
-                // Build lookup and hierarchy dictionaries
-                BuildDictionaries(issues);
             }
 
-            // Hide progress bar and label
+            // Build parent-child relationships using all issues
+            BuildDictionaries(allIssues);
+
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
@@ -922,42 +911,35 @@ namespace Monovera
         }
 
         /// <summary>
-        /// Builds the issue lookup and parent-child hierarchy dictionaries from a list of Jira issues.
+        /// Builds the issue lookup and parent-child hierarchy dictionaries from a list of JiraIssue objects.
         /// </summary>
-        /// <param name="issues">List of JiraIssueDto objects to process.</param>
-        private void BuildDictionaries(List<JiraIssueDto> issues)
+        /// <param name="issues">List of JiraIssue objects to process.</param>
+        private void BuildDictionaries(List<JiraIssue> issues)
         {
+            issueDict.Clear();
+            childrenByParent.Clear();
+
             // Add all issues to the lookup dictionary
             foreach (var issue in issues)
             {
-                issueDict[issue.Key] = new JiraIssue
-                {
-                    Key = issue.Key,
-                    Summary = issue.Summary,
-                    Type = issue.Type,
-                    ParentKey = null
-                };
-                issueDtoDict[issue.Key] = issue; // <-- Add this line
+                issueDict[issue.Key] = issue;
             }
 
-            // Build parent-child relationships based on issue links
+            // Build parent-child relationships based on RelatedIssueKeys (hierarchy links)
             foreach (var issue in issues)
             {
-                foreach (var link in issue.IssueLinks)
+                foreach (var relatedKey in issue.RelatedIssueKeys)
                 {
-                    if (link.LinkTypeName == hierarchyLinkTypeName.Split(",")[0].ToString())
+                    if (issueDict.TryGetValue(relatedKey, out var child))
                     {
-                        if (issueDict.TryGetValue(link.OutwardIssueKey, out var child))
-                        {
-                            if (string.IsNullOrEmpty(child.ParentKey))
-                                child.ParentKey = issue.Key;
+                        if (string.IsNullOrEmpty(child.ParentKey))
+                            child.ParentKey = issue.Key;
 
-                            if (!childrenByParent.ContainsKey(issue.Key))
-                                childrenByParent[issue.Key] = new List<JiraIssue>();
+                        if (!childrenByParent.ContainsKey(issue.Key))
+                            childrenByParent[issue.Key] = new List<JiraIssue>();
 
-                            if (!childrenByParent[issue.Key].Any(c => c.Key == child.Key))
-                                childrenByParent[issue.Key].Add(child);
-                        }
+                        if (!childrenByParent[issue.Key].Any(c => c.Key == child.Key))
+                            childrenByParent[issue.Key].Add(child);
                     }
                 }
             }
@@ -1360,6 +1342,8 @@ namespace Monovera
 
             return false;
         }
+
+       
 
         /// <summary>
         /// Parses a JSON string containing Jira issues and returns a list of JiraIssueDto objects.
@@ -3004,14 +2988,7 @@ function showDiffOverlay(from, to) {
                 {
                     if (issueDtoDict.TryGetValue(child.Key, out var dto))
                     {
-                        var prop = typeof(JiraIssueDto).GetProperty(sortingField, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                        if (prop != null)
-                        {
-                            var value = prop.GetValue(dto);
-                            return value ?? "";
-                        }
-                        if (dto.CustomFields != null && dto.CustomFields.TryGetValue(sortingField, out var customValue))
-                            return customValue ?? "";
+                        return dto.SortingField ?? "";
                     }
                     return child.Summary ?? "";
                 }, new AlphanumericComparer()).ToList();

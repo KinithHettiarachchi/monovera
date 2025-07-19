@@ -34,6 +34,7 @@
             tree = new TreeView();
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
+            lblUser = new ToolStripStatusLabel();
             toolStripStatusLabel1 = new ToolStripStatusLabel();
             toolStripSplitButton1 = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
@@ -87,19 +88,25 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { toolStripStatusLabel1, toolStripSplitButton1, pbProgress, lblProgress });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, toolStripStatusLabel1, toolStripSplitButton1, pbProgress, lblProgress });
             statusStrip1.Location = new Point(0, 979);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.Size = new Size(1230, 22);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
+            // lblUser
+            // 
+            lblUser.Name = "lblUser";
+            lblUser.Size = new Size(101, 17);
+            lblUser.Text = "Not connected!    ";
+            // 
             // toolStripStatusLabel1
             // 
             toolStripStatusLabel1.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0);
             toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-            toolStripStatusLabel1.Size = new Size(261, 17);
-            toolStripStatusLabel1.Text = "Press Ctrl + Q on the tree to load search dialog.";
+            toolStripStatusLabel1.Size = new Size(285, 17);
+            toolStripStatusLabel1.Text = "Press Ctrl + Q on the tree to load search dialog.        ";
             // 
             // toolStripSplitButton1
             // 
@@ -115,7 +122,7 @@
             // 
             mnuUpdateHierarchy.Image = Properties.Resources.Sync;
             mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
-            mnuUpdateHierarchy.Size = new Size(164, 22);
+            mnuUpdateHierarchy.Size = new Size(180, 22);
             mnuUpdateHierarchy.Text = "Update hierarchy";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
@@ -123,7 +130,7 @@
             // 
             configurationToolStripMenuItem.Image = Properties.Resources.settings;
             configurationToolStripMenuItem.Name = "configurationToolStripMenuItem";
-            configurationToolStripMenuItem.Size = new Size(164, 22);
+            configurationToolStripMenuItem.Size = new Size(180, 22);
             configurationToolStripMenuItem.Text = "Configuration...";
             configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
             // 
@@ -177,5 +184,6 @@
         private ToolStripSplitButton toolStripSplitButton1;
         private ToolStripMenuItem mnuUpdateHierarchy;
         private ToolStripMenuItem configurationToolStripMenuItem;
+        private ToolStripStatusLabel lblUser;
     }
 }
