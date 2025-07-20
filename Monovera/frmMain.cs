@@ -177,6 +177,29 @@ namespace Monovera
             public Dictionary<string, object> CustomFields { get; set; } = new();
         }
 
+        private NotifyIcon notifyIcon;
+
+        private void InitializeNotifyIcon()
+        {
+            notifyIcon = new NotifyIcon();
+            notifyIcon.Visible = true;
+            notifyIcon.Icon = SystemIcons.Information; // You can use your own .ico file if needed
+            notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
+            notifyIcon.BalloonTipTitle = "Node Not Found!";
+        }
+
+        private void ShowTrayNotification(string key)
+        {
+            string message = $"{key} was not found to select in the tree.\nThis could be a newly added ticket. Please update the hierarchy to view it.";
+            notifyIcon.BalloonTipText = message;
+            notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            notifyIcon?.Dispose();
+            base.OnFormClosing(e);
+        }
 
         private const string LoadingHtml = @"
 <!DOCTYPE html>
@@ -214,7 +237,7 @@ namespace Monovera
 </head>
 <body>
   <div class='spinner'></div>
-  <div class='loading-text'>Loading, please wait...</div>
+  <div class='loading-text'>Loading...</div>
 </body>
 </html>
 ";
@@ -261,6 +284,7 @@ namespace Monovera
         public frmMain()
         {
             InitializeComponent();
+            InitializeNotifyIcon();
 
             // Set up application and temp directories
             appDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -754,8 +778,6 @@ namespace Monovera
                 LaunchConfigForm();
                 return;
             }
-           
-            AddHomeTabAsync(tabDetails);
         }
 
         /// <summary>
@@ -800,6 +822,9 @@ namespace Monovera
         /// <param name="e">Event arguments.</param>
         private async void frmMain_Load(object sender, EventArgs e)
         {
+            //Load home page
+            AddHomeTabAsync(tabDetails);
+
             // Load configuration from file and validate
             LoadConfigurationFromJsonAsync();
 
@@ -809,7 +834,7 @@ namespace Monovera
             // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync();
 
-            // Show a tab with recently updated issues
+            // Show a tab with recently updated issuesup
             ShowRecentlyUpdatedIssuesAsync(tabDetails);
         }
 
@@ -844,7 +869,7 @@ namespace Monovera
                 lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project}...";
 
                 var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
-                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName ,(completed, total, percent) =>
+                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName , forceSync ,(completed, total, percent) =>
                 {
                     pbProgress.Value = (int)Math.Round(percent);
                     lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project} : {completed}/{total} ({percent:0.0}%)...";
@@ -1628,8 +1653,8 @@ namespace Monovera
                 string resolvedDesc = ReplaceJiraLinksAndSVNFeatures(htmlDesc);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
-                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 36px; vertical-align: middle; margin-right: 8px;'>";
-                string headerLine = $"{iconImg}<strong>{encodedSummary} [{issueKey}]</strong>";
+                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
 
                 string encodedJson = WebUtility.HtmlEncode(FormatJson(json));
 
@@ -2046,13 +2071,13 @@ function showDiffOverlay(from, to) {
     margin: 30px;
     background: #f8fcf8;
     color: #1b3a1b;
-    font-size: 18px;
-    line-height: 1.7;
+    font-size: 16x;
+    line-height: 1.5;
   }}
 
   h2 {{
     color: #2e4d2e;
-    font-size: 1.9em;
+    font-size: 1.6em;
     margin-bottom: 20px;
   }}
 
@@ -2068,7 +2093,7 @@ function showDiffOverlay(from, to) {
     background-color: #edf7ed;
     cursor: pointer;
     font-weight: 600;
-    font-size: 1.2em;
+    font-size: 1.0em;
     border-bottom: 1px solid #d0e8d0;
     color: #2e4d2e;
   }}
@@ -2369,12 +2394,11 @@ function showDiffOverlay(from, to) {
     background-color: #c8e6c9;
   }}
 </style>
-</head>
-<body>
+</head
   <h2>{headerLine}</h2>
   <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
     <div>🧰 <strong>Type:</strong> {issueType}</div>
-    <div>{statusIcon} {System.Web.HttpUtility.HtmlEncode(status)}</div>
+    <div>{statusIcon} <strong>Status:</strong> {System.Web.HttpUtility.HtmlEncode(status)}</div>
     <div>📅 <strong>Created:</strong> {createdDate}</div>
     <div>📅 <strong>Updated:</strong> {lastUpdated}</div>
     <div>🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a></div>
@@ -2841,11 +2865,7 @@ function showDiffOverlay(from, to) {
 
             if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && showMessage)
             {
-                MessageBox.Show(
-                    $"{key} was not found to select in the tree.\n\nThis could be a newly added ticket. Please update the hierarchy to view it.",
-                    "Node Not Found!",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                ShowTrayNotification(key);
             }
 
             return null;

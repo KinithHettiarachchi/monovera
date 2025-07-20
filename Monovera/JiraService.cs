@@ -92,14 +92,15 @@ public class JiraService
      string projectKey,
      List<string> fields,
      string sortingField = "created",
-     string linkTypeName="Blocks",
+     string linkTypeName = "Blocks",
+     bool forceSync = false,
      Action<int, int, double> progressUpdate = null,
      int maxParallelism = 5)
     {
         string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{projectKey}.json");
 
         // Check if the cache file exists
-        if (File.Exists(cacheFile))
+        if (!forceSync && File.Exists(cacheFile))
         {
             string json = await File.ReadAllTextAsync(cacheFile);
             var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDto>>(json, new JsonSerializerOptions
