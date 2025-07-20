@@ -190,7 +190,7 @@ namespace Monovera
 
         private void ShowTrayNotification(string key)
         {
-            string message = $"{key} was not found to select in the tree.\nThis could be a newly added ticket. Please update the hierarchy to view it.";
+            string message = $"{key} was not found in the tree. If this belongs to one of loaded projects, please update the hierarchy to view it.";
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
         }
@@ -765,7 +765,7 @@ namespace Monovera
 
             if (isConnected)
             {
-                lblUser.Text = $"👤 Connected as : {jiraService.GetConnectedUserNameAsync().Result}     ";
+                lblUser.Text = $"    👤 Connected as : {jiraService.GetConnectedUserNameAsync().Result}     ";
             }
             else
             {
@@ -789,9 +789,9 @@ namespace Monovera
             return
         @"{
   ""Jira"": {
-    ""Url"": ""https://YOUR_DOMAIN.atlassian.net"",
-    ""Email"": ""YOUR_EMAIL@YOUR_DOMAIN.com"",
-    ""Token"": ""YOUR_TOKEN""
+    ""Url"": ""https://YOUR_JIRA_DOMAIN.atlassian.net"",
+    ""Email"": ""YOUR_EMAIL@YOUR_EMAIL_DOMAIN.com"",
+    ""Token"": ""YOUR_JIRA_API_TOKEN""
   },
   ""Projects"": [
     {
