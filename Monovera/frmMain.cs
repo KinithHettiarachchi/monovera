@@ -60,7 +60,7 @@ namespace Monovera
         public static string root_key = "";
         /// <summary>List of Jira project keys loaded from configuration.</summary>
         public static List<string> projectList = new();
-        
+
         /// <summary>Maps issue type names to icon filenames.</summary>
         public static Dictionary<string, string> typeIcons;
         /// <summary>Maps issue status names to icon filenames.</summary>
@@ -293,8 +293,9 @@ namespace Monovera
 
             // Initialize context menu for tree
             InitializeContextMenu();
+            SetupSpinMessages();
 
-             // Set up tab control for details panel
+            // Set up tab control for details panel
             tabDetails = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -328,6 +329,35 @@ namespace Monovera
             handleShortcuts(e);
         }
 
+        private System.Windows.Forms.Timer marqueeTimer;
+        private string[] messages = new[]
+{
+    "💡 Ctrl + Q = Load search dialog",
+    "💡 Ctrl + P = Generate report",
+    "💡 Ctrl + Shift + Z = Read selected text aloud",
+    "(Press after clicking tree area)"
+};
+
+        private int currentIndex = 0;
+        private System.Timers.Timer spinTimer;
+
+        private void SetupSpinMessages()
+        {
+            marqueeTimer = new System.Windows.Forms.Timer();
+            marqueeTimer.Interval = 3000; // 3 seconds per message, adjust as you want
+            marqueeTimer.Tick += SpinTimer_Tick;
+            marqueeTimer.Start();
+
+            lblShortcuts.Text = messages[0]; // show first immediately
+        }
+
+        private void SpinTimer_Tick(object? sender, EventArgs e)
+        {
+            currentIndex = (currentIndex + 1) % messages.Length;
+            lblShortcuts.Text = messages[currentIndex];
+        }
+
+
         /// <summary>
         /// Processes keyboard shortcuts asynchronously.
         /// </summary>
@@ -343,6 +373,16 @@ namespace Monovera
                 e.SuppressKeyPress = true;
                 GenerateReport();
             }
+            else if (e.Control && e.Shift && e.KeyCode == Keys.Z)
+            {
+                e.SuppressKeyPress = true;
+                await SpeakSelectedTextOnActiveTabAsync();
+            }
+        }
+
+        private async Task SpeakSelectedTextOnActiveTabAsync()
+        {
+            ReadSelectedTextOutLoud();
         }
 
         /// <summary>
@@ -381,7 +421,7 @@ namespace Monovera
         private TabPage rightClickedTab;
         // Add these fields to frmMain
         private int dragTabIndex = -1;
-        
+
         /// <summary>
         /// Initializes the context menu for the tree view, including search and report options.
         /// </summary>
@@ -869,7 +909,7 @@ namespace Monovera
                 lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project}...";
 
                 var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
-                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName , forceSync ,(completed, total, percent) =>
+                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName, forceSync, (completed, total, percent) =>
                 {
                     pbProgress.Value = (int)Math.Round(percent);
                     lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project} : {completed}/{total} ({percent:0.0}%)...";
@@ -981,7 +1021,7 @@ namespace Monovera
         /// - Optionally sets a tab icon if the image exists.
         /// - The tab is selected after creation.
         /// </remarks>
-        public static async Task AddHomeTabAsync(TabControl tabDetails)
+        public async Task AddHomeTabAsync(TabControl tabDetails)
         {
             // Ensure the TabControl has an ImageList for tab icons
             if (tabDetails.ImageList == null)
@@ -1133,6 +1173,7 @@ namespace Monovera
 
             // --- Step 2: Initialize WebView2 and show Loading ---
             await webView.EnsureCoreWebView2Async();
+
             webView.NavigateToString(LoadingHtml);
 
             // Handle dialogs and messages
@@ -1368,7 +1409,7 @@ namespace Monovera
             return false;
         }
 
-       
+
 
         /// <summary>
         /// Parses a JSON string containing Jira issues and returns a list of JiraIssueDto objects.
@@ -1391,7 +1432,7 @@ namespace Monovera
                 var summary = fields.GetProperty("summary").GetString();
                 var type = fields.GetProperty("issuetype").GetProperty("name").GetString();
                 var customFields = new Dictionary<string, object>();
-                
+
                 if (projectConfig?.SortingField != null)
                 {
                     if (fields.TryGetProperty(projectConfig.SortingField, out var sortProp))
@@ -1550,6 +1591,7 @@ namespace Monovera
             // --- Step 1: Create tab and show loading page immediately ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
             await webView.EnsureCoreWebView2Async();
+
             webView.NavigateToString(LoadingHtml);
 
             if (tabDetails.ImageList == null)
@@ -3180,7 +3222,7 @@ function showDiffOverlay(from, to) {
         }
 
         // In your frmMain constructor or initialization method:
-        private void EnableTabDragDrop()    
+        private void EnableTabDragDrop()
         {
             tabDetails.AllowDrop = true;
             tabDetails.MouseDown += TabDetails_MouseDown;
@@ -3230,6 +3272,41 @@ function showDiffOverlay(from, to) {
                 }
             }
             dragTabIndex = -1;
+        }
+
+        private void mnuReport_Click(object sender, EventArgs e)
+        {
+            GenerateReport();
+        }
+
+        private void mnuSearch_Click(object sender, EventArgs e)
+        {
+            ShowSearchDialog(tree);
+        }
+
+        private void menuRead_Click(object sender, EventArgs e)
+        {
+            ReadSelectedTextOutLoud();
+        }
+
+        private async void ReadSelectedTextOutLoud()
+        {
+            if (tabDetails.SelectedTab is TabPage tab)
+            {
+                var webView = tab.Controls.OfType<WebView2>().FirstOrDefault();
+                if (webView != null && webView.CoreWebView2 != null)
+                {
+                    string script = "window.getSelection().toString();";
+                    string selectedText = await webView.CoreWebView2.ExecuteScriptAsync(script);
+                    selectedText = System.Text.RegularExpressions.Regex.Unescape(selectedText.Trim('"'));
+
+                    if (string.IsNullOrWhiteSpace(selectedText))
+                        selectedText = "Sorry, I could not find any selected text to read!";
+
+                    // Run TTS in background to keep UI responsive
+                    _ = Task.Run(() => TextToSpeechHelper.SpeakWithGoogleDefaultVoice(selectedText));
+                }
+            }
         }
     }
 }

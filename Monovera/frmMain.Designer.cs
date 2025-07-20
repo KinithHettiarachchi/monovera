@@ -34,13 +34,17 @@
             tree = new TreeView();
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
-            toolStripSplitButton1 = new ToolStripSplitButton();
+            lblUser = new ToolStripStatusLabel();
+            menuActions = new ToolStripDropDownButton();
+            mnuSearch = new ToolStripMenuItem();
+            mnuReport = new ToolStripMenuItem();
+            menuRead = new ToolStripMenuItem();
+            mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             configurationToolStripMenuItem = new ToolStripMenuItem();
-            lblUser = new ToolStripStatusLabel();
-            toolStripStatusLabel1 = new ToolStripStatusLabel();
-            lblProgress = new ToolStripStatusLabel();
             pbProgress = new ToolStripProgressBar();
+            lblProgress = new ToolStripStatusLabel();
+            lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
@@ -71,7 +75,7 @@
             // 
             tree.BackColor = Color.Honeydew;
             tree.Dock = DockStyle.Fill;
-            tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            tree.Font = new Font("Calibri", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
             tree.Size = new Size(670, 1001);
@@ -83,68 +87,115 @@
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
-            panelTabs.Size = new Size(1230, 979);
+            panelTabs.Size = new Size(1230, 931);
             panelTabs.TabIndex = 1;
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { toolStripSplitButton1, lblUser, toolStripStatusLabel1, lblProgress, pbProgress });
-            statusStrip1.Location = new Point(0, 979);
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, menuActions, mnuSettings, pbProgress, lblProgress, lblShortcuts });
+            statusStrip1.Location = new Point(0, 931);
             statusStrip1.Name = "statusStrip1";
-            statusStrip1.Size = new Size(1230, 22);
+            statusStrip1.RenderMode = ToolStripRenderMode.Professional;
+            statusStrip1.Size = new Size(1230, 70);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
-            // toolStripSplitButton1
+            // lblUser
             // 
-            toolStripSplitButton1.DisplayStyle = ToolStripItemDisplayStyle.Image;
-            toolStripSplitButton1.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, configurationToolStripMenuItem });
-            toolStripSplitButton1.Image = Properties.Resources.settings;
-            toolStripSplitButton1.ImageTransparentColor = Color.Magenta;
-            toolStripSplitButton1.Name = "toolStripSplitButton1";
-            toolStripSplitButton1.Size = new Size(32, 20);
-            toolStripSplitButton1.Text = "Settings";
+            lblUser.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblUser.Name = "lblUser";
+            lblUser.Size = new Size(113, 65);
+            lblUser.Text = "    Not connected!    ";
+            // 
+            // menuActions
+            // 
+            menuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuSearch, mnuReport, menuRead });
+            menuActions.Image = Properties.Resources.Actions;
+            menuActions.ImageScaling = ToolStripItemImageScaling.None;
+            menuActions.ImageTransparentColor = Color.Magenta;
+            menuActions.Name = "menuActions";
+            menuActions.Size = new Size(124, 68);
+            menuActions.Text = "Actions";
+            // 
+            // mnuSearch
+            // 
+            mnuSearch.Image = Properties.Resources.Search;
+            mnuSearch.ImageScaling = ToolStripItemImageScaling.None;
+            mnuSearch.Name = "mnuSearch";
+            mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
+            mnuSearch.Size = new Size(278, 70);
+            mnuSearch.Text = "Search...";
+            mnuSearch.Click += mnuSearch_Click;
+            // 
+            // mnuReport
+            // 
+            mnuReport.Image = Properties.Resources.Report;
+            mnuReport.ImageScaling = ToolStripItemImageScaling.None;
+            mnuReport.Name = "mnuReport";
+            mnuReport.ShortcutKeys = Keys.Control | Keys.P;
+            mnuReport.Size = new Size(278, 70);
+            mnuReport.Text = "Generate Report...";
+            mnuReport.Click += mnuReport_Click;
+            // 
+            // menuRead
+            // 
+            menuRead.Image = Properties.Resources.Speak;
+            menuRead.ImageScaling = ToolStripItemImageScaling.None;
+            menuRead.Name = "menuRead";
+            menuRead.ShortcutKeys = Keys.Control | Keys.Shift | Keys.Z;
+            menuRead.Size = new Size(278, 70);
+            menuRead.Text = "Read out loud...";
+            menuRead.Click += menuRead_Click;
+            // 
+            // mnuSettings
+            // 
+            mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, configurationToolStripMenuItem });
+            mnuSettings.Image = Properties.Resources.settings;
+            mnuSettings.ImageScaling = ToolStripItemImageScaling.None;
+            mnuSettings.ImageTransparentColor = Color.Magenta;
+            mnuSettings.Name = "mnuSettings";
+            mnuSettings.Size = new Size(129, 68);
+            mnuSettings.Text = "Settings";
             // 
             // mnuUpdateHierarchy
             // 
-            mnuUpdateHierarchy.Image = Properties.Resources.Sync;
+            mnuUpdateHierarchy.Font = new Font("Calibri", 12F);
+            mnuUpdateHierarchy.Image = Properties.Resources.Update;
+            mnuUpdateHierarchy.ImageScaling = ToolStripItemImageScaling.None;
             mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
-            mnuUpdateHierarchy.Size = new Size(164, 22);
-            mnuUpdateHierarchy.Text = "Update hierarchy";
+            mnuUpdateHierarchy.Size = new Size(246, 70);
+            mnuUpdateHierarchy.Text = "Update hierarchy...";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
             // configurationToolStripMenuItem
             // 
-            configurationToolStripMenuItem.Image = Properties.Resources.settings;
+            configurationToolStripMenuItem.Font = new Font("Calibri", 12F);
+            configurationToolStripMenuItem.Image = Properties.Resources.Configuration;
+            configurationToolStripMenuItem.ImageScaling = ToolStripItemImageScaling.None;
             configurationToolStripMenuItem.Name = "configurationToolStripMenuItem";
-            configurationToolStripMenuItem.Size = new Size(164, 22);
+            configurationToolStripMenuItem.Size = new Size(246, 70);
             configurationToolStripMenuItem.Text = "Configuration...";
             configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
-            // 
-            // lblUser
-            // 
-            lblUser.Name = "lblUser";
-            lblUser.Size = new Size(113, 17);
-            lblUser.Text = "    Not connected!    ";
-            // 
-            // toolStripStatusLabel1
-            // 
-            toolStripStatusLabel1.Font = new Font("Segoe UI Semibold", 9F, FontStyle.Bold | FontStyle.Italic, GraphicsUnit.Point, 0);
-            toolStripStatusLabel1.ForeColor = SystemColors.ControlDarkDark;
-            toolStripStatusLabel1.Name = "toolStripStatusLabel1";
-            toolStripStatusLabel1.Size = new Size(313, 17);
-            toolStripStatusLabel1.Text = "    💡 Press Ctrl + Q on the tree to load search dialog.        ";
-            // 
-            // lblProgress
-            // 
-            lblProgress.Name = "lblProgress";
-            lblProgress.Size = new Size(19, 17);
-            lblProgress.Text = "    ";
             // 
             // pbProgress
             // 
             pbProgress.Name = "pbProgress";
-            pbProgress.Size = new Size(100, 16);
+            pbProgress.Size = new Size(100, 64);
+            // 
+            // lblProgress
+            // 
+            lblProgress.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblProgress.Name = "lblProgress";
+            lblProgress.Size = new Size(19, 65);
+            lblProgress.Text = "    ";
+            // 
+            // lblShortcuts
+            // 
+            lblShortcuts.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblShortcuts.ForeColor = SystemColors.ControlDarkDark;
+            lblShortcuts.Name = "lblShortcuts";
+            lblShortcuts.Size = new Size(62, 65);
+            lblShortcuts.Text = "Welcome!";
             // 
             // toolTip1
             // 
@@ -181,10 +232,14 @@
         private ToolStripStatusLabel lblProgress;
         private Panel panelTabs;
         private ToolTip toolTip1;
-        private ToolStripStatusLabel toolStripStatusLabel1;
-        private ToolStripSplitButton toolStripSplitButton1;
+        private ToolStripStatusLabel lblShortcuts;
+        private ToolStripSplitButton mnuSettings;
         private ToolStripMenuItem mnuUpdateHierarchy;
         private ToolStripMenuItem configurationToolStripMenuItem;
         private ToolStripStatusLabel lblUser;
+        private ToolStripDropDownButton menuActions;
+        private ToolStripMenuItem mnuSearch;
+        private ToolStripMenuItem mnuReport;
+        private ToolStripMenuItem menuRead;
     }
 }
