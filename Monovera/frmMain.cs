@@ -29,6 +29,8 @@ namespace Monovera
     /// </summary>
     public partial class frmMain : Form
     {
+        bool editorMode = true;
+
         /// <summary>
         /// Represents a service for interacting with Jira.
         /// </summary>
@@ -315,13 +317,16 @@ namespace Monovera
             EnableTabDragDrop();
 
             // Tree mouse event for context menu
-            tree.AllowDrop = true;
-            tree.ItemDrag += tree_ItemDrag;
-            tree.DragEnter += tree_DragEnter;
-            tree.DragOver += tree_DragOver;
-            tree.DragDrop += tree_DragDrop;
-            tree.MouseUp += tree_MouseUp;
-
+            if (editorMode)
+            {
+                tree.AllowDrop = true;
+                tree.ItemDrag += tree_ItemDrag;
+                tree.DragEnter += tree_DragEnter;
+                tree.DragOver += tree_DragOver;
+                tree.DragDrop += tree_DragDrop;
+                tree.MouseUp += tree_MouseUp;
+            }
+           
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
@@ -605,6 +610,154 @@ namespace Monovera
 
             // Assign the context menu to the tree view
             tree.ContextMenuStrip = treeContextMenu;
+
+            if (editorMode)
+            {
+                var iconChangeParent = CreateUnicodeIcon("🌳");
+                var changeParentMenuItem = new ToolStripMenuItem("Change Parent...", iconChangeParent);
+                changeParentMenuItem.Click += async (s, e) =>
+                {
+                    if (tree.SelectedNode == null) return;
+                    string childKey = tree.SelectedNode.Tag?.ToString();
+                    string oldParentKey = tree.SelectedNode.Parent?.Tag?.ToString();
+
+                    // Gather all keys from the tree
+                    List<string> allKeys = new List<string>();
+                    void CollectKeys(TreeNodeCollection nodes)
+                    {
+                        foreach (TreeNode node in nodes)
+                        {
+                            if (node.Tag is string key && !string.IsNullOrWhiteSpace(key))
+                                allKeys.Add(key);
+                            CollectKeys(node.Nodes);
+                        }
+                    }
+                    CollectKeys(tree.Nodes);
+
+                    // Get mouse position for dialog
+                    Point menuLocation = tree.PointToClient(treeContextMenu.Bounds.Location);
+
+                    using (var dlg = new Form())
+                    {
+                        dlg.Text = $"Change parent of {childKey}";
+                        dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                        dlg.StartPosition = FormStartPosition.Manual;
+                        dlg.Location = tree.PointToScreen(menuLocation);
+                        dlg.Width = 350;
+                        dlg.Height = 160;
+                        dlg.MaximizeBox = false;
+                        dlg.MinimizeBox = false;
+                        dlg.ShowInTaskbar = false;
+
+                        var lblTitle = new Label
+                        {
+                            Text = $"Change parent of : {tree.SelectedNode.Text}",
+                            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                            Dock = DockStyle.Top,
+                            Height = 32,
+                            TextAlign = ContentAlignment.MiddleCenter
+                        };
+                        var lblPrompt = new Label
+                        {
+                            Text = "Enter new parent key:",
+                            Dock = DockStyle.Top,
+                            Height = 24,
+                            TextAlign = ContentAlignment.MiddleLeft
+                        };
+
+                        var cmbInput = new System.Windows.Forms.ComboBox
+                        {
+                            Dock = DockStyle.Top,
+                            Height = 28,
+                            DropDownStyle = ComboBoxStyle.DropDown,
+                            AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+                            AutoCompleteSource = AutoCompleteSource.CustomSource
+                        };
+                        var autoSource = new AutoCompleteStringCollection();
+                        autoSource.AddRange(allKeys.ToArray());
+                        cmbInput.AutoCompleteCustomSource = autoSource;
+                        cmbInput.Items.AddRange(allKeys.ToArray());
+
+                        var btnOk = new System.Windows.Forms.Button
+                        {
+                            Text = "OK",
+                            DialogResult = DialogResult.OK,
+                            Dock = DockStyle.Left,
+                            Width = 80
+                        };
+                        var btnCancel = new System.Windows.Forms.Button
+                        {
+                            Text = "Cancel",
+                            DialogResult = DialogResult.Cancel,
+                            Dock = DockStyle.Right,
+                            Width = 80
+                        };
+                        var panelButtons = new Panel
+                        {
+                            Dock = DockStyle.Bottom,
+                            Height = 40
+                        };
+                        panelButtons.Controls.Add(btnOk);
+                        panelButtons.Controls.Add(btnCancel);
+
+                        dlg.Controls.Add(panelButtons);
+                        dlg.Controls.Add(cmbInput);
+                        dlg.Controls.Add(lblPrompt);
+                        dlg.Controls.Add(lblTitle);
+
+                        dlg.AcceptButton = btnOk;
+                        dlg.CancelButton = btnCancel;
+
+                        if (dlg.ShowDialog(tree) == DialogResult.OK)
+                        {
+                            string newParentKey = cmbInput.Text.Trim();
+                            if (string.IsNullOrWhiteSpace(newParentKey))
+                            {
+                                MessageBox.Show("Please enter a valid parent key.", "Input Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                return;
+                            }
+
+                            // Get link type name for this issue/project
+                            string linkTypeName = "";
+                            var dashIndex = childKey?.IndexOf('-') ?? -1;
+                            if (dashIndex > 0)
+                            {
+                                var keyPrefix = childKey.Substring(0, dashIndex);
+                                var projectConfig = config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                                linkTypeName = projectConfig?.LinkTypeName ?? hierarchyLinkTypeName.Split(',')[0];
+                            }
+                            else
+                            {
+                                linkTypeName = hierarchyLinkTypeName.Split(',')[0];
+                            }
+
+                            await jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
+
+                            // Move node in tree
+                            TreeNode nodeToMove = tree.SelectedNode;
+                            TreeNode newParentNode = FindNodeByKey(tree.Nodes, newParentKey, false);
+                            if (newParentNode == null)
+                            {
+                                MessageBox.Show($"New parent node '{newParentKey}' not found in tree.", "Parent Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                                return;
+                            }
+
+                            // Remove from old parent
+                            if (nodeToMove.Parent != null)
+                                nodeToMove.Parent.Nodes.Remove(nodeToMove);
+                            else
+                                tree.Nodes.Remove(nodeToMove);
+
+                            newParentNode.Nodes.Add(nodeToMove);
+                            newParentNode.Expand();
+                            tree.SelectedNode = nodeToMove;
+
+                            MessageBox.Show($"Parent of {childKey} changed to {newParentKey}.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                    }
+                };
+                treeContextMenu.Items.Add(changeParentMenuItem);
+            }
         }
 
         /// <summary>
