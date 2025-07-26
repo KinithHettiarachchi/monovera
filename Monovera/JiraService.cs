@@ -454,4 +454,55 @@ public class JiraService
 
         throw new InvalidOperationException($"Custom field with ID '{fieldId}' not found on the JIRA server.");
     }
+
+    /// <summary>
+    /// Creates a Jira issue and links it as a child or sibling to the specified node.
+    /// Uses Atlassian.Jira SDK for issue creation and linking.
+    /// </summary>
+    /// <param name="selectedKey">The key of the selected node (parent for child, sibling for sibling)</param>
+    /// <param name="linkMode">"Child" or "Sibling"</param>
+    /// <param name="issueType">The issue type to create</param>
+    /// <param name="summary">The summary for the new issue</param>
+    /// <param name="config">The loaded Jira configuration root</param>
+    /// <returns>The new issue key if successful, null otherwise</returns>
+    public async Task<string?> CreateAndLinkJiraIssueAsync(
+     string selectedKey,
+     string linkMode,
+     string issueType,
+     string summary,
+     JiraConfigRoot config)
+    {
+        try
+        {
+            // 1. Find project config by selectedKey prefix
+            var dashIndex = selectedKey.IndexOf('-');
+            var keyPrefix = dashIndex > 0 ? selectedKey.Substring(0, dashIndex) : selectedKey;
+            var projectConfig = config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+            if (projectConfig == null)
+                throw new InvalidOperationException("Project config not found for selected key.");
+
+            string projectKey = projectConfig.Root.Split("-")[0];
+            string linkTypeName = projectConfig.LinkTypeName;
+
+            // 2. Prepare new issue
+            var issue = jira.CreateIssue(projectKey); // project is set here
+            issue.Type = issueType;
+            issue.Summary = summary;
+
+            // 3. Create the issue
+            await issue.SaveChangesAsync();
+
+            // 4. Create the link (wait for it!
+            await issue.LinkToIssueAsync(selectedKey, linkTypeName);
+
+            // 5. Return new issue key
+            return issue.Key.Value;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.Message);
+            return null;
+        }
+    }
+
 }

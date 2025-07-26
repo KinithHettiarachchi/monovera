@@ -21,6 +21,7 @@ using System.Drawing.Text;
 using Font = System.Drawing.Font;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Microsoft.VisualBasic;
 
 namespace Monovera
 {
@@ -296,7 +297,7 @@ namespace Monovera
 
             // Initialize context menu for tree
             InitializeContextMenu();
-            SetupSpinMessages();
+            //SetupSpinMessages();
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -474,33 +475,33 @@ namespace Monovera
             node.EnsureVisible();
         }
 
-        private System.Windows.Forms.Timer marqueeTimer;
-        private string[] messages = new[]
-{
-    "💡 Ctrl + Q = Load search dialog",
-    "💡 Ctrl + P = Generate report",
-    "💡 Ctrl + Shift + Z = Read selected text aloud",
-    "(Press after clicking tree area)"
-};
+//        private System.Windows.Forms.Timer marqueeTimer;
+//        private string[] messages = new[]
+//{
+//    "💡 Ctrl + Q = Load search dialog",
+//    "💡 Ctrl + P = Generate report",
+//    "💡 Ctrl + Shift + Z = Read selected text aloud",
+//    "(Press after clicking tree area)"
+//};
 
-        private int currentIndex = 0;
-        private System.Timers.Timer spinTimer;
+//        private int currentIndex = 0;
+//        private System.Timers.Timer spinTimer;
 
-        private void SetupSpinMessages()
-        {
-            marqueeTimer = new System.Windows.Forms.Timer();
-            marqueeTimer.Interval = 3000; // 3 seconds per message, adjust as you want
-            marqueeTimer.Tick += SpinTimer_Tick;
-            marqueeTimer.Start();
+//        private void SetupSpinMessages()
+//        {
+//            marqueeTimer = new System.Windows.Forms.Timer();
+//            marqueeTimer.Interval = 3000; // 3 seconds per message, adjust as you want
+//            marqueeTimer.Tick += SpinTimer_Tick;
+//            marqueeTimer.Start();
 
-            lblShortcuts.Text = messages[0]; // show first immediately
-        }
+//            lblShortcuts.Text = messages[0]; // show first immediately
+//        }
 
-        private void SpinTimer_Tick(object? sender, EventArgs e)
-        {
-            currentIndex = (currentIndex + 1) % messages.Length;
-            lblShortcuts.Text = messages[currentIndex];
-        }
+//        private void SpinTimer_Tick(object? sender, EventArgs e)
+//        {
+//            currentIndex = (currentIndex + 1) % messages.Length;
+//            lblShortcuts.Text = messages[currentIndex];
+//        }
 
 
         /// <summary>
@@ -613,152 +614,360 @@ namespace Monovera
 
             if (editorMode)
             {
-                var iconChangeParent = CreateUnicodeIcon("🌳");
-                var changeParentMenuItem = new ToolStripMenuItem("Change Parent...", iconChangeParent);
-                changeParentMenuItem.Click += async (s, e) =>
-                {
-                    if (tree.SelectedNode == null) return;
-                    string childKey = tree.SelectedNode.Tag?.ToString();
-                    string oldParentKey = tree.SelectedNode.Parent?.Tag?.ToString();
-
-                    // Gather all keys from the tree
-                    List<string> allKeys = new List<string>();
-                    void CollectKeys(TreeNodeCollection nodes)
-                    {
-                        foreach (TreeNode node in nodes)
-                        {
-                            if (node.Tag is string key && !string.IsNullOrWhiteSpace(key))
-                                allKeys.Add(key);
-                            CollectKeys(node.Nodes);
-                        }
-                    }
-                    CollectKeys(tree.Nodes);
-
-                    // Get mouse position for dialog
-                    Point menuLocation = tree.PointToClient(treeContextMenu.Bounds.Location);
-
-                    using (var dlg = new Form())
-                    {
-                        dlg.Text = $"Change parent of {childKey}";
-                        dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                        dlg.StartPosition = FormStartPosition.Manual;
-                        dlg.Location = tree.PointToScreen(menuLocation);
-                        dlg.Width = 350;
-                        dlg.Height = 160;
-                        dlg.MaximizeBox = false;
-                        dlg.MinimizeBox = false;
-                        dlg.ShowInTaskbar = false;
-
-                        var lblTitle = new Label
-                        {
-                            Text = $"Change parent of : {tree.SelectedNode.Text}",
-                            Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                            Dock = DockStyle.Top,
-                            Height = 32,
-                            TextAlign = ContentAlignment.MiddleCenter
-                        };
-                        var lblPrompt = new Label
-                        {
-                            Text = "Enter new parent key:",
-                            Dock = DockStyle.Top,
-                            Height = 24,
-                            TextAlign = ContentAlignment.MiddleLeft
-                        };
-
-                        var cmbInput = new System.Windows.Forms.ComboBox
-                        {
-                            Dock = DockStyle.Top,
-                            Height = 28,
-                            DropDownStyle = ComboBoxStyle.DropDown,
-                            AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                            AutoCompleteSource = AutoCompleteSource.CustomSource
-                        };
-                        var autoSource = new AutoCompleteStringCollection();
-                        autoSource.AddRange(allKeys.ToArray());
-                        cmbInput.AutoCompleteCustomSource = autoSource;
-                        cmbInput.Items.AddRange(allKeys.ToArray());
-
-                        var btnOk = new System.Windows.Forms.Button
-                        {
-                            Text = "OK",
-                            DialogResult = DialogResult.OK,
-                            Dock = DockStyle.Left,
-                            Width = 80
-                        };
-                        var btnCancel = new System.Windows.Forms.Button
-                        {
-                            Text = "Cancel",
-                            DialogResult = DialogResult.Cancel,
-                            Dock = DockStyle.Right,
-                            Width = 80
-                        };
-                        var panelButtons = new Panel
-                        {
-                            Dock = DockStyle.Bottom,
-                            Height = 40
-                        };
-                        panelButtons.Controls.Add(btnOk);
-                        panelButtons.Controls.Add(btnCancel);
-
-                        dlg.Controls.Add(panelButtons);
-                        dlg.Controls.Add(cmbInput);
-                        dlg.Controls.Add(lblPrompt);
-                        dlg.Controls.Add(lblTitle);
-
-                        dlg.AcceptButton = btnOk;
-                        dlg.CancelButton = btnCancel;
-
-                        if (dlg.ShowDialog(tree) == DialogResult.OK)
-                        {
-                            string newParentKey = cmbInput.Text.Trim();
-                            if (string.IsNullOrWhiteSpace(newParentKey))
-                            {
-                                MessageBox.Show("Please enter a valid parent key.", "Input Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                                return;
-                            }
-
-                            // Get link type name for this issue/project
-                            string linkTypeName = "";
-                            var dashIndex = childKey?.IndexOf('-') ?? -1;
-                            if (dashIndex > 0)
-                            {
-                                var keyPrefix = childKey.Substring(0, dashIndex);
-                                var projectConfig = config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
-                                linkTypeName = projectConfig?.LinkTypeName ?? hierarchyLinkTypeName.Split(',')[0];
-                            }
-                            else
-                            {
-                                linkTypeName = hierarchyLinkTypeName.Split(',')[0];
-                            }
-
-                            await jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
-
-                            // Move node in tree
-                            TreeNode nodeToMove = tree.SelectedNode;
-                            TreeNode newParentNode = FindNodeByKey(tree.Nodes, newParentKey, false);
-                            if (newParentNode == null)
-                            {
-                                MessageBox.Show($"New parent node '{newParentKey}' not found in tree.", "Parent Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                                return;
-                            }
-
-                            // Remove from old parent
-                            if (nodeToMove.Parent != null)
-                                nodeToMove.Parent.Nodes.Remove(nodeToMove);
-                            else
-                                tree.Nodes.Remove(nodeToMove);
-
-                            newParentNode.Nodes.Add(nodeToMove);
-                            newParentNode.Expand();
-                            tree.SelectedNode = nodeToMove;
-
-                            MessageBox.Show($"Parent of {childKey} changed to {newParentKey}.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                    }
-                };
-                treeContextMenu.Items.Add(changeParentMenuItem);
+                AddChangeParentMenu();
+                AddCreateIssueMenus();
             }
         }
+
+        private void AddChangeParentMenu()
+        {
+            var iconChangeParent = CreateUnicodeIcon("🌳");
+            var changeParentMenuItem = new ToolStripMenuItem("Change Parent...", iconChangeParent);
+            changeParentMenuItem.Click += async (s, e) =>
+            {
+                if (tree.SelectedNode == null) return;
+                string childKey = tree.SelectedNode.Tag?.ToString();
+                string oldParentKey = tree.SelectedNode.Parent?.Tag?.ToString();
+
+                // Gather all keys from the tree
+                List<string> allKeys = new List<string>();
+                void CollectKeys(TreeNodeCollection nodes)
+                {
+                    foreach (TreeNode node in nodes)
+                    {
+                        if (node.Tag is string key && !string.IsNullOrWhiteSpace(key))
+                            allKeys.Add(key);
+                        CollectKeys(node.Nodes);
+                    }
+                }
+                CollectKeys(tree.Nodes);
+
+                // Get mouse position for dialog
+                Point menuLocation = tree.PointToClient(treeContextMenu.Bounds.Location);
+
+                using (var dlg = new Form())
+                {
+                    dlg.Text = $"Change parent of {childKey}";
+                    dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    dlg.StartPosition = FormStartPosition.Manual;
+                    dlg.Location = tree.PointToScreen(menuLocation);
+                    dlg.Width = 350;
+                    dlg.Height = 160;
+                    dlg.MaximizeBox = false;
+                    dlg.MinimizeBox = false;
+                    dlg.ShowInTaskbar = false;
+
+                    var lblTitle = new Label
+                    {
+                        Text = $"Change parent of : {tree.SelectedNode.Text}",
+                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                        Dock = DockStyle.Top,
+                        Height = 32,
+                        TextAlign = ContentAlignment.MiddleCenter
+                    };
+                    var lblPrompt = new Label
+                    {
+                        Text = "Enter new parent key:",
+                        Dock = DockStyle.Top,
+                        Height = 24,
+                        TextAlign = ContentAlignment.MiddleLeft
+                    };
+
+                    var cmbInput = new System.Windows.Forms.ComboBox
+                    {
+                        Dock = DockStyle.Top,
+                        Height = 28,
+                        DropDownStyle = ComboBoxStyle.DropDown,
+                        AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+                        AutoCompleteSource = AutoCompleteSource.CustomSource
+                    };
+                    var autoSource = new AutoCompleteStringCollection();
+                    autoSource.AddRange(allKeys.ToArray());
+                    cmbInput.AutoCompleteCustomSource = autoSource;
+                    cmbInput.Items.AddRange(allKeys.ToArray());
+
+                    var btnOk = new System.Windows.Forms.Button
+                    {
+                        Text = "OK",
+                        DialogResult = DialogResult.OK,
+                        Dock = DockStyle.Left,
+                        Width = 80
+                    };
+                    var btnCancel = new System.Windows.Forms.Button
+                    {
+                        Text = "Cancel",
+                        DialogResult = DialogResult.Cancel,
+                        Dock = DockStyle.Right,
+                        Width = 80
+                    };
+                    var panelButtons = new Panel
+                    {
+                        Dock = DockStyle.Bottom,
+                        Height = 40
+                    };
+                    panelButtons.Controls.Add(btnOk);
+                    panelButtons.Controls.Add(btnCancel);
+
+                    dlg.Controls.Add(panelButtons);
+                    dlg.Controls.Add(cmbInput);
+                    dlg.Controls.Add(lblPrompt);
+                    dlg.Controls.Add(lblTitle);
+
+                    dlg.AcceptButton = btnOk;
+                    dlg.CancelButton = btnCancel;
+
+                    if (dlg.ShowDialog(tree) == DialogResult.OK)
+                    {
+                        string newParentKey = cmbInput.Text.Trim();
+                        if (string.IsNullOrWhiteSpace(newParentKey))
+                        {
+                            MessageBox.Show("Please enter a valid parent key.", "Input Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        // Get link type name for this issue/project
+                        string linkTypeName = "";
+                        var dashIndex = childKey?.IndexOf('-') ?? -1;
+                        if (dashIndex > 0)
+                        {
+                            var keyPrefix = childKey.Substring(0, dashIndex);
+                            var projectConfig = config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                            linkTypeName = projectConfig?.LinkTypeName ?? hierarchyLinkTypeName.Split(',')[0];
+                        }
+                        else
+                        {
+                            linkTypeName = hierarchyLinkTypeName.Split(',')[0];
+                        }
+
+                        await jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
+
+                        // Move node in tree
+                        TreeNode nodeToMove = tree.SelectedNode;
+                        TreeNode newParentNode = FindNodeByKey(tree.Nodes, newParentKey, false);
+                        if (newParentNode == null)
+                        {
+                            MessageBox.Show($"New parent node '{newParentKey}' not found in tree.", "Parent Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        // Remove from old parent
+                        if (nodeToMove.Parent != null)
+                            nodeToMove.Parent.Nodes.Remove(nodeToMove);
+                        else
+                            tree.Nodes.Remove(nodeToMove);
+
+                        newParentNode.Nodes.Add(nodeToMove);
+                        newParentNode.Expand();
+                        tree.SelectedNode = nodeToMove;
+
+                        MessageBox.Show($"Parent of {childKey} changed to {newParentKey}.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                }
+            };
+            treeContextMenu.Items.Add(changeParentMenuItem);
+        }
+        
+        private void AddCreateIssueMenus()
+        {
+            // Add these inside InitializeContextMenu()
+            var iconChild = CreateUnicodeIcon("🌱");
+            var iconSibling = CreateUnicodeIcon("🌳");
+
+            var addChildMenuItem = new ToolStripMenuItem("Add Child", iconChild);
+            addChildMenuItem.Click += (s, e) => ShowAddIssueDialogAsync("Child");
+
+            var addSiblingMenuItem = new ToolStripMenuItem("Add Sibling", iconSibling);
+            addSiblingMenuItem.Click += (s, e) => ShowAddIssueDialogAsync("Sibling");
+
+            treeContextMenu.Items.Add(addChildMenuItem);
+            treeContextMenu.Items.Add(addSiblingMenuItem);
+        }
+
+        private async Task ShowAddIssueDialogAsync(string mode)
+        {
+            if (tree.SelectedNode == null) return;
+
+            string selectedKey = "";
+
+            if (mode == "Sibling")
+            {
+                selectedKey = tree.SelectedNode.Parent.Tag.ToString();
+            }
+            else if (mode == "Child")
+            {
+                 selectedKey = tree.SelectedNode.Tag?.ToString();
+            } else
+            {
+                MessageBox.Show("Invalid mode specified for adding issue.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(selectedKey)) return;
+
+            // Find project config by key prefix
+            var dashIndex = selectedKey.IndexOf('-');
+            var keyPrefix = dashIndex > 0 ? selectedKey.Substring(0, dashIndex) : selectedKey;
+            var projectConfig = config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+            if (projectConfig == null)
+            {
+                MessageBox.Show("Project config not found for selected node.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Prepare issue types for dropdown
+            var issueTypes = projectConfig.Types.Keys.ToList();
+
+            // Create dialog
+            var dlg = new Form
+            {
+                Text = $"Add {mode.ToLower()} node to {selectedKey}",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.Manual,
+                Width = 700,
+                Height = 240,
+                BackColor = Color.White, // White background
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false
+            };
+
+            // Position dialog at mouse
+            var mousePos = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
+            dlg.Location = mousePos;
+
+            // Define spacing
+            int marginLeft = 30;
+            int labelWidth = 80;
+            int controlLeft = marginLeft + labelWidth + 10;
+            int controlWidth = 260;
+            int top = 20;
+            int rowHeight = 40;
+
+            // Link Mode
+            var lblMode = new Label
+            {
+                Text = "Link Mode:",
+                Left = marginLeft,
+                Top = top + 2,
+                Width = labelWidth,
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            var cmbMode = new System.Windows.Forms.ComboBox
+            {
+                Left = controlLeft,
+                Top = top,
+                Width = 140,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Enabled = false
+            };
+            cmbMode.Items.AddRange(new[] { "Child", "Sibling" });
+            cmbMode.SelectedItem = mode;
+            cmbMode.Enabled = false;
+
+            // Issue Type
+            top += rowHeight;
+            var lblType = new Label
+            {
+                Text = "Issue Type:",
+                Left = marginLeft,
+                Top = top + 2,
+                Width = labelWidth,
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            var cmbType = new System.Windows.Forms.ComboBox
+            {
+                Left = controlLeft,
+                Top = top,
+                Width = controlWidth,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            foreach (var type in issueTypes)
+                cmbType.Items.Add(type);
+            cmbType.SelectedIndex = 0;
+
+            // Summary
+            top += rowHeight;
+            var lblSummary = new Label
+            {
+                Text = "Summary:",
+                Left = marginLeft,
+                Top = top + 2,
+                Width = labelWidth,
+                TextAlign = ContentAlignment.MiddleRight
+            };
+
+            var txtSummary = new System.Windows.Forms.TextBox
+            {
+                Left = controlLeft,
+                Top = top,
+                Width = 500,
+                MaxLength = 250
+            };
+
+            // Buttons
+            top += rowHeight + 30;
+            var btnCreate = new System.Windows.Forms.Button
+            {
+                Text = "Create",
+                Left = controlLeft,
+                Top = top,
+                Width = 100,
+                DialogResult = DialogResult.OK
+            };
+
+            var btnCancel = new System.Windows.Forms.Button
+            {
+                Text = "Cancel",
+                Left = controlLeft + 110,
+                Top = top,
+                Width = 100,
+                DialogResult = DialogResult.Cancel
+            };
+
+            // Add controls to dialog
+            dlg.Controls.AddRange(new Control[]
+            {
+    lblMode, cmbMode,
+    lblType, cmbType,
+    lblSummary, txtSummary,
+    btnCreate, btnCancel
+            });
+
+            // Set dialog buttons
+            dlg.AcceptButton = btnCreate;
+            dlg.CancelButton = btnCancel;
+
+
+            if (dlg.ShowDialog(tree) == DialogResult.OK)
+            {
+                string linkMode = cmbMode.SelectedItem.ToString();
+                string issueType = cmbType.SelectedItem.ToString();
+                string summary = txtSummary.Text.Trim();
+                //string description = txtDesc.Text.Trim();
+
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                    MessageBox.Show("Summary is required.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Call async create method
+                // Example usage in frmMain.cs
+                string? newIssueKey = await jiraService.CreateAndLinkJiraIssueAsync(
+                    selectedKey,
+                    linkMode,
+                    issueType,
+                    summary,
+                    config);
+
+                MessageBox.Show($"New issue {newIssueKey} has been created as a {mode} of {tree.SelectedNode.Tag?.ToString()}.");
+            }
+        }
+
+        
+
 
         /// <summary>
         /// Creates a bitmap icon from a Unicode character for use in menu items.
