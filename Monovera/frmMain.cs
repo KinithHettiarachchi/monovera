@@ -616,6 +616,7 @@ namespace Monovera
             {
                 AddChangeParentMenu();
                 AddCreateIssueMenus();
+                AddUpDownMenus();
             }
         }
 
@@ -773,21 +774,46 @@ namespace Monovera
             var iconChild = CreateUnicodeIcon("🌱");
             var iconSibling = CreateUnicodeIcon("🌳");
 
-            var addChildMenuItem = new ToolStripMenuItem("Add Child", iconChild);
+            var addChildMenuItem = new ToolStripMenuItem("Add Child...", iconChild);
             addChildMenuItem.Click += (s, e) => ShowAddIssueDialogAsync("Child");
 
-            var addSiblingMenuItem = new ToolStripMenuItem("Add Sibling", iconSibling);
+            var addSiblingMenuItem = new ToolStripMenuItem("Add Sibling...", iconSibling);
             addSiblingMenuItem.Click += (s, e) => ShowAddIssueDialogAsync("Sibling");
 
             treeContextMenu.Items.Add(addChildMenuItem);
             treeContextMenu.Items.Add(addSiblingMenuItem);
         }
 
+        private void AddUpDownMenus()
+        {
+            // Add Move Up and Move Down menu items with icons
+            var iconUp = CreateUnicodeIcon("🔼");
+            var iconDown = CreateUnicodeIcon("🔽");
+
+            var moveUpMenuItem = new ToolStripMenuItem("Move Up", iconUp);
+            var moveDownMenuItem = new ToolStripMenuItem("Move Down", iconDown);
+
+            moveUpMenuItem.Click += (s, e) =>
+            {
+                if (tree.SelectedNode != null)
+                    MoveNodeInTree(tree.SelectedNode, -1); // Move up
+            };
+
+            moveDownMenuItem.Click += (s, e) =>
+            {
+                if (tree.SelectedNode != null)
+                    MoveNodeInTree(tree.SelectedNode, 1); // Move down
+            };
+
+            treeContextMenu.Items.Add(moveUpMenuItem);
+            treeContextMenu.Items.Add(moveDownMenuItem);
+        }
         private async Task ShowAddIssueDialogAsync(string mode)
         {
             if (tree.SelectedNode == null) return;
 
             string selectedKey = "";
+            string baseKey= tree.SelectedNode.Tag?.ToString();
 
             if (mode == "Sibling")
             {
@@ -820,7 +846,7 @@ namespace Monovera
             // Create dialog
             var dlg = new Form
             {
-                Text = $"Add {mode.ToLower()} node to {selectedKey}",
+                Text = $"Add {mode.ToLower()} node to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.Manual,
                 Width = 700,
