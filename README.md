@@ -46,6 +46,8 @@ Monovera helps teams gain **deep insights into requirements** — without clicki
 - 🛠️ **Configuration UI**  
   Manage your credentials, project list, and icon mappings with a built-in GUI.
 
+- 🔊 **Text to Speech***  
+  Read a selection of a text out loud so the user can listen to it while reading.
 ---
 
 ## ⚙️ Quick Configuration
