@@ -648,72 +648,96 @@ namespace Monovera
 
                 using (var dlg = new Form())
                 {
-                    dlg.Text = $"Change parent of {childKey}";
+                    dlg.Text = $"Change Parent of {childKey}";
                     dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
                     dlg.StartPosition = FormStartPosition.Manual;
-                    dlg.Location = tree.PointToScreen(menuLocation);
-                    dlg.Width = 350;
-                    dlg.Height = 160;
+                    dlg.Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
+                    dlg.Width = 420;
+                    dlg.Height = 220;
+                    dlg.BackColor = Color.White;
                     dlg.MaximizeBox = false;
                     dlg.MinimizeBox = false;
                     dlg.ShowInTaskbar = false;
+                    dlg.Font = new Font("Segoe UI", 10);
+
+                    var layout = new TableLayoutPanel
+                    {
+                        Dock = DockStyle.Fill,
+                        ColumnCount = 2,
+                        RowCount = 3,
+                        Padding = new Padding(24, 18, 24, 18),
+                        BackColor = Color.White,
+                        AutoSize = true
+                    };
+                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+                    layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+                    layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
                     var lblTitle = new Label
                     {
-                        Text = $"Change parent of : {tree.SelectedNode.Text}",
-                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                        Text = $"Change Parent of: {tree.SelectedNode.Text}",
+                        Font = new Font("Segoe UI", 11, FontStyle.Bold),
                         Dock = DockStyle.Top,
                         Height = 32,
-                        TextAlign = ContentAlignment.MiddleCenter
+                        TextAlign = ContentAlignment.MiddleLeft,
+                        ForeColor = Color.DarkGreen
                     };
+                    layout.SetColumnSpan(lblTitle, 2);
+                    layout.Controls.Add(lblTitle, 0, 0);
+
                     var lblPrompt = new Label
                     {
-                        Text = "Enter new parent key:",
-                        Dock = DockStyle.Top,
-                        Height = 24,
-                        TextAlign = ContentAlignment.MiddleLeft
+                        Text = "New Parent Key:",
+                        TextAlign = ContentAlignment.MiddleRight,
+                        Dock = DockStyle.Fill
                     };
+                    layout.Controls.Add(lblPrompt, 0, 1);
 
                     var cmbInput = new System.Windows.Forms.ComboBox
                     {
-                        Dock = DockStyle.Top,
-                        Height = 28,
                         DropDownStyle = ComboBoxStyle.DropDown,
                         AutoCompleteMode = AutoCompleteMode.SuggestAppend,
-                        AutoCompleteSource = AutoCompleteSource.CustomSource
+                        AutoCompleteSource = AutoCompleteSource.CustomSource,
+                        Dock = DockStyle.Fill,
+                        Font = new Font("Segoe UI", 10)
                     };
                     var autoSource = new AutoCompleteStringCollection();
                     autoSource.AddRange(allKeys.ToArray());
                     cmbInput.AutoCompleteCustomSource = autoSource;
                     cmbInput.Items.AddRange(allKeys.ToArray());
+                    layout.Controls.Add(cmbInput, 1, 1);
 
+                    var buttonPanel = new FlowLayoutPanel
+                    {
+                        FlowDirection = FlowDirection.RightToLeft,
+                        Dock = DockStyle.Fill,
+                        Padding = new Padding(0, 8, 0, 0)
+                    };
                     var btnOk = new System.Windows.Forms.Button
                     {
                         Text = "OK",
                         DialogResult = DialogResult.OK,
-                        Dock = DockStyle.Left,
-                        Width = 80
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                        BackColor = Color.FromArgb(220, 240, 220)
                     };
                     var btnCancel = new System.Windows.Forms.Button
                     {
                         Text = "Cancel",
                         DialogResult = DialogResult.Cancel,
-                        Dock = DockStyle.Right,
-                        Width = 80
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = Color.White
                     };
-                    var panelButtons = new Panel
-                    {
-                        Dock = DockStyle.Bottom,
-                        Height = 40
-                    };
-                    panelButtons.Controls.Add(btnOk);
-                    panelButtons.Controls.Add(btnCancel);
+                    buttonPanel.Controls.Add(btnOk);
+                    buttonPanel.Controls.Add(btnCancel);
+                    layout.Controls.Add(buttonPanel, 1, 2);
 
-                    dlg.Controls.Add(panelButtons);
-                    dlg.Controls.Add(cmbInput);
-                    dlg.Controls.Add(lblPrompt);
-                    dlg.Controls.Add(lblTitle);
-
+                    dlg.Controls.Add(layout);
                     dlg.AcceptButton = btnOk;
                     dlg.CancelButton = btnCancel;
 
@@ -849,119 +873,128 @@ namespace Monovera
                 Text = $"Add {mode.ToLower()} node to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.Manual,
+                Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition)),
                 Width = 700,
-                Height = 240,
-                BackColor = Color.White, // White background
+                Height = 280,
+                BackColor = Color.White,
                 MaximizeBox = false,
                 MinimizeBox = false,
-                ShowInTaskbar = false
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10)
             };
 
-            // Position dialog at mouse
-            var mousePos = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
-            dlg.Location = mousePos;
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 5,
+                Padding = new Padding(24, 18, 24, 18),
+                BackColor = Color.White,
+                AutoSize = true
+            };
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
-            // Define spacing
-            int marginLeft = 30;
-            int labelWidth = 80;
-            int controlLeft = marginLeft + labelWidth + 10;
-            int controlWidth = 260;
-            int top = 20;
-            int rowHeight = 40;
+            var lblTitle = new Label
+            {
+                Text = $"Add {mode.ToLower()} node to: {baseKey}",
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Dock = DockStyle.Top,
+                Height = 32,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.DarkGreen
+            };
+            layout.SetColumnSpan(lblTitle, 2);
+            layout.Controls.Add(lblTitle, 0, 0);
 
-            // Link Mode
             var lblMode = new Label
             {
                 Text = "Link Mode:",
-                Left = marginLeft,
-                Top = top + 2,
-                Width = labelWidth,
-                TextAlign = ContentAlignment.MiddleRight
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill
             };
+            layout.Controls.Add(lblMode, 0, 1);
 
             var cmbMode = new System.Windows.Forms.ComboBox
             {
-                Left = controlLeft,
-                Top = top,
-                Width = 140,
+                Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10),
                 Enabled = false
             };
             cmbMode.Items.AddRange(new[] { "Child", "Sibling" });
             cmbMode.SelectedItem = mode;
-            cmbMode.Enabled = false;
+            layout.Controls.Add(cmbMode, 1, 1);
 
-            // Issue Type
-            top += rowHeight;
             var lblType = new Label
             {
                 Text = "Issue Type:",
-                Left = marginLeft,
-                Top = top + 2,
-                Width = labelWidth,
-                TextAlign = ContentAlignment.MiddleRight
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill
             };
+            layout.Controls.Add(lblType, 0, 2);
 
             var cmbType = new System.Windows.Forms.ComboBox
             {
-                Left = controlLeft,
-                Top = top,
-                Width = controlWidth,
-                DropDownStyle = ComboBoxStyle.DropDownList
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10)
             };
             foreach (var type in issueTypes)
                 cmbType.Items.Add(type);
             cmbType.SelectedIndex = 0;
+            layout.Controls.Add(cmbType, 1, 2);
 
-            // Summary
-            top += rowHeight;
             var lblSummary = new Label
             {
                 Text = "Summary:",
-                Left = marginLeft,
-                Top = top + 2,
-                Width = labelWidth,
-                TextAlign = ContentAlignment.MiddleRight
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill
             };
+            layout.Controls.Add(lblSummary, 0, 3);
 
             var txtSummary = new System.Windows.Forms.TextBox
             {
-                Left = controlLeft,
-                Top = top,
-                Width = 500,
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 10),
                 MaxLength = 250
             };
+            layout.Controls.Add(txtSummary, 1, 3);
 
-            // Buttons
-            top += rowHeight + 30;
+            var buttonPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0, 8, 0, 0)
+            };
             var btnCreate = new System.Windows.Forms.Button
             {
                 Text = "Create",
-                Left = controlLeft,
-                Top = top,
+                DialogResult = DialogResult.OK,
                 Width = 100,
-                DialogResult = DialogResult.OK
+                Height = 36,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                BackColor = Color.FromArgb(220, 240, 220)
             };
-
             var btnCancel = new System.Windows.Forms.Button
             {
                 Text = "Cancel",
-                Left = controlLeft + 110,
-                Top = top,
+                DialogResult = DialogResult.Cancel,
                 Width = 100,
-                DialogResult = DialogResult.Cancel
+                Height = 36,
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.White
             };
+            buttonPanel.Controls.Add(btnCreate);
+            buttonPanel.Controls.Add(btnCancel);
+            layout.Controls.Add(buttonPanel, 1, 4);
 
-            // Add controls to dialog
-            dlg.Controls.AddRange(new Control[]
-            {
-    lblMode, cmbMode,
-    lblType, cmbType,
-    lblSummary, txtSummary,
-    btnCreate, btnCancel
-            });
-
-            // Set dialog buttons
+            dlg.Controls.Add(layout);
             dlg.AcceptButton = btnCreate;
             dlg.CancelButton = btnCancel;
 
