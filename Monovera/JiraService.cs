@@ -340,14 +340,56 @@ public class JiraService
         }";
     }
 
-    public async Task UpdateParentLinkAsync(string issueKey, string newParentKey, string linkTypeName)
+    public async Task UpdateParentLinkAsync(string childKey, string oldParentKey, string newParentKey, string linkTypeName)
     {
-        MessageBox.Show($"Updating parent link for issue {issueKey} to new parent {newParentKey} with link type {linkTypeName}.");
-        // Remove old parent link, add new parent link (REST API: /issue/{issueKey}/remotelink or /issueLink)
-        // Example: PATCH /rest/api/3/issue/{issueKey}
-        // You may need to use the "issuelinks" field and set outward/inward issue accordingly.
-        // See Jira REST API docs for details.
-        // This is a stub; implement as needed for your Jira setup.
+        var client = GetJiraClient();
+
+        // 1. Get all issue links for child issue
+        var response = await client.GetAsync($"{jiraBaseUrl}/rest/api/2/issue/{childKey}");
+        var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+
+        var links = json["fields"]?["issuelinks"] as JArray;
+        if (links != null)
+        {
+            foreach (var link in links)
+            {
+                var typeName = link["type"]?["name"]?.ToString();
+                var inwardIssue = link["inwardIssue"]?["key"]?.ToString();
+                var outwardIssue = link["outwardIssue"]?["key"]?.ToString();
+
+                bool match = typeName?.Equals(linkTypeName, StringComparison.OrdinalIgnoreCase) == true &&
+                             (inwardIssue == oldParentKey);
+
+                if (match && link["id"] != null)
+                {
+                    string linkId = link["id"]!.ToString();
+                    await client.DeleteAsync($"{jiraBaseUrl}/rest/api/2/issueLink/{linkId}");
+                }
+            }
+        }
+
+        // 2. Create new link (parent = inward, child = outward)
+        if (!string.IsNullOrWhiteSpace(newParentKey))
+        {
+            var payload = new
+            {
+                type = new { name = linkTypeName },
+                inwardIssue = new { key = newParentKey },
+                outwardIssue = new { key = childKey }
+            };
+
+            var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), System.Text.Encoding.UTF8, "application/json");
+            await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+        }
+    }
+
+    private HttpClient GetJiraClient()
+    {
+        var client = new HttpClient();
+        var byteArray = System.Text.Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return client;
     }
 
     public async Task UpdateSequenceFieldAsync(string issueKey, int sequence)

@@ -359,58 +359,26 @@ namespace Monovera
 
             var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
 
-            // Prevent dragging root node
+            // Prevent dragging root node, dropping onto itself, or into its own descendant
             if (nodeToMove == null || targetNode == null || nodeToMove == targetNode || IsDescendant(nodeToMove, targetNode))
                 return;
             if (rootKeys.Contains(nodeToMove.Tag?.ToString()))
                 return;
 
-            //// Prevent dropping as sibling of root node
-            //bool targetIsRoot = rootKeys.Contains(targetNode.Tag?.ToString());
-            //bool dropAtRootLevel = targetNode.Parent == null;
-            //if (dropAtRootLevel && targetIsRoot)
-            //    return;
-            //if (dropAtRootLevel && !targetIsRoot)
-            //    return;
-
-            // Decide drop type: sibling or child
-            Rectangle targetBounds = targetNode.Bounds;
-            bool dropAsChild = false;
-            TreeNodeCollection targetCollection = null;
-            int insertIndex = -1;
-
-            // If target has no children, allow drop as child if mouse is in the middle
-            if (targetNode.Nodes.Count == 0 && pt.Y > targetBounds.Top + targetBounds.Height / 4 && pt.Y < targetBounds.Bottom - targetBounds.Height / 4)
-            {
-                dropAsChild = true;
-            }
-            else if (pt.Y < targetBounds.Top + targetBounds.Height / 3)
-            {
-                // Insert above (sibling)
-                targetCollection = targetNode.Parent?.Nodes ?? tree.Nodes;
-                insertIndex = targetCollection.IndexOf(targetNode);
-            }
-            else if (pt.Y > targetBounds.Bottom - targetBounds.Height / 3)
-            {
-                // Insert below (sibling)
-                targetCollection = targetNode.Parent?.Nodes ?? tree.Nodes;
-                insertIndex = targetCollection.IndexOf(targetNode) + 1;
-            }
-            else
-            {
-                // Insert as child
-                dropAsChild = true;
-            }
-
-            // Ask for confirmation
+            // Always drop as child
             var result = MessageBox.Show(
-                $"Are you sure you want to move '{nodeToMove.Text}' {(dropAsChild ? "as a child of" : "as a sibling of")} '{targetNode.Text}'?",
-                "Confirm Move",
+                $"Are you sure you want to move '{nodeToMove.Text}' under '{targetNode.Text}'?\n\n" +
+                $"🌳 {targetNode.Tag}\n" +
+                $"   └── 🌱 {nodeToMove.Tag}",
+                "Confirm Parent Change!",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
 
             if (result != DialogResult.Yes)
                 return;
+
+            // Capture old parent key before removing
+            string oldParentKey = nodeToMove.Parent?.Tag as string;
 
             // Remove from old parent
             if (nodeToMove.Parent != null)
@@ -418,38 +386,20 @@ namespace Monovera
             else
                 tree.Nodes.Remove(nodeToMove);
 
-            if (dropAsChild)
-            {
-                targetNode.Nodes.Add(nodeToMove);
-                targetNode.Expand();
-                string newParentKey = targetNode.Tag as string;
-                string movedKey = nodeToMove.Tag as string;
-                string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
-                await jiraService.UpdateParentLinkAsync(movedKey, newParentKey, linkTypeName);
+            targetNode.Nodes.Add(nodeToMove);
+            targetNode.Expand();
 
-                // Re-sequence children
-                for (int i = 0; i < targetNode.Nodes.Count; i++)
-                {
-                    string siblingKey = targetNode.Nodes[i].Tag as string;
-                    int sequence = i + 1;
-                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
-                }
-            }
-            else
-            {
-                targetCollection.Insert(insertIndex, nodeToMove);
-                string newParentKey = targetNode.Parent?.Tag as string;
-                string movedKey = nodeToMove.Tag as string;
-                string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
-                await jiraService.UpdateParentLinkAsync(movedKey, newParentKey, linkTypeName);
+            string newParentKey = targetNode.Tag as string;
+            string movedKey = nodeToMove.Tag as string;
+            string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
+            await jiraService.UpdateParentLinkAsync(movedKey, oldParentKey, newParentKey, linkTypeName);
 
-                // Re-sequence siblings
-                for (int i = 0; i < targetCollection.Count; i++)
-                {
-                    string siblingKey = targetCollection[i].Tag as string;
-                    int sequence = i + 1;
-                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
-                }
+            // Re-sequence children
+            for (int i = 0; i < targetNode.Nodes.Count; i++)
+            {
+                string siblingKey = targetNode.Nodes[i].Tag as string;
+                int sequence = i + 1;
+                await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
             }
 
             tree.SelectedNode = nodeToMove;
