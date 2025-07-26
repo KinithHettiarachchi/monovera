@@ -75,7 +75,7 @@
             // 
             tree.BackColor = Color.Honeydew;
             tree.Dock = DockStyle.Fill;
-            tree.Font = new Font("Calibri", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
             tree.Size = new Size(670, 1001);
@@ -87,114 +87,112 @@
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
-            panelTabs.Size = new Size(1230, 931);
+            panelTabs.Size = new Size(1230, 978);
             panelTabs.TabIndex = 1;
             // 
             // statusStrip1
             // 
             statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, menuActions, mnuSettings, pbProgress, lblProgress, lblShortcuts });
-            statusStrip1.Location = new Point(0, 931);
+            statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
-            statusStrip1.Size = new Size(1230, 70);
+            statusStrip1.Size = new Size(1230, 23);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
             // lblUser
             // 
-            lblUser.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblUser.Font = new Font("Segoe UI", 9.75F);
             lblUser.Name = "lblUser";
-            lblUser.Size = new Size(113, 65);
+            lblUser.Size = new Size(130, 18);
             lblUser.Text = "    Not connected!    ";
             // 
             // menuActions
             // 
             menuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuSearch, mnuReport, menuRead });
+            menuActions.Font = new Font("Segoe UI", 9.75F);
             menuActions.Image = Properties.Resources.Actions;
-            menuActions.ImageScaling = ToolStripItemImageScaling.None;
             menuActions.ImageTransparentColor = Color.Magenta;
             menuActions.Name = "menuActions";
-            menuActions.Size = new Size(124, 68);
+            menuActions.Size = new Size(79, 21);
             menuActions.Text = "Actions";
             // 
             // mnuSearch
             // 
+            mnuSearch.Font = new Font("Segoe UI", 9.75F);
             mnuSearch.Image = Properties.Resources.Search;
-            mnuSearch.ImageScaling = ToolStripItemImageScaling.None;
             mnuSearch.Name = "mnuSearch";
             mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
-            mnuSearch.Size = new Size(278, 70);
+            mnuSearch.Size = new Size(246, 22);
             mnuSearch.Text = "Search...";
             mnuSearch.Click += mnuSearch_Click;
             // 
             // mnuReport
             // 
+            mnuReport.Font = new Font("Segoe UI", 9.75F);
             mnuReport.Image = Properties.Resources.Report;
-            mnuReport.ImageScaling = ToolStripItemImageScaling.None;
             mnuReport.Name = "mnuReport";
             mnuReport.ShortcutKeys = Keys.Control | Keys.P;
-            mnuReport.Size = new Size(278, 70);
+            mnuReport.Size = new Size(246, 22);
             mnuReport.Text = "Generate Report...";
             mnuReport.Click += mnuReport_Click;
             // 
             // menuRead
             // 
+            menuRead.Font = new Font("Segoe UI", 9.75F);
             menuRead.Image = Properties.Resources.Speak;
-            menuRead.ImageScaling = ToolStripItemImageScaling.None;
             menuRead.Name = "menuRead";
             menuRead.ShortcutKeys = Keys.Control | Keys.Shift | Keys.Z;
-            menuRead.Size = new Size(278, 70);
+            menuRead.Size = new Size(246, 22);
             menuRead.Text = "Read out loud...";
             menuRead.Click += menuRead_Click;
             // 
             // mnuSettings
             // 
             mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, configurationToolStripMenuItem });
+            mnuSettings.Font = new Font("Segoe UI", 9.75F);
             mnuSettings.Image = Properties.Resources.settings;
-            mnuSettings.ImageScaling = ToolStripItemImageScaling.None;
             mnuSettings.ImageTransparentColor = Color.Magenta;
             mnuSettings.Name = "mnuSettings";
-            mnuSettings.Size = new Size(129, 68);
+            mnuSettings.Size = new Size(86, 21);
             mnuSettings.Text = "Settings";
             // 
             // mnuUpdateHierarchy
             // 
-            mnuUpdateHierarchy.Font = new Font("Calibri", 12F);
+            mnuUpdateHierarchy.Font = new Font("Segoe UI", 9.75F);
             mnuUpdateHierarchy.Image = Properties.Resources.Update;
-            mnuUpdateHierarchy.ImageScaling = ToolStripItemImageScaling.None;
             mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
-            mnuUpdateHierarchy.Size = new Size(246, 70);
+            mnuUpdateHierarchy.Size = new Size(185, 22);
             mnuUpdateHierarchy.Text = "Update hierarchy...";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
             // configurationToolStripMenuItem
             // 
-            configurationToolStripMenuItem.Font = new Font("Calibri", 12F);
+            configurationToolStripMenuItem.Font = new Font("Segoe UI", 9.75F);
             configurationToolStripMenuItem.Image = Properties.Resources.Configuration;
-            configurationToolStripMenuItem.ImageScaling = ToolStripItemImageScaling.None;
             configurationToolStripMenuItem.Name = "configurationToolStripMenuItem";
-            configurationToolStripMenuItem.Size = new Size(246, 70);
+            configurationToolStripMenuItem.Size = new Size(185, 22);
             configurationToolStripMenuItem.Text = "Configuration...";
             configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
             // 
             // pbProgress
             // 
             pbProgress.Name = "pbProgress";
-            pbProgress.Size = new Size(100, 64);
+            pbProgress.Size = new Size(100, 17);
             // 
             // lblProgress
             // 
-            lblProgress.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblProgress.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             lblProgress.Name = "lblProgress";
-            lblProgress.Size = new Size(19, 65);
+            lblProgress.Size = new Size(24, 18);
             lblProgress.Text = "    ";
             // 
             // lblShortcuts
             // 
-            lblShortcuts.Font = new Font("Calibri", 9F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            lblShortcuts.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             lblShortcuts.ForeColor = SystemColors.ControlDarkDark;
             lblShortcuts.Name = "lblShortcuts";
-            lblShortcuts.Size = new Size(62, 65);
+            lblShortcuts.Size = new Size(65, 18);
             lblShortcuts.Text = "Welcome!";
             // 
             // toolTip1

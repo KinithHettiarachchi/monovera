@@ -51,6 +51,7 @@ namespace Monovera
         /// </summary>
         public static string jiraToken = "";
 
+        private bool suppressAfterSelect = false;
 
         /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
@@ -314,11 +315,157 @@ namespace Monovera
             EnableTabDragDrop();
 
             // Tree mouse event for context menu
-            tree.MouseDown += tree_MouseDown;
+            tree.AllowDrop = true;
+            tree.ItemDrag += tree_ItemDrag;
+            tree.DragEnter += tree_DragEnter;
+            tree.DragOver += tree_DragOver;
+            tree.DragDrop += tree_DragDrop;
+            tree.MouseUp += tree_MouseUp;
 
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
+        }
+
+        private TreeNode draggedNode;
+
+        private void tree_ItemDrag(object sender, ItemDragEventArgs e)
+        {
+            suppressAfterSelect = true;
+            draggedNode = e.Item as TreeNode;
+            if (draggedNode != null)
+                tree.DoDragDrop(draggedNode, DragDropEffects.Move);
+        }
+
+        private void tree_DragEnter(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(typeof(TreeNode)))
+                e.Effect = DragDropEffects.Move;
+        }
+
+        private void tree_DragOver(object sender, DragEventArgs e)
+        {
+            e.Effect = DragDropEffects.Move;
+            Point pt = tree.PointToClient(new Point(e.X, e.Y));
+            tree.SelectedNode = tree.GetNodeAt(pt);
+        }
+
+        private async void tree_DragDrop(object sender, DragEventArgs e)
+        {
+            suppressAfterSelect = false;
+            Point pt = tree.PointToClient(new Point(e.X, e.Y));
+            TreeNode targetNode = tree.GetNodeAt(pt);
+            TreeNode nodeToMove = (TreeNode)e.Data.GetData(typeof(TreeNode));
+
+            var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
+
+            // Prevent dragging root node
+            if (nodeToMove == null || targetNode == null || nodeToMove == targetNode || IsDescendant(nodeToMove, targetNode))
+                return;
+            if (rootKeys.Contains(nodeToMove.Tag?.ToString()))
+                return;
+
+            //// Prevent dropping as sibling of root node
+            //bool targetIsRoot = rootKeys.Contains(targetNode.Tag?.ToString());
+            //bool dropAtRootLevel = targetNode.Parent == null;
+            //if (dropAtRootLevel && targetIsRoot)
+            //    return;
+            //if (dropAtRootLevel && !targetIsRoot)
+            //    return;
+
+            // Decide drop type: sibling or child
+            Rectangle targetBounds = targetNode.Bounds;
+            bool dropAsChild = false;
+            TreeNodeCollection targetCollection = null;
+            int insertIndex = -1;
+
+            // If target has no children, allow drop as child if mouse is in the middle
+            if (targetNode.Nodes.Count == 0 && pt.Y > targetBounds.Top + targetBounds.Height / 4 && pt.Y < targetBounds.Bottom - targetBounds.Height / 4)
+            {
+                dropAsChild = true;
+            }
+            else if (pt.Y < targetBounds.Top + targetBounds.Height / 3)
+            {
+                // Insert above (sibling)
+                targetCollection = targetNode.Parent?.Nodes ?? tree.Nodes;
+                insertIndex = targetCollection.IndexOf(targetNode);
+            }
+            else if (pt.Y > targetBounds.Bottom - targetBounds.Height / 3)
+            {
+                // Insert below (sibling)
+                targetCollection = targetNode.Parent?.Nodes ?? tree.Nodes;
+                insertIndex = targetCollection.IndexOf(targetNode) + 1;
+            }
+            else
+            {
+                // Insert as child
+                dropAsChild = true;
+            }
+
+            // Ask for confirmation
+            var result = MessageBox.Show(
+                $"Are you sure you want to move '{nodeToMove.Text}' {(dropAsChild ? "as a child of" : "as a sibling of")} '{targetNode.Text}'?",
+                "Confirm Move",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (result != DialogResult.Yes)
+                return;
+
+            // Remove from old parent
+            if (nodeToMove.Parent != null)
+                nodeToMove.Parent.Nodes.Remove(nodeToMove);
+            else
+                tree.Nodes.Remove(nodeToMove);
+
+            if (dropAsChild)
+            {
+                targetNode.Nodes.Add(nodeToMove);
+                targetNode.Expand();
+                string newParentKey = targetNode.Tag as string;
+                string movedKey = nodeToMove.Tag as string;
+                string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
+                await jiraService.UpdateParentLinkAsync(movedKey, newParentKey, linkTypeName);
+
+                // Re-sequence children
+                for (int i = 0; i < targetNode.Nodes.Count; i++)
+                {
+                    string siblingKey = targetNode.Nodes[i].Tag as string;
+                    int sequence = i + 1;
+                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+                }
+            }
+            else
+            {
+                targetCollection.Insert(insertIndex, nodeToMove);
+                string newParentKey = targetNode.Parent?.Tag as string;
+                string movedKey = nodeToMove.Tag as string;
+                string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
+                await jiraService.UpdateParentLinkAsync(movedKey, newParentKey, linkTypeName);
+
+                // Re-sequence siblings
+                for (int i = 0; i < targetCollection.Count; i++)
+                {
+                    string siblingKey = targetCollection[i].Tag as string;
+                    int sequence = i + 1;
+                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+                }
+            }
+
+            tree.SelectedNode = nodeToMove;
+        }
+
+        // Helper to prevent dropping a node into its own descendant
+        private bool IsDescendant(TreeNode node, TreeNode potentialParent)
+        {
+            TreeNode current = potentialParent;
+            while (current != null)
+            {
+                if (current == node)
+                    return true;
+                current = current.Parent;
+            }
+            return false;
         }
 
         /// <summary>
@@ -327,6 +474,49 @@ namespace Monovera
         private void frmMain_KeyDown(object sender, KeyEventArgs e)
         {
             handleShortcuts(e);
+
+            // Only process if tree has focus and a node is selected
+            if (tree.Focused && tree.SelectedNode != null)
+            {
+                if (e.Control && e.KeyCode == Keys.Up)
+                {
+                    e.SuppressKeyPress = true;
+                    MoveNodeInTree(tree.SelectedNode, -1);
+                }
+                else if (e.Control && e.KeyCode == Keys.Down)
+                {
+                    e.SuppressKeyPress = true;
+                    MoveNodeInTree(tree.SelectedNode, 1);
+                }
+            }
+        }
+
+        private async void MoveNodeInTree(TreeNode node, int direction)
+        {
+            if (node == null) return;
+            TreeNodeCollection siblings = node.Parent?.Nodes ?? tree.Nodes;
+            int index = siblings.IndexOf(node);
+            int newIndex = index + direction;
+
+            // Only move if within bounds
+            if (newIndex < 0 || newIndex >= siblings.Count)
+                return;
+
+            // Remove and insert at new position
+            siblings.RemoveAt(index);
+            siblings.Insert(newIndex, node);
+
+            // Update sequence for all siblings
+            for (int i = 0; i < siblings.Count; i++)
+            {
+                string siblingKey = siblings[i].Tag as string;
+                int sequence = i + 1;
+                await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+            }
+
+            // Reselect the moved node
+            tree.SelectedNode = node;
+            node.EnsureVisible();
         }
 
         private System.Windows.Forms.Timer marqueeTimer;
@@ -388,8 +578,9 @@ namespace Monovera
         /// <summary>
         /// Handles right-click selection in the tree view.
         /// </summary>
-        private void tree_MouseDown(object sender, MouseEventArgs e)
+        private void tree_MouseUp(object sender, MouseEventArgs e)
         {
+            suppressAfterSelect = false;
             if (e.Button == MouseButtons.Right)
             {
                 var clickedNode = tree.GetNodeAt(e.X, e.Y);
@@ -1566,6 +1757,9 @@ namespace Monovera
 
         private async void Tree_AfterSelect(object sender, TreeViewEventArgs e)
         {
+            if (suppressAfterSelect)
+                return;
+
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
 

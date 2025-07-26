@@ -339,4 +339,77 @@ public class JiraService
             ]
         }";
     }
+
+    public async Task UpdateParentLinkAsync(string issueKey, string newParentKey, string linkTypeName)
+    {
+        MessageBox.Show($"Updating parent link for issue {issueKey} to new parent {newParentKey} with link type {linkTypeName}.");
+        // Remove old parent link, add new parent link (REST API: /issue/{issueKey}/remotelink or /issueLink)
+        // Example: PATCH /rest/api/3/issue/{issueKey}
+        // You may need to use the "issuelinks" field and set outward/inward issue accordingly.
+        // See Jira REST API docs for details.
+        // This is a stub; implement as needed for your Jira setup.
+    }
+
+    public async Task UpdateSequenceFieldAsync(string issueKey, int sequence)
+    {
+       // MessageBox.Show($"Update sequence of {issueKey} to {sequence}");
+
+        var dashIndex = issueKey.IndexOf('-');
+        if (dashIndex < 1)
+            throw new ArgumentException("Invalid issue key format.", nameof(issueKey));
+        var keyPrefix = issueKey.Substring(0, dashIndex);
+
+        var projectConfig = config?.Projects?
+            .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+        if (projectConfig == null)
+            throw new InvalidOperationException($"Project config not found for issue key prefix: {keyPrefix}");
+
+        var sortingField = projectConfig.SortingField;
+        if (string.IsNullOrWhiteSpace(sortingField))
+            throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
+
+        // If it's a custom field, get the user-friendly name
+        string fieldName = sortingField;
+        if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
+        {
+            fieldName = await GetCustomFieldNameAsync(sortingField);
+        }
+
+        var issue = await jira.Issues.GetIssueAsync(issueKey);
+        issue[fieldName] = sequence.ToString();
+        await issue.SaveChangesAsync();
+    }
+
+    private static Dictionary<string, string> customFieldIdToNameCache = new();
+
+    private async Task<string> GetCustomFieldNameAsync(string fieldId)
+    {
+        // Check cache first
+        if (customFieldIdToNameCache.TryGetValue(fieldId, out var name))
+            return name;
+
+        using var client = new HttpClient();
+        client.BaseAddress = new Uri(jiraBaseUrl);
+        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"));
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+        var response = await client.GetAsync("/rest/api/3/field");
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadAsStringAsync();
+
+        using var doc = JsonDocument.Parse(json);
+        foreach (var field in doc.RootElement.EnumerateArray())
+        {
+            var id = field.GetProperty("id").GetString();
+            var fname = field.GetProperty("name").GetString();
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(fname))
+            {
+                customFieldIdToNameCache[id] = fname;
+                if (id.Equals(fieldId, StringComparison.OrdinalIgnoreCase))
+                    return fname;
+            }
+        }
+
+        throw new InvalidOperationException($"Custom field with ID '{fieldId}' not found on the JIRA server.");
+    }
 }
