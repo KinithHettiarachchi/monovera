@@ -31,6 +31,8 @@ namespace Monovera
     public partial class frmMain : Form
     {
         bool editorMode = true;
+        private MouseButtons lastTreeMouseButton = MouseButtons.Left;
+        private bool suppressAfterSelect = false;
 
         /// <summary>
         /// Represents a service for interacting with Jira.
@@ -53,8 +55,6 @@ namespace Monovera
         /// Jira API token for authentication.
         /// </summary>
         public static string jiraToken = "";
-
-        private bool suppressAfterSelect = false;
 
         /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
@@ -458,6 +458,8 @@ namespace Monovera
             if (newIndex < 0 || newIndex >= siblings.Count)
                 return;
 
+            tree.Enabled= false;
+
             // Remove and insert at new position
             siblings.RemoveAt(index);
             siblings.Insert(newIndex, node);
@@ -472,6 +474,7 @@ namespace Monovera
 
             // Reselect the moved node
             tree.SelectedNode = node;
+            tree.Enabled = true;
             node.EnsureVisible();
         }
 
@@ -536,14 +539,23 @@ namespace Monovera
         /// </summary>
         private void tree_MouseUp(object sender, MouseEventArgs e)
         {
+            lastTreeMouseButton = e.Button;
             suppressAfterSelect = false;
+
+            var clickedNode = tree.GetNodeAt(e.X, e.Y);
+            bool isCtrlPressed = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+
             if (e.Button == MouseButtons.Right)
             {
-                var clickedNode = tree.GetNodeAt(e.X, e.Y);
                 if (clickedNode != null)
                 {
                     tree.SelectedNode = clickedNode;
                 }
+            }
+            else if (e.Button == MouseButtons.Left && isCtrlPressed && clickedNode != null)
+            {
+                // If Ctrl+Left click on a node, always reload, even if already selected
+                Tree_AfterSelect(tree, new TreeViewEventArgs(clickedNode));
             }
         }
 
@@ -653,8 +665,8 @@ namespace Monovera
                     dlg.StartPosition = FormStartPosition.Manual;
                     dlg.Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
                     dlg.Width = 420;
-                    dlg.Height = 220;
-                    dlg.BackColor = Color.White;
+                    dlg.Height = 210;
+                    dlg.BackColor = Color.Honeydew;
                     dlg.MaximizeBox = false;
                     dlg.MinimizeBox = false;
                     dlg.ShowInTaskbar = false;
@@ -666,7 +678,7 @@ namespace Monovera
                         ColumnCount = 2,
                         RowCount = 3,
                         Padding = new Padding(24, 18, 24, 18),
-                        BackColor = Color.White,
+                        BackColor=Color.Honeydew,
                         AutoSize = true
                     };
                     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -677,7 +689,7 @@ namespace Monovera
 
                     var lblTitle = new Label
                     {
-                        Text = $"Change Parent of: {tree.SelectedNode.Text}",
+                        Text = $"Change Parent of: {tree.SelectedNode.Tag}",
                         Font = new Font("Segoe UI", 11, FontStyle.Bold),
                         Dock = DockStyle.Top,
                         Height = 32,
@@ -713,16 +725,17 @@ namespace Monovera
                     {
                         FlowDirection = FlowDirection.RightToLeft,
                         Dock = DockStyle.Fill,
-                        Padding = new Padding(0, 8, 0, 0)
+                        Padding = new Padding(0, 8, 0, 0),
+                        BackColor=Color.Honeydew
                     };
                     var btnOk = new System.Windows.Forms.Button
                     {
-                        Text = "OK",
+                        Text = "Link",
                         DialogResult = DialogResult.OK,
                         Width = 100,
                         Height = 36,
                         Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                        BackColor = Color.FromArgb(220, 240, 220)
+                        BackColor = Color.White
                     };
                     var btnCancel = new System.Windows.Forms.Button
                     {
@@ -876,7 +889,7 @@ namespace Monovera
                 Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition)),
                 Width = 700,
                 Height = 280,
-                BackColor = Color.White,
+                BackColor = Color.Honeydew,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -888,8 +901,8 @@ namespace Monovera
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
                 RowCount = 5,
-                Padding = new Padding(24, 18, 24, 18),
-                BackColor = Color.White,
+                Padding = new Padding(10, 18, 24, 18),
+                BackColor = Color.Honeydew,
                 AutoSize = true
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -979,7 +992,7 @@ namespace Monovera
                 Width = 100,
                 Height = 36,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                BackColor = Color.FromArgb(220, 240, 220)
+                BackColor = Color.White
             };
             var btnCancel = new System.Windows.Forms.Button
             {
@@ -2131,8 +2144,16 @@ namespace Monovera
             if (suppressAfterSelect)
                 return;
 
+            // Prevent tab loading on right-click selection
+            if (lastTreeMouseButton == MouseButtons.Right)
+                return;
+
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
+
+
+            bool isCtrlPressed = (Control.ModifierKeys & Keys.Control) == Keys.Control;
+            bool isLeftClick = lastTreeMouseButton == MouseButtons.Left;
 
             string iconUrl = null;
             if (tree.ImageList != null && e.Node.ImageKey != null && tree.ImageList.Images.ContainsKey(e.Node.ImageKey))
@@ -2143,57 +2164,84 @@ namespace Monovera
                 iconUrl = $"data:image/png;base64,{base64}";
             }
 
-            // Check if tab already exists
+            TabPage pageTab = null;
             foreach (TabPage page in tabDetails.TabPages)
             {
                 if (page.Text == issueKey)
                 {
-                    tabDetails.SelectedTab = page;
+                    pageTab = page;
+                    break;
+                }
+            }
+
+            Microsoft.Web.WebView2.WinForms.WebView2 webView = null;
+
+            if (pageTab == null)
+            {
+                // Tab does not exist, create and load it
+                webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                await webView.EnsureCoreWebView2Async();
+                webView.NavigateToString(LoadingHtml);
+
+                if (tabDetails.ImageList == null)
+                {
+                    tabDetails.ImageList = new ImageList();
+                    tabDetails.ImageList.ImageSize = new Size(16, 16);
+                }
+
+                System.Drawing.Image iconImage = null;
+                string iconKey = issueKey;
+                if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
+                {
+                    try
+                    {
+                        string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
+                        byte[] bytes = Convert.FromBase64String(base64);
+                        using var ms = new MemoryStream(bytes);
+                        iconImage = System.Drawing.Image.FromStream(ms);
+                        if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
+                            tabDetails.ImageList.Images.Add(iconKey, iconImage);
+                    }
+                    catch
+                    {
+                        // ignore
+                    }
+                }
+
+                pageTab = new TabPage(issueKey)
+                {
+                    ImageKey = issueKey,
+                    ToolTipText = $"{e.Node.Text}"
+                };
+                pageTab.Controls.Add(webView);
+                tabDetails.TabPages.Add(pageTab);
+            }
+            else
+            {
+                tabDetails.SelectedTab = pageTab;
+                // Always reload if Ctrl+LeftClick, even if tab is already focused
+                if (isLeftClick && isCtrlPressed)
+                {
+                    // Always reload, even if tab is already focused
+                    webView = pageTab.Controls.OfType<Microsoft.Web.WebView2.WinForms.WebView2>().FirstOrDefault();
+                    if (webView == null)
+                    {
+                        webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                        await webView.EnsureCoreWebView2Async();
+                        pageTab.Controls.Clear();
+                        pageTab.Controls.Add(webView);
+                    }
+                    webView.NavigateToString(LoadingHtml);
+                }
+                else
+                {
+                    // Just focus the tab, do not reload
                     return;
                 }
             }
 
-            // --- Step 1: Create tab and show loading page immediately ---
-            var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-            await webView.EnsureCoreWebView2Async();
-
-            webView.NavigateToString(LoadingHtml);
-
-            if (tabDetails.ImageList == null)
-            {
-                tabDetails.ImageList = new ImageList();
-                tabDetails.ImageList.ImageSize = new Size(16, 16);
-            }
-
-            System.Drawing.Image iconImage = null;
-            string iconKey = issueKey;
-            if (!string.IsNullOrWhiteSpace(iconUrl) && iconUrl.StartsWith("data:image"))
-            {
-                try
-                {
-                    string base64 = iconUrl.Substring(iconUrl.IndexOf(",") + 1);
-                    byte[] bytes = Convert.FromBase64String(base64);
-                    using var ms = new MemoryStream(bytes);
-                    iconImage = System.Drawing.Image.FromStream(ms);
-                    if (!tabDetails.ImageList.Images.ContainsKey(iconKey))
-                        tabDetails.ImageList.Images.Add(iconKey, iconImage);
-                }
-                catch
-                {
-                    // ignore
-                }
-            }
-
-            var pageTab = new TabPage(issueKey)
-            {
-                ImageKey = iconKey,
-                ToolTipText = $"{e.Node.Text}"
-            };
-            pageTab.Controls.Add(webView);
-            tabDetails.TabPages.Add(pageTab);
             tabDetails.SelectedTab = pageTab;
 
-            // --- Step 2: Process and load the JIRA issue in background ---
             try
             {
                 var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
@@ -2208,10 +2256,12 @@ namespace Monovera
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
-                // Defensive get for fields
                 if (!root.TryGetProperty("fields", out var fields))
                     throw new Exception("Missing 'fields' in response.");
 
+                /**
+                 * Build summary and issue information section
+                 */
                 string summary = "";
                 if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
                     summary = summaryProp.GetString();
@@ -2250,253 +2300,52 @@ namespace Monovera
                    ? typeName.GetString() ?? ""
                    : "";
 
-                string htmlDesc = "";
+                /**
+                * Build description sections
+                */
+                string descriptinHTML = "";
                 if (root.TryGetProperty("renderedFields", out var renderedFields) &&
                     renderedFields.TryGetProperty("description", out var descProp) &&
                     descProp.ValueKind == JsonValueKind.String)
                 {
-                    htmlDesc = descProp.GetString() ?? "";
+                    descriptinHTML = descProp.GetString() ?? "";
                 }
-                string resolvedDesc = ReplaceJiraLinksAndSVNFeatures(htmlDesc);
+                string resolvedDescriptionHTML = ReplaceJiraLinksAndSVNFeatures(descriptinHTML);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
                 string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
                 string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
 
-                string encodedJson = WebUtility.HtmlEncode(FormatJson(json));
-
-                string BuildLinksTable(string title, string linkType, string prop)
-                {
-                    var sb = new StringBuilder();
-                    int matchCount = 0;
-
-                    sb.AppendLine($"<div class='subsection'><h4>{title}</h4>");
-
-                    if (fields.TryGetProperty("issuelinks", out var links))
-                    {
-                        var tableRows = new StringBuilder();
-
-                        foreach (var link in links.EnumerateArray())
-                        {
-                            if (link.TryGetProperty("type", out var typeProp) &&
-                                typeProp.TryGetProperty("name", out var nameProp) &&
-                                nameProp.GetString() == linkType)
-                            {
-                                JsonElement issueElem = default;
-
-                                if (prop == null)
-                                {
-                                    if (!link.TryGetProperty("inwardIssue", out issueElem))
-                                        issueElem = link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
-                                }
-                                else
-                                {
-                                    link.TryGetProperty(prop, out issueElem);
-                                }
-
-                                if (issueElem.ValueKind == JsonValueKind.Object)
-                                {
-                                    var key = issueElem.GetProperty("key").GetString() ?? "";
-                                    var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
-
-                                    TreeNode foundNode = FindNodeByKey(tree.Nodes, key);
-                                    string iconImgInner = "";
-                                    if (foundNode != null &&
-                                        !string.IsNullOrEmpty(foundNode.ImageKey) &&
-                                        tree.ImageList != null &&
-                                        tree.ImageList.Images.ContainsKey(foundNode.ImageKey))
-                                    {
-                                        using var ms = new MemoryStream();
-                                        tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                                        var base64 = Convert.ToBase64String(ms.ToArray());
-                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:28px; vertical-align:middle; margin-right:6px;' />";
-                                    }
-
-                                    tableRows.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
-                                    matchCount++;
-                                }
-                            }
-                        }
-
-                        if (matchCount > 0)
-                        {
-                            sb.AppendLine("<table><tbody>");
-                            sb.Append(tableRows);
-                            sb.AppendLine("</tbody></table>");
-                        }
-                        else
-                        {
-                            sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
-                        }
-                    }
-                    else
-                    {
-                        sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
-                    }
-
-                    sb.AppendLine("</div>");
-                    return sb.ToString();
-                }
-
-                string attachmentsHtml = "";
-                if (root.TryGetProperty("fields", out var fieldsAttachment) &&
-                    fieldsAttachment.TryGetProperty("attachment", out var attachmentsArray) &&
-                    attachmentsArray.ValueKind == JsonValueKind.Array)
-                {
-                    int attachmentCount = attachmentsArray.GetArrayLength();
-
-                    if (attachmentCount == 0)
-                    {
-                        attachmentsHtml = $"<details><summary>Attachments ({attachmentCount})</summary>\r\n  <section><div class='no-attachments'>No attachments found.</div></summary></details>";
-                    }
-                    else
-                    {
-                        var authTokenAttachment = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                        using var clientAttachment = new HttpClient();
-                        clientAttachment.BaseAddress = new Uri(jiraBaseUrl);
-                        clientAttachment.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authTokenAttachment);
-
-                        tempDir = Path.Combine(tempDir, "JiraAttachments");
-                        Directory.CreateDirectory(tempDir);
-
-                        var sb = new StringBuilder();
-                        string uniqueId = Guid.NewGuid().ToString("N");
-
-                        sb.AppendLine($@"
-<details>
-  <summary>Attachments ({attachmentCount})</summary>
-  <section>
-    <div class='attachments-wrapper' id='wrapper-{uniqueId}'>
-      <button class='scroll-btn left' onclick='scrollAttachments(""{uniqueId}"", -1)'>&lt;</button>
-      <div class='attachments-strip' id='strip-{uniqueId}'>");
-
-                        foreach (var att in attachmentsArray.EnumerateArray())
-                        {
-                            string fileName = att.GetProperty("filename").GetString() ?? "unknown";
-                            string contentUrl = att.GetProperty("content").GetString() ?? "";
-                            string thumbnailUrl = att.TryGetProperty("thumbnail", out var thumbProp) ? thumbProp.GetString() ?? "" : "";
-                            string mimeType = att.TryGetProperty("mimeType", out var mimeProp) ? mimeProp.GetString() ?? "" : "";
-                            string fileExtension = Path.GetExtension(fileName).ToLower();
-                            string created = att.TryGetProperty("created", out var createdProp) ? createdProp.GetString() ?? "" : "";
-                            string author = att.TryGetProperty("author", out var authorProp) &&
-                                            authorProp.TryGetProperty("displayName", out var authorNameProp)
-                                                ? authorNameProp.GetString() ?? "Unknown"
-                                                : "Unknown";
-
-                            bool isImage = mimeType.StartsWith("image/") || new[] { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" }.Contains(fileExtension);
-
-                            string localFilePath = Path.Combine(tempDir, fileName);
-
-                            try
-                            {
-                                if (File.Exists(localFilePath))
-                                {
-                                    File.SetAttributes(localFilePath, FileAttributes.Normal);
-                                    File.Delete(localFilePath);
-                                }
-
-                                var fileBytes = clientAttachment.GetByteArrayAsync(contentUrl).Result;
-                                File.WriteAllBytes(localFilePath, fileBytes);
-                            }
-                            catch
-                            {
-                                continue;
-                            }
-
-                            string thumbHtml;
-                            if (isImage)
-                            {
-                                try
-                                {
-                                    var responseAttachment = clientAttachment.GetAsync(!string.IsNullOrEmpty(thumbnailUrl) ? thumbnailUrl : contentUrl).Result;
-                                    responseAttachment.EnsureSuccessStatusCode();
-                                    var bytes = responseAttachment.Content.ReadAsByteArrayAsync().Result;
-                                    var base64 = Convert.ToBase64String(bytes);
-                                    var thumbMime = responseAttachment.Content.Headers.ContentType?.MediaType ?? "image/png";
-                                    thumbHtml = $"<img src=\"data:{thumbMime};base64,{base64}\" alt=\"{fileName}\" title=\"{fileName}\" />";
-                                }
-                                catch
-                                {
-                                    thumbHtml = "<div class='attachment-placeholder'>🖼️</div>";
-                                }
-                            }
-                            else
-                            {
-                                string icon = fileExtension switch
-                                {
-                                    ".pdf" => "📄",
-                                    ".doc" or ".docx" => "📝",
-                                    ".xls" or ".xlsx" => "📊",
-                                    ".zip" or ".rar" => "🗜️",
-                                    ".txt" => "📃",
-                                    _ => "📁"
-                                };
-                                thumbHtml = $"<div class='attachment-placeholder'>{icon}</div>";
-                            }
-
-                            string createdDisplay = DateTime.TryParse(created, out var createdDt)
-                                ? createdDt.ToString("yyyy-MM-dd HH:mm")
-                                : "";
-
-                            string fileSizeDisplay = "";
-                            if (att.TryGetProperty("size", out var sizeProp))
-                            {
-                                long sizeBytes = sizeProp.GetInt64();
-                                fileSizeDisplay = $"{(sizeBytes / 1024.0):0.#} KB";
-                            }
-
-                            string encodedLocalPath = "file:///" + Uri.EscapeDataString(localFilePath.Replace("\\", "/"));
-                            string thumbWrapper = isImage
-                                ? $"<a href='#' class='preview-image' data-src='{encodedLocalPath}' title='Preview {fileName}'>{thumbHtml}</a>"
-                                : $"<a class='attachment-link' href='{encodedLocalPath}' target='_blank' title='{fileName}'>{thumbHtml}</a>";
-
-                            sb.AppendLine($@"
-<div class='attachment-card'>
-  {thumbWrapper}
-  <div class='attachment-filename'>{HttpUtility.HtmlEncode(fileName)}</div>
-  <div class='attachment-meta'>
-    {fileSizeDisplay}<br/>
-    {createdDisplay}<br/>
-    by {HttpUtility.HtmlEncode(author)}
-  </div>
-  <div>
-    <a href='#' data-filepath='{encodedLocalPath}' title='Download {HttpUtility.HtmlEncode(fileName)}' class='download-btn'>⬇️ Download</a>
-  </div>
-</div>");
-                        }
-
-                        sb.AppendLine($@"
-      </div>
-      <button class='scroll-btn right' onclick='scrollAttachments(""{uniqueId}"", 1)'>&gt;</button>
-    </div>
-  </section>
-</details>
-<script>
-function scrollAttachments(id, direction) {{
-  const strip = document.getElementById('strip-' + id);
-  if (strip) {{
-    strip.scrollBy({{ left: direction * 200, behavior: 'smooth' }});
-  }}
-}}
-</script>");
-
-                        attachmentsHtml = sb.ToString();
-                    }
-                }
-
+               /**
+               * Build attachments section
+               */
+                string attachmentsHtml = BuildAttachmentsHtml(fields, issueKey);
+                
+                /**
+                * Build links section
+                */
                 string linksHtml =
-                    BuildLinksTable("Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
-                    BuildLinksTable("Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
-                    BuildLinksTable("Related", "Relates", null);
+                             BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                             BuildLinksTable(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
+                             BuildLinksTable(fields, "Related", "Relates", null);
 
+                /**
+                * Build history section
+                */
                 string historyHtml = BuildHistoryHtml(root);
 
-                string html = BuildIssueHtml(headerLine, issueType, statusIcon, status, createdDate, lastUpdated, issueUrl, resolvedDesc, attachmentsHtml, linksHtml, historyHtml, encodedJson);
+               /**
+               * Build JSON response section
+               */
+                string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
 
-                // --- Step 3: Replace loading page with actual content ---
+                /**
+                * Combine all sections in to one HTML detail page
+                 */
+                string html = BuildIssueDetailFullPageHtml(headerLine, issueType, statusIcon, status, createdDate, lastUpdated, issueUrl, resolvedDescriptionHTML, attachmentsHtml, linksHtml, historyHtml, responseHTML);
+
                 webView.NavigateToString(html);
 
-                // Attach event handlers after content is loaded
                 webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
                 {
                     var deferral = args.GetDeferral();
@@ -2514,6 +2363,138 @@ function scrollAttachments(id, direction) {{
             {
                 MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private string BuildAttachmentsHtml(JsonElement fields, string issueKey)
+        {
+            if (!fields.TryGetProperty("attachment", out var attachments) || attachments.ValueKind != JsonValueKind.Array || attachments.GetArrayLength() == 0)
+                return "<div class='no-attachments'>No attachments found.</div>";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("<details open><summary>Attachments</summary><section>");
+            sb.AppendLine("<div class='attachments-wrapper'>");
+            sb.AppendLine("<button class='scroll-btn' onclick='scrollStrip(-1)'>&lt;</button>");
+            sb.AppendLine("<div class='attachments-strip' id='attachmentStrip'>");
+
+            foreach (var att in attachments.EnumerateArray())
+            {
+                string filename = att.TryGetProperty("filename", out var fn) ? fn.GetString() ?? "" : "";
+                string mimeType = att.TryGetProperty("mimeType", out var mt) ? mt.GetString() ?? "" : "";
+                string created = att.TryGetProperty("created", out var cr) ? cr.GetString() ?? "" : "";
+                string author = att.TryGetProperty("author", out var au) && au.TryGetProperty("displayName", out var dn) ? dn.GetString() ?? "" : "";
+                string size = att.TryGetProperty("size", out var sz) ? sz.GetInt64().ToString("N0") : "";
+                string contentUrl = att.TryGetProperty("content", out var cu) ? cu.GetString() ?? "" : "";
+
+                // Try to inline preview for images
+                string previewHtml = "";
+                if (mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        using var client = new HttpClient();
+                        client.BaseAddress = new Uri(jiraBaseUrl);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        using var response = client.GetAsync(contentUrl).Result;
+                        response.EnsureSuccessStatusCode();
+                        var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
+                        string base64 = Convert.ToBase64String(imageBytes);
+                        previewHtml = $"<a href='#' class='preview-image' data-src='data:{mimeType};base64,{base64}'><img src='data:{mimeType};base64,{base64}' style='max-width:80px;max-height:80px;border-radius:4px;border:1px solid #ccc;' /></a>";
+                    }
+                    catch
+                    {
+                        previewHtml = "<div style='color:red;'>Image preview failed</div>";
+                    }
+                }
+
+                sb.AppendLine($@"
+<div class='attachment-card'>
+    {previewHtml}
+    <div class='attachment-filename'>{WebUtility.HtmlEncode(filename)}</div>
+    <div class='attachment-meta'>Type: {WebUtility.HtmlEncode(mimeType)}<br/>By: {WebUtility.HtmlEncode(author)}<br/>Size: {size} bytes<br/>Created: {WebUtility.HtmlEncode(created)}</div>
+    <a href='#' class='download-btn' data-filepath='{contentUrl}'>Download</a>
+</div>");
+            }
+
+            sb.AppendLine("</div>");
+            sb.AppendLine("<button class='scroll-btn' onclick='scrollStrip(1)'>&gt;</button>");
+            sb.AppendLine("</div>");
+            sb.AppendLine("</section></details>");
+            return sb.ToString();
+        }
+
+        private string BuildLinksTable(JsonElement fields, string title, string linkType, string prop)
+        {
+            var sb = new StringBuilder();
+            int matchCount = 0;
+
+            sb.AppendLine($"<div class='subsection'><h4>{title}</h4>");
+
+            if (fields.TryGetProperty("issuelinks", out var links))
+            {
+                var tableRows = new StringBuilder();
+
+                foreach (var link in links.EnumerateArray())
+                {
+                    if (link.TryGetProperty("type", out var typeProp) &&
+                        typeProp.TryGetProperty("name", out var nameProp) &&
+                        nameProp.GetString() == linkType)
+                    {
+                        JsonElement issueElem = default;
+
+                        if (prop == null)
+                        {
+                            if (!link.TryGetProperty("inwardIssue", out issueElem))
+                                issueElem = link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
+                        }
+                        else
+                        {
+                            link.TryGetProperty(prop, out issueElem);
+                        }
+
+                        if (issueElem.ValueKind == JsonValueKind.Object)
+                        {
+                            var key = issueElem.GetProperty("key").GetString() ?? "";
+                            var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
+
+                            TreeNode foundNode = FindNodeByKey(tree.Nodes, key);
+                            string iconImgInner = "";
+                            if (foundNode != null &&
+                                !string.IsNullOrEmpty(foundNode.ImageKey) &&
+                                tree.ImageList != null &&
+                                tree.ImageList.Images.ContainsKey(foundNode.ImageKey))
+                            {
+                                using var ms = new MemoryStream();
+                                tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                                var base64 = Convert.ToBase64String(ms.ToArray());
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:28px; vertical-align:middle; margin-right:6px;' />";
+                            }
+
+                            tableRows.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                            matchCount++;
+                        }
+                    }
+                }
+
+                if (matchCount > 0)
+                {
+                    sb.AppendLine("<table><tbody>");
+                    sb.Append(tableRows);
+                    sb.AppendLine("</tbody></table>");
+                }
+                else
+                {
+                    sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
+                }
+            }
+            else
+            {
+                sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
+            }
+
+            sb.AppendLine("</div>");
+            return sb.ToString();
         }
 
         public static string BuildHistoryHtml(JsonElement root)
@@ -2647,7 +2628,7 @@ function showDiffOverlay(from, to) {
             return sb.ToString();
         }
 
-        public string BuildIssueHtml(
+        public string BuildIssueDetailFullPageHtml(
     string headerLine,
     string issueType,
     string statusIcon,

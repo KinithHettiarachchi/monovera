@@ -392,34 +392,40 @@ public class JiraService
         return client;
     }
 
-    public async Task UpdateSequenceFieldAsync(string issueKey, int sequence)
+    public async Task<object> UpdateSequenceFieldAsync(string issueKey, int sequence)
     {
-       // MessageBox.Show($"Update sequence of {issueKey} to {sequence}");
-
-        var dashIndex = issueKey.IndexOf('-');
-        if (dashIndex < 1)
-            throw new ArgumentException("Invalid issue key format.", nameof(issueKey));
-        var keyPrefix = issueKey.Substring(0, dashIndex);
-
-        var projectConfig = config?.Projects?
-            .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
-        if (projectConfig == null)
-            throw new InvalidOperationException($"Project config not found for issue key prefix: {keyPrefix}");
-
-        var sortingField = projectConfig.SortingField;
-        if (string.IsNullOrWhiteSpace(sortingField))
-            throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
-
-        // If it's a custom field, get the user-friendly name
-        string fieldName = sortingField;
-        if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            fieldName = await GetCustomFieldNameAsync(sortingField);
-        }
+            var dashIndex = issueKey.IndexOf('-');
+            if (dashIndex < 1)
+                throw new ArgumentException("Invalid issue key format.", nameof(issueKey));
+            var keyPrefix = issueKey.Substring(0, dashIndex);
 
-        var issue = await jira.Issues.GetIssueAsync(issueKey);
-        issue[fieldName] = sequence.ToString();
-        await issue.SaveChangesAsync();
+            var projectConfig = config?.Projects?
+                .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+            if (projectConfig == null)
+                throw new InvalidOperationException($"Project config not found for issue key prefix: {keyPrefix}");
+
+            var sortingField = projectConfig.SortingField;
+            if (string.IsNullOrWhiteSpace(sortingField))
+                throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
+
+            string fieldName = sortingField;
+            if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = await GetCustomFieldNameAsync(sortingField);
+            }
+
+            var issue = await jira.Issues.GetIssueAsync(issueKey);
+            issue[fieldName] = sequence.ToString();
+            await issue.SaveChangesAsync();
+
+            return new { Success = true };
+        }
+        catch (Exception ex)
+        {
+            return new { Success = false, Error = ex.Message };
+        }
     }
 
     private static Dictionary<string, string> customFieldIdToNameCache = new();
