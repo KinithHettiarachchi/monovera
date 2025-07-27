@@ -344,42 +344,67 @@ public class JiraService
     {
         var client = GetJiraClient();
 
-        // 1. Get all issue links for child issue
-        var response = await client.GetAsync($"{jiraBaseUrl}/rest/api/2/issue/{childKey}");
-        var json = JObject.Parse(await response.Content.ReadAsStringAsync());
-
-        var links = json["fields"]?["issuelinks"] as JArray;
-        if (links != null)
+        try
         {
-            foreach (var link in links)
+            // 1. Get all issue links for child issue
+            var response = await client.GetAsync($"{jiraBaseUrl}/rest/api/2/issue/{childKey}");
+            if (!response.IsSuccessStatusCode)
+                throw new InvalidOperationException($"Failed to fetch issue '{childKey}' from Jira. Status: {response.StatusCode}");
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+
+            var links = json["fields"]?["issuelinks"] as JArray;
+            bool linkTypeFound = false;
+            if (links != null)
             {
-                var typeName = link["type"]?["name"]?.ToString();
-                var inwardIssue = link["inwardIssue"]?["key"]?.ToString();
-                var outwardIssue = link["outwardIssue"]?["key"]?.ToString();
-
-                bool match = typeName?.Equals(linkTypeName, StringComparison.OrdinalIgnoreCase) == true &&
-                             (inwardIssue == oldParentKey);
-
-                if (match && link["id"] != null)
+                foreach (var link in links)
                 {
-                    string linkId = link["id"]!.ToString();
-                    await client.DeleteAsync($"{jiraBaseUrl}/rest/api/2/issueLink/{linkId}");
+                    var typeName = link["type"]?["name"]?.ToString();
+                    var inwardIssue = link["inwardIssue"]?["key"]?.ToString();
+
+                    if (typeName?.Equals(linkTypeName, StringComparison.OrdinalIgnoreCase) == true)
+                        linkTypeFound = true;
+
+                    bool match = typeName?.Equals(linkTypeName, StringComparison.OrdinalIgnoreCase) == true &&
+                                 (inwardIssue == oldParentKey);
+
+                    if (match && link["id"] != null)
+                    {
+                        string linkId = link["id"]!.ToString();
+                        var delResponse = await client.DeleteAsync($"{jiraBaseUrl}/rest/api/2/issueLink/{linkId}");
+                        if (!delResponse.IsSuccessStatusCode)
+                            throw new InvalidOperationException($"Failed to delete old parent link for issue '{childKey}'. Status: {delResponse.StatusCode}");
+                    }
                 }
             }
-        }
 
-        // 2. Create new link (parent = inward, child = outward)
-        if (!string.IsNullOrWhiteSpace(newParentKey))
-        {
-            var payload = new
+            // If the link type is not found in Jira, throw an error
+            if (!string.IsNullOrWhiteSpace(linkTypeName) && !linkTypeFound)
+                throw new InvalidOperationException(
+                    $"The link type '{linkTypeName}' specified in configuration does not exist in Jira for issue '{childKey}'.\n" +
+                    $"Please check your configuration and Jira link types.");
+
+            // 2. Create new link (parent = inward, child = outward)
+            if (!string.IsNullOrWhiteSpace(newParentKey))
             {
-                type = new { name = linkTypeName },
-                inwardIssue = new { key = newParentKey },
-                outwardIssue = new { key = childKey }
-            };
+                var payload = new
+                {
+                    type = new { name = linkTypeName },
+                    inwardIssue = new { key = newParentKey },
+                    outwardIssue = new { key = childKey }
+                };
 
-            var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), System.Text.Encoding.UTF8, "application/json");
-            await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+                var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), System.Text.Encoding.UTF8, "application/json");
+                var postResponse = await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+                if (!postResponse.IsSuccessStatusCode)
+                    throw new InvalidOperationException(
+                        $"Failed to create new parent link for issue '{childKey}' with link type '{linkTypeName}'. Status: {postResponse.StatusCode}");
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Error updating parent link for issue '{childKey}'.\nDetails: {ex.Message}", ex);
         }
     }
 
@@ -392,39 +417,41 @@ public class JiraService
         return client;
     }
 
-    public async Task<object> UpdateSequenceFieldAsync(string issueKey, int sequence)
+    public async Task UpdateSequenceFieldAsync(string issueKey, int sequence)
     {
+        var dashIndex = issueKey.IndexOf('-');
+        if (dashIndex < 1)
+            throw new ArgumentException("Invalid issue key format.", nameof(issueKey));
+        var keyPrefix = issueKey.Substring(0, dashIndex);
+
+        var projectConfig = config?.Projects?
+            .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+        if (projectConfig == null)
+            throw new InvalidOperationException($"Project config not found for issue key prefix: {keyPrefix}");
+
+        var sortingField = projectConfig.SortingField;
+        if (string.IsNullOrWhiteSpace(sortingField))
+            throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
+
+        string fieldName = sortingField;
+        if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
+        {
+            fieldName = await GetCustomFieldNameAsync(sortingField);
+        }
+
+        var issue = await jira.Issues.GetIssueAsync(issueKey);
+
         try
         {
-            var dashIndex = issueKey.IndexOf('-');
-            if (dashIndex < 1)
-                throw new ArgumentException("Invalid issue key format.", nameof(issueKey));
-            var keyPrefix = issueKey.Substring(0, dashIndex);
-
-            var projectConfig = config?.Projects?
-                .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
-            if (projectConfig == null)
-                throw new InvalidOperationException($"Project config not found for issue key prefix: {keyPrefix}");
-
-            var sortingField = projectConfig.SortingField;
-            if (string.IsNullOrWhiteSpace(sortingField))
-                throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
-
-            string fieldName = sortingField;
-            if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
-            {
-                fieldName = await GetCustomFieldNameAsync(sortingField);
-            }
-
-            var issue = await jira.Issues.GetIssueAsync(issueKey);
             issue[fieldName] = sequence.ToString();
             await issue.SaveChangesAsync();
-
-            return new { Success = true };
         }
         catch (Exception ex)
         {
-            return new { Success = false, Error = ex.Message };
+            // This will be caught by the calling code in frmMain.cs
+            throw new InvalidOperationException(
+                $"The field '{fieldName}' specified in configuration does not exist in Jira for issue '{issueKey}'.\n" +
+                $"Please check your configuration and Jira custom fields.\n\nDetails: {ex.Message}", ex);
         }
     }
 
@@ -508,6 +535,30 @@ public class JiraService
         {
             MessageBox.Show(ex.Message);
             return null;
+        }
+    }
+
+    public async Task LinkRelatedIssuesAsync(string baseKey, List<string> relatedKeys)
+    {
+        var client = GetJiraClient();
+        string linkTypeName = "Relates"; // Always use "Relates" for related links
+
+        foreach (var relatedKey in relatedKeys)
+        {
+            var payload = new
+            {
+                type = new { name = linkTypeName },
+                inwardIssue = new { key = baseKey },
+                outwardIssue = new { key = relatedKey }
+            };
+
+            var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
+            var response = await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to link issue '{relatedKey}' as related to '{baseKey}'. Status: {response.StatusCode}");
+            }
         }
     }
 

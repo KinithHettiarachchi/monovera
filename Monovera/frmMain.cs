@@ -1,27 +1,28 @@
-﻿using System.Net.Http.Headers;
-using System.Text.Json;
-using System.Text;
+﻿using Microsoft.VisualBasic;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
+using SharpSvn;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO.Packaging;
 using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Policy;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Text.RegularExpressions;
 using System.Web;
-using SharpSvn;
-using Microsoft.Web.WebView2.WinForms;
-using Microsoft.Web.WebView2.Core;
-using System.Drawing.Drawing2D;
-using System.Xml.Linq;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
-using System.Drawing;
 using System.Windows.Forms; 
-using System.Diagnostics;
+using System.Xml.Linq;
 using static System.Net.Mime.MediaTypeNames;
-using System.Security.Policy;
-using System.Drawing;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-using System.Drawing.Text;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using Font = System.Drawing.Font;
-using System.Globalization;
-using System.Text.RegularExpressions;
-using Microsoft.VisualBasic;
 
 namespace Monovera
 {
@@ -386,28 +387,64 @@ namespace Monovera
             // Capture old parent key before removing
             string oldParentKey = nodeToMove.Parent?.Tag as string;
 
-            // Remove from old parent
-            if (nodeToMove.Parent != null)
-                nodeToMove.Parent.Nodes.Remove(nodeToMove);
-            else
-                tree.Nodes.Remove(nodeToMove);
-
-            targetNode.Nodes.Add(nodeToMove);
-            targetNode.Expand();
+            tree.Enabled = false; // Disable tree to prevent further interaction during operation
 
             string newParentKey = targetNode.Tag as string;
             string movedKey = nodeToMove.Tag as string;
             string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
-            await jiraService.UpdateParentLinkAsync(movedKey, oldParentKey, newParentKey, linkTypeName);
+
+
+            tree.Enabled = false; // Disable tree during operation
+
+            try
+            {
+                await jiraService.UpdateParentLinkAsync(movedKey, oldParentKey, newParentKey, linkTypeName);
+                // Remove from old parent
+                if (nodeToMove.Parent != null)
+                    nodeToMove.Parent.Nodes.Remove(nodeToMove);
+                else
+                    tree.Nodes.Remove(nodeToMove);
+
+                targetNode.Nodes.Add(nodeToMove);
+                targetNode.Expand();
+                tree.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    ex.Message,
+                    "Jira Link Type Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+
+                // Restore UI state
+                tree.Enabled = true;
+                return;
+            }
 
             // Re-sequence children
+
+            tree.Enabled = false; // Disable tree during operation
+
             for (int i = 0; i < targetNode.Nodes.Count; i++)
             {
                 string siblingKey = targetNode.Nodes[i].Tag as string;
                 int sequence = i + 1;
-                await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
-            }
+                
+                try
+                {
+                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+                    tree.Enabled = true;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
+                    tree.Enabled = true;
+                    return;
+                }
+            }
+                      
             tree.SelectedNode = nodeToMove;
         }
 
@@ -458,18 +495,31 @@ namespace Monovera
             if (newIndex < 0 || newIndex >= siblings.Count)
                 return;
 
-            tree.Enabled= false;
-
             // Remove and insert at new position
             siblings.RemoveAt(index);
             siblings.Insert(newIndex, node);
+
+            tree.Enabled= false;
 
             // Update sequence for all siblings
             for (int i = 0; i < siblings.Count; i++)
             {
                 string siblingKey = siblings[i].Tag as string;
                 int sequence = i + 1;
-                await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+                try
+                {
+                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                    // Remove and insert at new position
+                    tree.Enabled = true;
+                    tree.SelectedNode = node;
+                    node.EnsureVisible();
+                    return;
+                }
             }
 
             // Reselect the moved node
@@ -626,9 +676,303 @@ namespace Monovera
 
             if (editorMode)
             {
+                AddLinkRelatedMenu();
                 AddChangeParentMenu();
                 AddCreateIssueMenus();
                 AddUpDownMenus();
+            }
+        }
+
+        private void AddLinkRelatedMenu()
+        {
+            var iconLink = CreateUnicodeIcon("🔗");
+            var linkRelatedMenuItem = new ToolStripMenuItem("Link related...", iconLink);
+            linkRelatedMenuItem.Click += async (s, e) =>
+            {
+                await ShowLinkRelatedDialogAsync();
+            };
+            treeContextMenu.Items.Add(linkRelatedMenuItem);
+        }
+
+        private async Task ShowLinkRelatedDialogAsync()
+        {
+            if (tree.SelectedNode == null) return;
+            string baseKey = tree.SelectedNode.Tag?.ToString();
+            if (string.IsNullOrWhiteSpace(baseKey)) return;
+
+            // Gather all keys and summaries from the tree
+            var allKeys = new List<string>();
+            var keySummaryDict = new Dictionary<string, string>();
+            void CollectKeys(TreeNodeCollection nodes)
+            {
+                foreach (TreeNode node in nodes)
+                {
+                    if (node.Tag is string key && !string.IsNullOrWhiteSpace(key))
+                    {
+                        allKeys.Add(key);
+                        keySummaryDict[key] = node.Text;
+                    }
+                    CollectKeys(node.Nodes);
+                }
+            }
+            CollectKeys(tree.Nodes);
+
+            var dlg = new Form
+            {
+                Text = $"Link related issues to {baseKey}",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.Manual,
+                Width = 700,
+                Height = 440,
+                BackColor = Color.Honeydew,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10)
+            };
+
+            // Set dialog location to mouse position
+            var mousePos = Control.MousePosition;
+            dlg.Location = mousePos;
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4,
+                Padding = new Padding(18, 18, 18, 18),
+                BackColor = Color.Honeydew,
+                AutoSize = false
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+
+            var lblTitle = new Label
+            {
+                Text = $"Link related issues to: {baseKey}",
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Dock = DockStyle.Top,
+                Height = 32,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.DarkGreen
+            };
+            layout.Controls.Add(lblTitle, 0, 0);
+
+            // Input + Add button
+            var txtInput = new System.Windows.Forms.TextBox
+            {
+                Font = new Font("Segoe UI", 10),
+                Width = 480,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right
+            };
+            var autoSource = new AutoCompleteStringCollection();
+            autoSource.AddRange(allKeys.ToArray());
+            txtInput.AutoCompleteCustomSource = autoSource;
+            txtInput.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
+            txtInput.AutoCompleteSource = AutoCompleteSource.CustomSource;
+
+            var btnAdd = new System.Windows.Forms.Button
+            {
+                Text = "+",
+                Width = 36,
+                Height = 32,
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                BackColor = Color.White,
+                Margin = new Padding(6, 0, 0, 0)
+            };
+
+            var inputPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                WrapContents = false,
+                Padding = new Padding(0)
+            };
+            inputPanel.Controls.Add(txtInput);
+            inputPanel.Controls.Add(btnAdd);
+            layout.Controls.Add(inputPanel, 0, 1);
+
+            // DataGridView setup
+            var grid = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = true,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                BackgroundColor = Color.White,
+                RowHeadersVisible = false,
+                MultiSelect = false,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    SelectionBackColor = Color.DarkGreen,
+                    SelectionForeColor = Color.White
+                },
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom
+            };
+
+            var colKey = new DataGridViewTextBoxColumn
+            {
+                Name = "KEY",
+                HeaderText = "KEY",
+                Width = 120,
+                FillWeight = 20,
+                MinimumWidth = 100
+            };
+            var colSummary = new DataGridViewTextBoxColumn
+            {
+                Name = "SUMMARY",
+                HeaderText = "SUMMARY",
+                AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill
+            };
+
+            grid.Columns.Add(colKey);
+            grid.Columns.Add(colSummary);
+
+            layout.Controls.Add(grid, 0, 2);
+
+            // Add keys to grid
+            void AddKeysToGrid(string input)
+            {
+                var keys = input.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                .Select(k => k.Trim().ToUpper())
+                                .Distinct();
+
+                foreach (var key in keys)
+                {
+                    if (key == baseKey.ToUpper())
+                    {
+                        MessageBox.Show($"You cannot link {baseKey.ToUpper()} to itself so it will be skipped.", "Validation Failed!", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        continue;
+                    }
+                    if (!allKeys.Contains(key))
+                    {
+                        MessageBox.Show($"The key you specified '{key}' was not found as a valid key to link. This will be skipped.", "Validation Failed!", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        continue;
+                    }
+
+                    var existingRow = grid.Rows.Cast<DataGridViewRow>().FirstOrDefault(r => r.Cells[0].Value?.ToString() == key);
+                    if (existingRow != null)
+                    {
+                        grid.ClearSelection();
+                        existingRow.Selected = true;
+                        grid.FirstDisplayedScrollingRowIndex = existingRow.Index;
+                        continue;
+                    }
+
+                    int rowIndex = grid.Rows.Add(key, keySummaryDict.TryGetValue(key, out var summary) ? summary : "");
+                    grid.ClearSelection();
+                    grid.Rows[rowIndex].Selected = true;
+                    grid.FirstDisplayedScrollingRowIndex = rowIndex;
+                }
+            }
+
+            txtInput.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    AddKeysToGrid(txtInput.Text);
+                    txtInput.Clear();
+                    e.SuppressKeyPress = true;
+                    e.Handled = true; // Prevent dialog from closing
+                }
+            };
+
+            btnAdd.Click += (s, e) =>
+            {
+                AddKeysToGrid(txtInput.Text);
+                txtInput.Clear();
+            };
+
+            grid.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Delete && grid.SelectedRows.Count > 0)
+                {
+                    foreach (DataGridViewRow row in grid.SelectedRows)
+                    {
+                        if (!row.IsNewRow)
+                            grid.Rows.Remove(row);
+                    }
+                    e.Handled = true;
+                }
+            };
+
+            layout.RowStyles.Clear();
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); // Title
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38)); // Input
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Grid
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60)); // Button panel (increased height)
+
+            // Button Panel
+            var buttonPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Top, // Ensures full visibility in TableLayoutPanel
+                Padding = new Padding(0, 8, 0, 0),
+                BackColor = Color.Honeydew,
+                AutoSize = false,
+                Height = 56 // Should match or exceed button height
+            };
+            var btnLink = new System.Windows.Forms.Button
+            {
+                Text = "Link",
+                DialogResult = DialogResult.OK,
+                Width = 100,
+                Height = 40, // Increased height for better visibility
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                BackColor = Color.White
+            };
+            var btnCancel = new System.Windows.Forms.Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Width = 100,
+                Height = 40, // Increased height for better visibility
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.White
+            };
+            buttonPanel.Controls.Add(btnLink);
+            buttonPanel.Controls.Add(btnCancel);
+            layout.Controls.Add(buttonPanel, 0, 3);
+
+            dlg.Controls.Add(layout);
+            //dlg.AcceptButton = btnLink;
+            dlg.CancelButton = btnCancel;
+
+            btnLink.Enter += (s, e) => dlg.AcceptButton = btnLink;
+            txtInput.Enter += (s, e) => dlg.AcceptButton = null;
+
+            if (dlg.ShowDialog(tree) == DialogResult.OK)
+            {
+                var keysToLink = grid.Rows.Cast<DataGridViewRow>()
+                    .Select(r => r.Cells[0].Value?.ToString())
+                    .Where(k => !string.IsNullOrWhiteSpace(k))
+                    .ToList();
+
+                if (keysToLink.Count == 0)
+                {
+                    MessageBox.Show("No issues selected to link.", "Validation", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                tree.Enabled = false;
+                try
+                {
+                    await jiraService.LinkRelatedIssuesAsync(baseKey, keysToLink);
+                    MessageBox.Show("Related issues linked successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, "Jira Link Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    tree.Enabled = true;
+                }
             }
         }
 
@@ -777,7 +1121,24 @@ namespace Monovera
                             linkTypeName = hierarchyLinkTypeName.Split(',')[0];
                         }
 
-                        await jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
+
+                        tree.Enabled = false;
+                        try
+                        {
+                            await jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show(
+                                ex.Message,
+                                "Jira Link Type Error",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Error);
+
+                            // Restore UI state
+                            tree.Enabled = true;
+                            return;
+                        }
 
                         // Move node in tree
                         TreeNode nodeToMove = tree.SelectedNode;
@@ -785,6 +1146,7 @@ namespace Monovera
                         if (newParentNode == null)
                         {
                             MessageBox.Show($"New parent node '{newParentKey}' not found in tree.", "Parent Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            tree.Enabled = false;
                             return;
                         }
 
@@ -796,6 +1158,7 @@ namespace Monovera
 
                         newParentNode.Nodes.Add(nodeToMove);
                         newParentNode.Expand();
+                        tree.Enabled = true;
                         tree.SelectedNode = nodeToMove;
 
                         MessageBox.Show($"Parent of {childKey} changed to {newParentKey}.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
