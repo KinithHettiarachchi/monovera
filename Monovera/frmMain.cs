@@ -57,6 +57,8 @@ namespace Monovera
         /// </summary>
         public static string jiraToken = "";
 
+        public static string jiraUserName = "System";
+
         /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
         /// <summary>Maps issue keys to JiraIssue objects for quick lookup.</summary>
@@ -191,17 +193,20 @@ namespace Monovera
             notifyIcon.Icon = SystemIcons.Information; // You can use your own .ico file if needed
             notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
             notifyIcon.BalloonTipTitle = "Node Not Found!";
+            AppLogger.Log($"Initialize system notification 'Node not found'");
         }
 
         private void ShowTrayNotification(string key)
         {
             string message = $"{key} was not found in the tree. If this belongs to one of loaded projects, please update the hierarchy to view it.";
+            AppLogger.Log($"Display system notification {message}");
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            AppLogger.Log($"Exit application");
             notifyIcon?.Dispose();
             base.OnFormClosing(e);
         }
@@ -288,6 +293,8 @@ namespace Monovera
         /// </summary>
         public frmMain()
         {
+            AppLogger.Log($"Starting application");
+
             InitializeComponent();
             InitializeNotifyIcon();
 
@@ -332,6 +339,7 @@ namespace Monovera
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
+            AppLogger.Log($"Application is ready!");
         }
 
         private TreeNode draggedNode;
@@ -636,6 +644,7 @@ namespace Monovera
         /// </summary>
         private void InitializeContextMenu()
         {
+            AppLogger.Log($"Initializing context menus...");
             // Create the context menu strip
             treeContextMenu = new ContextMenuStrip();
 
@@ -676,10 +685,12 @@ namespace Monovera
 
             if (editorMode)
             {
+                AppLogger.Log($"Editor mode found. Initializing editor context menus...");
                 AddLinkRelatedMenu();
                 AddChangeParentMenu();
                 AddCreateIssueMenus();
                 AddUpDownMenus();
+                AppLogger.Log($"Initialized editor context menus");
             }
         }
 
@@ -1743,7 +1754,8 @@ namespace Monovera
 
             if (isConnected)
             {
-                lblUser.Text = $"    👤 Connected as : {jiraService.GetConnectedUserNameAsync().Result}     ";
+                jiraUserName=jiraService.GetConnectedUserNameAsync().Result;
+                lblUser.Text = $"    👤 Connected as :  {jiraUserName}      ";
             }
             else
             {
@@ -4015,6 +4027,8 @@ function showDiffOverlay(from, to) {
             tabContextMenu.Items.Add(new ToolStripMenuItem("Close All Tabs", CreateIconFromUnicode("🗑"), (s, e) => CloseAllTabs()) { ImageScaling = ToolStripItemImageScaling.None });
 
             tabDetails.MouseUp += TabDetails_MouseUp;
+
+            AppLogger.Log($"Initialized tab context menus");
         }
 
         private void TabDetails_MouseUp(object sender, MouseEventArgs e)

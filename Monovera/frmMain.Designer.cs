@@ -219,6 +219,8 @@
             statusStrip1.ResumeLayout(false);
             statusStrip1.PerformLayout();
             ResumeLayout(false);
+
+            AppLogger.Log($"Initialize GUI components");
         }
 
         #endregion
