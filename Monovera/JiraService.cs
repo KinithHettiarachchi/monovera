@@ -431,18 +431,28 @@ public class JiraService
 
         var sortingField = projectConfig.SortingField;
         if (string.IsNullOrWhiteSpace(sortingField))
-            throw new InvalidOperationException($"Sorting field not set for project with root: {projectConfig.Root}");
+            return; // Skip update if sortingField is empty
 
         string fieldName = sortingField;
-        if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
-        {
-            fieldName = await GetCustomFieldNameAsync(sortingField);
-        }
-
-        var issue = await jira.Issues.GetIssueAsync(issueKey);
 
         try
         {
+            if (sortingField.StartsWith("customfield_", StringComparison.OrdinalIgnoreCase))
+            {
+                fieldName = await GetCustomFieldNameAsync(sortingField);
+            }
+        }
+        catch (Exception ex)
+        {
+            // This will be caught by the calling code in frmMain.cs
+            throw new InvalidOperationException(
+                $"The field '{fieldName}' specified in configuration could not be read for '{issueKey}'.\n" +
+                $"Please check your configuration and Jira custom fields.\n\nDetails: {ex.Message}", ex);
+        }
+
+        try
+        {
+            var issue = await jira.Issues.GetIssueAsync(issueKey);
             issue[fieldName] = sequence.ToString();
             await issue.SaveChangesAsync();
         }
