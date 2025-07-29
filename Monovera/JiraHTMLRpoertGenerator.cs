@@ -70,7 +70,7 @@ public class JiraHtmlReportGenerator
         {
             var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
             html = ReplaceAttachmentImageUrls(html, attachments);
-            html = RewriteImageUrls(html);
+            html = await EmbedImagesInHtmlAsync(html);
 
             issue.RelatedIssueKeys = relatedKeys;
             result.Add((issue, html, level));
@@ -253,6 +253,56 @@ public class JiraHtmlReportGenerator
     }
 
     /// <summary>
+    /// Downloads images referenced in the issue description HTML, replaces their URLs with base64-encoded data URIs.
+    /// </summary>
+    /// <param name="html">HTML description string.</param>
+    /// <returns>HTML with embedded images as base64 data URIs.</returns>
+    private async Task<string> EmbedImagesInHtmlAsync(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return html;
+
+        // Regex to find <img src="...">
+        var pattern = "<img\\s+[^>]*src=[\"']([^\"']+)[\"'][^>]*>";
+        var matches = Regex.Matches(html, pattern, RegexOptions.IgnoreCase);
+
+        foreach (Match match in matches)
+        {
+            var src = match.Groups[1].Value;
+            if (string.IsNullOrWhiteSpace(src))
+                continue;
+
+            try
+            {
+                // Handle relative URLs
+                string imageUrl = src.StartsWith("/") ? jiraBaseUrl.TrimEnd('/') + src : src;
+
+                // Download image with Jira authentication
+                var authToken = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                var response = await client.GetAsync(imageUrl);
+                if (!response.IsSuccessStatusCode)
+                    continue;
+
+                var imageBytes = await response.Content.ReadAsByteArrayAsync();
+                var contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+                var base64 = Convert.ToBase64String(imageBytes);
+                var dataUri = $"data:{contentType};base64,{base64}";
+
+                // Replace src in HTML with base64 data URI
+                html = html.Replace(src, dataUri);
+            }
+            catch
+            {
+                // Ignore image download errors, keep original src
+            }
+        }
+
+        return html;
+    }
+    /// <summary>
     /// Creates the final HTML report file from the collected issues.
     /// Includes a table of contents, collapsible sections, and related issues.
     /// </summary>
@@ -260,10 +310,18 @@ public class JiraHtmlReportGenerator
     /// <returns>Path to the generated HTML file.</returns>
     private async Task<string> CreateHtmlReport(List<(JiraIssue issue, string html, string number)> issues)
     {
-        string filename = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), $"{issues[0].issue.Key}_Report.html");
+        // Get application base directory
+        string appDir = AppDomain.CurrentDomain.BaseDirectory;
+        string reportsDir = Path.Combine(appDir, "reports");
+        Directory.CreateDirectory(reportsDir);
+
+        // Build filename: Report_issue key_YYYYMMDDHHMMSS.html
+        string issueKey = issues[0].issue.Key;
+        string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
+        string filename = Path.Combine(reportsDir, $"Report_{issueKey}_{timestamp}.html");
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Monovera Report - {issues[0].issue.Key}</title>");
+        sb.AppendLine($"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report [{issues[0].issue.Key}]</title>");
 
         var css = @"
 body {
@@ -398,7 +456,7 @@ pre[class*='language-'] {
         sb.AppendLine("</style>");
 
         // Generate table of contents (TOC) with outline numbers
-        sb.AppendLine($"<h1>Monovera Report - {issues[0].issue.Summary} [{issues[0].issue.Key}]</h1>");
+        sb.AppendLine($"<h1>{issues[0].issue.Summary} [{issues[0].issue.Key}]</h1>");
         sb.AppendLine("<ul>");
 
         int previousLevel = 0;

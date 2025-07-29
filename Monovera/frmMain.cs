@@ -308,7 +308,7 @@ namespace Monovera
 
             // Initialize context menu for tree
             InitializeContextMenu();
-            //SetupSpinMessages();
+            SetupSpinMessages();
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -539,33 +539,36 @@ namespace Monovera
             node.EnsureVisible();
         }
 
-//        private System.Windows.Forms.Timer marqueeTimer;
-//        private string[] messages = new[]
-//{
-//    "💡 Ctrl + Q = Load search dialog",
-//    "💡 Ctrl + P = Generate report",
-//    "💡 Ctrl + Shift + Z = Read selected text aloud",
-//    "(Press after clicking tree area)"
-//};
+        private System.Windows.Forms.Timer marqueeTimer;
+        private string[] messages = new[]
+                                        {
+                                            "💡 M O N O V E R A Tips!",
+                                            "💡 Ctrl + Click a tree node to reload detail",
+                                            "💡 Right Click a tree node to get context menu",
+                                            "💡 Ctrl + Q = Open search dialog",
+                                            "💡 Ctrl + P = Generate report",
+                                            "💡 Ctrl + R = Read selected text aloud",
+                                            "💡 For all shortcuts, press after clicking tree area"
+                                        };
 
-//        private int currentIndex = 0;
-//        private System.Timers.Timer spinTimer;
+        private int currentIndex = 0;
+        private System.Timers.Timer spinTimer;
 
-//        private void SetupSpinMessages()
-//        {
-//            marqueeTimer = new System.Windows.Forms.Timer();
-//            marqueeTimer.Interval = 3000; // 3 seconds per message, adjust as you want
-//            marqueeTimer.Tick += SpinTimer_Tick;
-//            marqueeTimer.Start();
+        private void SetupSpinMessages()
+        {
+            marqueeTimer = new System.Windows.Forms.Timer();
+            marqueeTimer.Interval = 5000; // 3 seconds per message, adjust as you want
+            marqueeTimer.Tick += SpinTimer_Tick;
+            marqueeTimer.Start();
 
-//            lblShortcuts.Text = messages[0]; // show first immediately
-//        }
+            lblShortcuts.Text = messages[0]; // show first immediately
+        }
 
-//        private void SpinTimer_Tick(object? sender, EventArgs e)
-//        {
-//            currentIndex = (currentIndex + 1) % messages.Length;
-//            lblShortcuts.Text = messages[currentIndex];
-//        }
+        private void SpinTimer_Tick(object? sender, EventArgs e)
+        {
+            currentIndex = (currentIndex + 1) % messages.Length;
+            lblShortcuts.Text = messages[currentIndex];
+        }
 
 
         /// <summary>
@@ -583,7 +586,7 @@ namespace Monovera
                 e.SuppressKeyPress = true;
                 GenerateReport();
             }
-            else if (e.Control && e.Shift && e.KeyCode == Keys.Z)
+            else if (e.Control && e.KeyCode == Keys.R)
             {
                 e.SuppressKeyPress = true;
                 await SpeakSelectedTextOnActiveTabAsync();

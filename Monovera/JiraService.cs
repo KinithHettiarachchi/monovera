@@ -147,6 +147,9 @@ public class JiraService
             bool canEdit = permissions.TryGetProperty("EDIT_ISSUES", out var edit)
                            && edit.GetProperty("havePermission").GetBoolean();
 
+            AppLogger.Log($"Create permission for project '{projectKey}' is {canCreate}");
+            AppLogger.Log($"Edit permission for project '{projectKey}' is {canEdit}");
+
             return new WritePermissionsResult
             {
                 CanCreateIssues = canCreate,
