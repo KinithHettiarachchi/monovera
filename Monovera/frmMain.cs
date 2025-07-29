@@ -79,6 +79,7 @@ namespace Monovera
 
         /// <summary>Tab control for displaying issue details and other pages.</summary>
         private TabControl tabDetails;
+
         /// <summary>Application directory path.</summary>
         string appDir = "";
         /// <summary>Temporary directory path for storing files.</summary>
@@ -328,6 +329,9 @@ namespace Monovera
             InitializeTabContextMenu();
             EnableTabDragDrop();
 
+            tree.DrawMode = TreeViewDrawMode.OwnerDrawText;
+            tree.DrawNode += Tree_DrawNode;
+
             // Tree mouse event for context menu
             if (editorMode)
             {
@@ -346,6 +350,33 @@ namespace Monovera
         }
 
         private TreeNode draggedNode;
+
+        private void Tree_DrawNode(object sender, DrawTreeNodeEventArgs e)
+        {
+            var tree = sender as System.Windows.Forms.TreeView;
+            bool isSelected = (e.State & TreeNodeStates.Selected) == TreeNodeStates.Selected;
+
+            // Set background color
+            Color backColor = isSelected ? Color.LightGreen : tree.BackColor;
+            using (var bgBrush = new SolidBrush(backColor))
+            {
+                e.Graphics.FillRectangle(bgBrush, e.Bounds);
+            }
+
+            // Set font style
+            Font nodeFont = isSelected ? new Font(e.Node.NodeFont ?? tree.Font, FontStyle.Underline) : (e.Node.NodeFont ?? tree.Font);
+            TextRenderer.DrawText(
+                e.Graphics,
+                e.Node.Text,
+                nodeFont,
+                e.Bounds,
+                tree.ForeColor,
+                TextFormatFlags.GlyphOverhangPadding | TextFormatFlags.VerticalCenter
+            );
+
+            // Prevent default highlight
+            e.DrawDefault = false;
+        }
 
         private void tree_ItemDrag(object sender, ItemDragEventArgs e)
         {
