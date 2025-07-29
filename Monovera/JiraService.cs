@@ -98,6 +98,69 @@ public class JiraService
     }
 
     /// <summary>
+    /// Represents the result of a Jira project permission check for the current user.
+    /// Indicates whether the user can create issues and/or edit issues in the specified project.
+    /// </summary>
+    public class WritePermissionsResult
+    {
+        public bool CanCreateIssues { get; set; }
+        public bool CanEditIssues { get; set; }
+    }
+
+    /// <summary>
+    /// Checks the current user's permissions for creating and editing issues in a specified Jira project.
+    /// Uses the Jira REST API to query "CREATE_ISSUES" and "EDIT_ISSUES" permissions.
+    /// Returns a <see cref="WritePermissionsResult"/> indicating the user's capabilities.
+    /// Logs any errors encountered during the permission check.
+    /// </summary>
+    /// <param name="projectKey">The key of the Jira project to check permissions for (e.g., "PROJECT1").</param>
+    /// <returns>
+    /// A <see cref="WritePermissionsResult"/> object containing the create and edit permission flags,
+    /// or null if the permission check fails.
+    /// </returns>
+    public async Task<WritePermissionsResult?> GetWritePermissionsAsync(string projectKey)
+    {
+        try
+        {
+            using var client = new HttpClient();
+            client.BaseAddress = new Uri(jiraBaseUrl);
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
+            );
+
+            string permissionsToCheck = "CREATE_ISSUES,EDIT_ISSUES";
+            var response = await client.GetAsync($"/rest/api/3/mypermissions?projectKey={projectKey}&permissions={permissionsToCheck}");
+
+            if (!response.IsSuccessStatusCode)
+            {
+                AppLogger.Log($"Permission check failed with status {response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+                return null;
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var permissions = doc.RootElement.GetProperty("permissions");
+
+            bool canCreate = permissions.TryGetProperty("CREATE_ISSUES", out var create)
+                             && create.GetProperty("havePermission").GetBoolean();
+
+            bool canEdit = permissions.TryGetProperty("EDIT_ISSUES", out var edit)
+                           && edit.GetProperty("havePermission").GetBoolean();
+
+            return new WritePermissionsResult
+            {
+                CanCreateIssues = canCreate,
+                CanEditIssues = canEdit
+            };
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Log($"Failed to check write permissions for project '{projectKey}': {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Gets all Jira issues for a given project using raw JQL.
     /// Optionally loads from cache unless forceSync is true.
     /// Progress is reported via the progressUpdate callback.

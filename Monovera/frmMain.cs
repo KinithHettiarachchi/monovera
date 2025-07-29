@@ -125,6 +125,9 @@ namespace Monovera
             public Dictionary<string, string> Types { get; set; }
             /// <summary>Maps status names to icon filenames.</summary>
             public Dictionary<string, string> Status { get; set; }
+
+            public bool HasCreatePermission { get; set; }
+            public bool HasEditPermission { get; set; }
         }
 
         /// <summary>
@@ -692,6 +695,33 @@ namespace Monovera
                 AddUpDownMenus();
                 AppLogger.Log($"Initialized editor context menus");
             }
+
+            treeContextMenu.Opening += (s, e) =>
+            {
+                var node = tree.SelectedNode;
+                if (node == null) return;
+
+                // Find project config for this node
+                string key = node.Tag?.ToString();
+                var projectConfig = config.Projects.FirstOrDefault(p => key != null && key.StartsWith(p.Root.Split("-")[0], StringComparison.OrdinalIgnoreCase));
+                bool canCreate = projectConfig?.HasCreatePermission ?? false;
+                bool canModify = projectConfig?.HasEditPermission ?? false;
+
+                // Enable/disable create menu items based on permission
+                foreach (ToolStripItem item in treeContextMenu.Items)
+                {
+                    if (item.Text.StartsWith("Add Child") 
+                    || item.Text.StartsWith("Add Sibling")) {
+                        item.Enabled = canCreate;
+                    } 
+                    else if (item.Text.StartsWith("Link related") 
+                    || item.Text.StartsWith("Change Parent") 
+                    || item.Text.StartsWith("Move Up") 
+                    || item.Text.StartsWith("Move Down")) { 
+                        item.Enabled = canModify;
+                    }
+                }
+            };
         }
 
         private void AddLinkRelatedMenu()
@@ -1756,6 +1786,23 @@ namespace Monovera
             {
                 jiraUserName=jiraService.GetConnectedUserNameAsync().Result;
                 lblUser.Text = $"    👤 Connected as :  {jiraUserName}      ";
+
+                foreach (var project in config.Projects)
+                {
+                    // Extract the project key prefix from the Root property (e.g., "MON" from "MON-123")
+                    string rootKeyPrefix = project.Root?.Split('-')[0];
+                    if (string.IsNullOrWhiteSpace(rootKeyPrefix))
+                    {
+                        project.HasCreatePermission = false;
+                        project.HasEditPermission = false;
+                        continue;
+                    }
+
+                    var permissions = await jiraService.GetWritePermissionsAsync(rootKeyPrefix);
+                    project.HasCreatePermission = permissions?.CanCreateIssues == true;
+                    project.HasEditPermission = permissions?.CanEditIssues == true;
+                }
+
             }
             else
             {
@@ -1788,7 +1835,7 @@ namespace Monovera
       ""Project"": ""PROJECT1"",
       ""Root"": ""PRJ1-100"",
       ""LinkTypeName"": ""Blocks"",
-      ""SortingField"": ""created"",
+      ""SortingField"": """",
       ""Types"": {
         ""Project"": ""type_project.png"",
         ""Rule"": ""type_rule.png"",

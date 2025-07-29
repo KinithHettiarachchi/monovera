@@ -84,5 +84,8 @@ namespace Monovera
         /// Used for displaying status icons in the UI.
         /// </summary>
         public Dictionary<string, string> Status { get; set; } = new();
+
+        public bool HasCreatePermission { get; set; }
+        public bool HasEditPermission { get; set; }
     }
 }
