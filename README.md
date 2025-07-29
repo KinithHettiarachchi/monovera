@@ -48,6 +48,10 @@ Monovera helps teams gain **deep insights into requirements** — without clicki
 
 - 🔊 **Text to Speech***  
   Read a selection of a text out loud so the user can listen to it while reading.
+
+- ✏️ **Create New Issues***  
+  Create new issues as childrent or siblings of an existing issues from within the Monovera GUI
+  If the `SortingField` is defined in the configuration.json then the desired order of issues can also be retained in the hierarchy.
 ---
 
 ## ⚙️ Quick Configuration
