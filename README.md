@@ -48,6 +48,10 @@ Monovera helps teams gain **deep insights into requirements** — without clicki
 
 - 🔊 **Text to Speech***  
   Read a selection of a text out loud so the user can listen to it while reading.
+
+- ✏️ **Create New Issues***  
+  Create new issues as childrent or siblings of an existing issues from within the Monovera GUI.
+  If the `SortingField` is defined in the configuration.json then the desired order of issues can also be retained in the hierarchy.
 ---
 
 ## ⚙️ Quick Configuration
@@ -66,7 +70,7 @@ Create a file named `configuration.json` in the app directory:
       "Project": "PROJ1",
       "Root": "PROJ1-100",
       "LinkTypeName": "Blocks",
-      "SortingField": "created",
+      "SortingField": "customfield_10091",
       "Types": {
         "Story": "story_icon.png",
         "Bug": "bug_icon.png"
@@ -83,6 +87,7 @@ Create a file named `configuration.json` in the app directory:
 💡 **Tips**:  
 - `Types` and `Status` sections let you define custom icons.  
 - Place all icons in an `images/` folder within your application directory.
+- Define a custom field as a number field and use that field's name as `SortingField` to keep your nodes in a given order in the tree.  
 
 🔒 **Note**: Your credentials are stored locally and never transmitted or logged externally.
 
