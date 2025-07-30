@@ -185,7 +185,7 @@ public class JiraService
         string linkTypeName = "Blocks",
         bool forceSync = false,
         Action<int, int, double> progressUpdate = null,
-        int maxParallelism = 5)
+        int maxParallelism = 15)
     {
         AppLogger.Log($"Getting all issues for project {projectKey}, forceSync={forceSync}");
         string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{projectKey}.json");

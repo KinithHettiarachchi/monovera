@@ -2959,130 +2959,362 @@ namespace Monovera
                 !changelog.TryGetProperty("histories", out var histories))
                 return "";
 
-            var grouped = histories.EnumerateArray()
-                .Select(h =>
+            var changes = new List<string>();
+            int changeId = 0;
+
+            foreach (var h in histories.EnumerateArray())
+            {
+                var createdRaw = h.GetProperty("created").GetString();
+                if (!DateTime.TryParse(createdRaw, out var created))
+                    continue;
+
+                var createdStr = created.ToString("yyyy-MM-dd");
+                var timeStr = created.ToString("HH:mm");
+
+                var author = h.TryGetProperty("author", out var authorProp) &&
+                             authorProp.TryGetProperty("displayName", out var displayNameProp)
+                             ? displayNameProp.GetString() ?? ""
+                             : "";
+
+                foreach (var item in h.GetProperty("items").EnumerateArray())
                 {
-                    var createdRaw = h.GetProperty("created").GetString();
-                    if (!DateTime.TryParse(createdRaw, out var created))
-                        created = DateTime.MinValue;
+                    var field = item.GetProperty("field").GetString();
+                    var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
+                    var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
 
-                    var author = "";
-                    if (h.TryGetProperty("author", out var authorProp) &&
-                        authorProp.TryGetProperty("displayName", out var displayNameProp))
-                        author = displayNameProp.GetString() ?? "";
-
-                    var items = h.GetProperty("items").EnumerateArray()
-                        .Select(item =>
-                        {
-                            var field = item.GetProperty("field").GetString();
-                            var from = item.TryGetProperty("fromString", out var fromVal) ? fromVal.GetString() ?? "null" : "null";
-                            var to = item.TryGetProperty("toString", out var toVal) ? toVal.GetString() ?? "null" : "null";
-
-                            string icon = field?.ToLower() switch
-                            {
-                                "status" => "🟢",
-                                "assignee" => "👤",
-                                "priority" => "⚡",
-                                "summary" => "📝",
-                                "description" => "📄",
-                                _ => "🔧"
-                            };
-
-                            string highlight = field?.ToLower() switch
-                            {
-                                "status" => "highlight-status",
-                                "assignee" => "highlight-assignee",
-                                "priority" => "highlight-priority",
-                                _ => ""
-                            };
-
-                            string inlineDiff = DiffText(from, to); // assumes you have this method
-                            string fromEsc = HttpUtility.JavaScriptStringEncode(from);
-                            string toEsc = HttpUtility.JavaScriptStringEncode(to);
-
-                            string sideBySideButton = $@"<button class='view-diff-btn' onclick=""showDiffOverlay('{fromEsc}', '{toEsc}')"">🔍 View</button>";
-
-                            return $@"<li class='history-item {highlight}'>{icon} <strong>{HttpUtility.HtmlEncode(field)}</strong>: 
-<span class='from-val'>{inlineDiff}</span> {sideBySideButton}</li>";
-                        });
-
-                    return new
+                    string fieldIcon = field?.ToLower() switch
                     {
-                        Day = created.Date,
-                        Html = $@"
-<div class='history-block'>
-    <div class='change-header'>{created:HH:mm} by <strong>{HttpUtility.HtmlEncode(author)}</strong></div>
-    <ul>{string.Join("", items)}</ul>
-</div>"
+                        "status" => "🟢",
+                        "assignee" => "👤",
+                        "priority" => "⚡",
+                        "summary" => "📝",
+                        "description" => "📄",
+                        _ => "🔧"
                     };
-                })
-                .GroupBy(x => x.Day)
-                .OrderByDescending(g => g.Key);
+
+                    string fromEsc = HttpUtility.JavaScriptStringEncode(from);
+                    string toEsc = HttpUtility.JavaScriptStringEncode(to);
+
+                    changes.Add($@"
+<tr data-date='{createdStr}' data-user='{HttpUtility.HtmlEncode(author)}' data-field='{HttpUtility.HtmlEncode(field)}'>
+    <td><input type='checkbox' class='compare-check' value='{changeId}' data-from='{fromEsc}' data-to='{toEsc}' data-field='{HttpUtility.HtmlEncode(field)}'></td>
+    <td>{createdStr}<br><small>{timeStr}</small></td>
+    <td>{HttpUtility.HtmlEncode(author)}</td>
+    <td>{fieldIcon} <strong>{HttpUtility.HtmlEncode(field)}</strong></td>
+    <td class='from-val'>{HttpUtility.HtmlEncode(from)}</td>
+    <td class='to-val'>{HttpUtility.HtmlEncode(to)}</td>
+</tr>");
+                    changeId++;
+                }
+            }
 
             var sb = new StringBuilder();
 
-            foreach (var group in grouped)
-            {
-                sb.AppendLine($@"<div class='history-day'>
-<h5>{group.Key:yyyy-MM-dd}</h5>
-{string.Join("\n", group.Select(g => g.Html))}</div>");
-            }
-
-            // Append diff overlay HTML + JS
             sb.AppendLine(@"
-<div class='diff-overlay' id='diffOverlay'>
+<div class='filter-section'>
+    <label>Date: <input type='date' id='filterDate'></label>
+    <label>User: <input type='text' id='filterUser'></label>
+    <label>Type: <input type='text' id='filterField'></label>
+    <button onclick='applyFilters()'>✅ Apply Filter</button>
+    <button onclick='clearFilters()'>❌ Clear</button>
+    <button onclick='viewSelectedDiff()'>🔍 Show Difference</button>
+</div>
+
+<table class='history-table'>
+    <thead>
+        <tr>
+            <th></th>
+            <th>Date</th>
+            <th>User</th>
+            <th>Type</th>
+            <th>Before</th>
+            <th>After</th>
+        </tr>
+    </thead>
+    <tbody>
+        " + string.Join("\n", changes) + @"
+    </tbody>
+</table>
+
+<div class='diff-overlay' id='diffOverlay' style='display:none'>
     <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
+    <h3 id='diffTitle'></h3>
     <div class='diff-columns'>
-        <div id='diffFrom'></div>
-        <div id='diffTo'></div>
+        <div><h4>Older Version</h4><div id='diffFrom'></div></div>
+        <div><h4>New Version</h4><div id='diffTo'></div></div>
     </div>
 </div>
 
+<!-- Custom alert modal -->
+<div id='customAlert' class='custom-alert' style='display:none;'>
+  <div class='custom-alert-content'>
+    <span id='customAlertMessage'></span>
+    <button onclick='closeCustomAlert()'>OK</button>
+  </div>
+</div>
+
 <script>
+function escapeHtml(text) {
+    return text.replace(/&/g, '&amp;')
+               .replace(/</g, '&lt;')
+               .replace(/>/g, '&gt;')
+               .replace(/""/g, '&quot;')
+               .replace(/'/g, '&#039;');
+}
+
 function simpleDiffHtml(from, to) {
-  let i = 0;
-  let minLen = Math.min(from.length, to.length);
-  let commonPrefix = '';
+    let i = 0;
+    let minLen = Math.min(from.length, to.length);
+    let commonPrefix = '';
 
-  while(i < minLen && from[i] === to[i]) {
-    commonPrefix += from[i];
-    i++;
-  }
+    while(i < minLen && from[i] === to[i]) {
+        commonPrefix += from[i];
+        i++;
+    }
 
-  let fromDeleted = from.slice(i);
-  let toAdded = to.slice(i);
+    let fromDeleted = from.slice(i);
+    let toAdded = to.slice(i);
 
-  function escapeHtml(text) {
-    return text.replace(/&/g, ""&amp;"")
-               .replace(/</g, ""&lt;"")
-               .replace(/>/g, ""&gt;"")
-               .replace(/""/g, ""&quot;"")
-               .replace(/'/g, ""&#039;"");
-  }
+    let htmlFrom = escapeHtml(commonPrefix);
+    if(fromDeleted.length > 0) {
+        htmlFrom += `<span class='diff-deleted'>${escapeHtml(fromDeleted)}</span>`;
+    }
 
-  let htmlFrom = escapeHtml(commonPrefix);
-  if(fromDeleted.length > 0) {
-    htmlFrom += `<span class=""diff-deleted"">${escapeHtml(fromDeleted)}</span>`;
-  }
+    let htmlTo = escapeHtml(commonPrefix);
+    if(toAdded.length > 0) {
+        htmlTo += `<span class='diff-added'>${escapeHtml(toAdded)}</span>`;
+    }
 
-  let htmlTo = escapeHtml(commonPrefix);
-  if(toAdded.length > 0) {
-    htmlTo += `<span class=""diff-added"">${escapeHtml(toAdded)}</span>`;
-  }
-
-  return { htmlFrom, htmlTo };
+    return { htmlFrom, htmlTo };
 }
 
-function showDiffOverlay(from, to) {
-  const diffs = simpleDiffHtml(from, to);
-  document.getElementById('diffFrom').innerHTML = diffs.htmlFrom;
-  document.getElementById('diffTo').innerHTML = diffs.htmlTo;
-  document.getElementById('diffOverlay').style.display = 'block';
+function showCustomAlert(message) {
+    document.getElementById('customAlertMessage').innerText = message;
+    document.getElementById('customAlert').style.display = 'flex';
 }
-</script>");
+function closeCustomAlert() {
+    document.getElementById('customAlert').style.display = 'none';
+}
+
+function viewSelectedDiff() {
+    const checks = Array.from(document.querySelectorAll('.compare-check:checked'));
+
+    if (checks.length === 1) {
+        const c = checks[0];
+        const field = c.dataset.field;
+        let from = c.dataset.from;
+        let to = c.dataset.to;
+
+        from = from.replace(/\\n/g, '\n');
+        to = to.replace(/\\n/g, '\n');
+
+        const diffs = simpleDiffHtml(from, to);
+        document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
+        document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
+        document.getElementById('diffTitle').innerText = `Compare ${field}`;
+        document.getElementById('diffOverlay').style.display = 'block';
+    }
+    else if (checks.length === 2) {
+        const [c1, c2] = checks;
+        const field1 = c1.dataset.field;
+        const field2 = c2.dataset.field;
+
+        if (field1 !== field2) {
+            showCustomAlert('Selected rows must be of the same type to compare.');
+            return;
+        }
+
+        const changeId1 = parseInt(c1.value);
+        const changeId2 = parseInt(c2.value);
+
+        const older = changeId1 < changeId2 ? c1 : c2;
+        const newer = changeId1 > changeId2 ? c1 : c2;
+
+        let newerTo = older.dataset.to.replace(/\\n/g, '\n');
+        let olderFrom = newer.dataset.from.replace(/\\n/g, '\n');
+
+        const diffs = simpleDiffHtml(olderFrom, newerTo);
+
+        document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
+        document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
+        document.getElementById('diffTitle').innerText = `Compare ${field1}`;
+        document.getElementById('diffOverlay').style.display = 'block';
+    }
+    else {
+        showCustomAlert('Select one or two rows to view changes.');
+    }
+}
+
+function applyFilters() {
+    const date = document.getElementById('filterDate').value;
+    const user = document.getElementById('filterUser').value.toLowerCase();
+    const field = document.getElementById('filterField').value.toLowerCase();
+
+    document.querySelectorAll('.history-table tbody tr').forEach(row => {
+        const matchesDate = !date || row.dataset.date === date;
+        const matchesUser = !user || row.dataset.user.toLowerCase().includes(user);
+        const matchesField = !field || row.dataset.field.toLowerCase().includes(field);
+        row.style.display = (matchesDate && matchesUser && matchesField) ? '' : 'none';
+    });
+}
+
+function clearFilters() {
+    document.getElementById('filterDate').value = '';
+    document.getElementById('filterUser').value = '';
+    document.getElementById('filterField').value = '';
+    applyFilters();
+}
+</script>
+
+<style>
+  body {
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 30px;
+    background: #f8fcf8;
+    color: #1b3a1b;
+    font-size: 16px;
+    line-height: 1.5;
+  }
+  details {
+    margin-bottom: 30px;
+    border: 1px solid #cde0cd;
+    border-radius: 6px;
+    box-shadow: 0 2px 6px rgba(0, 64, 0, 0.05);
+  }
+  summary {
+    padding: 14px 20px;
+    background-color: #edf7ed;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 1.0em;
+    border-bottom: 1px solid #d0e8d0;
+    color: #2e4d2e;
+  }
+  section {
+    padding: 16px 20px;
+    background-color: #f8fcf8;
+  }
+  table, .history-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 8px;
+    background: #f8fcf8;
+    box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  th {
+    background-color: #e7f5e7;
+    color: #204020;
+    text-align: left;
+    padding: 12px 16px;
+    font-weight: bold;
+    border-bottom: 2px solid #c4dcc4;
+  }
+  td {
+    padding: 12px 16px;
+    border-bottom: 1px solid #e0eae0;
+    color: #2a2a2a;
+  }
+  tr:hover td {
+    background-color: #f0f8f0;
+  }
+  .diff-added {
+    background-color: #e8f5e9;
+    color: #2e7d32;
+    font-weight: normal;
+  }
+  .diff-deleted {
+    background-color: #ffebee;
+    color: #d32f2f;
+    text-decoration: line-through;
+  }
+  .diff-overlay {
+    position: fixed;
+    top: 10%;
+    left: 10%;
+    right: 10%;
+    bottom: 10%;
+    background: white;
+    border: 2px solid #a5d6a7;
+    z-index: 1000;
+    overflow: auto;
+    padding: 20px;
+    box-shadow: 0 0 20px rgba(0, 64, 0, 0.2);
+    display: none;
+  }
+  .diff-columns {
+    display: flex;
+    justify-content: space-between;
+    gap: 30px;
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+  .diff-columns > div {
+    flex: 1;
+    border: 1px solid #d4e9d4;
+    padding: 10px;
+    background: #f9fef9;
+    color: #1a1a1a;
+  }
+  .diff-close {
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    cursor: pointer;
+    font-size: 20px;
+    font-weight: bold;
+    color: #1a1a1a;
+  }
+  .filter-section {
+    margin-bottom: 10px;
+  }
+  .filter-section input {
+    margin-right: 10px;
+  }
+  .filter-section button {
+    margin-left: 5px;
+  }
+  .custom-alert {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 2000;
+  }
+  .custom-alert-content {
+    background: white;
+    padding: 20px 30px;
+    border-radius: 8px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    font-family: Arial, sans-serif;
+    font-size: 16px;
+    max-width: 400px;
+    text-align: center;
+  }
+  .custom-alert-content button {
+    margin-top: 15px;
+    padding: 8px 16px;
+    border: none;
+    background-color: #0078d4;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .custom-alert-content button:hover {
+    background-color: #005a9e;
+  }
+</style>
+");
 
             return sb.ToString();
         }
+
+
 
         public string BuildIssueDetailFullPageHtml(
     string headerLine,
