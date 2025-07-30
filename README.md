@@ -110,9 +110,14 @@ Create a file named `configuration.json` in the app directory:
 
 ## 📸 Screenshots
 
-| Tree View | Issue Details | Search Dialog |
-|-----------|----------------|----------------|
-| ![](screenshots/tree.png) | ![](screenshots/details.png) | ![](screenshots/search.png) |
+| Main View | Issue Detail | Attachments |
+|-----------|--------------|-------------|
+| ![](screenshots/Screenshot1.png) | ![](screenshots/Screenshot2.png) | ![](screenshots/Screenshot3.png) |
+
+| History | Difference | Context Menu | Search |
+|---------|------------|---------------|--------|
+| ![](screenshots/Screenshot5.png) | ![](screenshots/Screenshot6.png) | ![](screenshots/Screenshot7.png) | ![](screenshots/Screenshot8.png) |
+
 
 ---
 
