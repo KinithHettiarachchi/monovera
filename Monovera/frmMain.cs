@@ -3054,7 +3054,7 @@ namespace Monovera
             var sb = new StringBuilder();
             int matchCount = 0;
 
-            sb.AppendLine($"<div class='subsection'><h4>{title}</h4>");
+            sb.AppendLine($"<div class='subsection'><h4>{HttpUtility.HtmlEncode(title)}</h4>");
 
             if (fields.TryGetProperty("issuelinks", out var links))
             {
@@ -3083,7 +3083,7 @@ namespace Monovera
                             var key = issueElem.GetProperty("key").GetString() ?? "";
                             var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
 
-                            TreeNode foundNode = FindNodeByKey(tree.Nodes, key);
+                            TreeNode foundNode = FindNodeByKey(tree.Nodes, key, false);
                             string iconImgInner = "";
                             if (foundNode != null &&
                                 !string.IsNullOrEmpty(foundNode.ImageKey) &&
@@ -3093,10 +3093,23 @@ namespace Monovera
                                 using var ms = new MemoryStream();
                                 tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
                                 var base64 = Convert.ToBase64String(ms.ToArray());
-                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:28px; vertical-align:middle; margin-right:6px;' />";
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' />";
+                            }
+                            else
+                            {
+                                // Use green square emoji if no image
+                                iconImgInner = "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟩</span>";
                             }
 
-                            tableRows.AppendLine($"<tr><td><a href='#' data-key='{key}'>{iconImgInner}{WebUtility.HtmlEncode(sum)} [{key}]</a></td></tr>");
+                            tableRows.AppendLine($@"
+<tr>
+    <td style='width:36px;'>{iconImgInner}</td>
+    <td>
+        <a href='#' data-key='{HttpUtility.HtmlEncode(key)}'>
+            {HttpUtility.HtmlEncode(sum)} [{HttpUtility.HtmlEncode(key)}]
+        </a>
+    </td>
+</tr>");
                             matchCount++;
                         }
                     }
@@ -3104,18 +3117,20 @@ namespace Monovera
 
                 if (matchCount > 0)
                 {
-                    sb.AppendLine("<table><tbody>");
+                    sb.AppendLine(@"
+<table style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+    <tbody>");
                     sb.Append(tableRows);
                     sb.AppendLine("</tbody></table>");
                 }
                 else
                 {
-                    sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
+                    sb.AppendLine($"<div class='no-links'>No {HttpUtility.HtmlEncode(title)} issues found.</div>");
                 }
             }
             else
             {
-                sb.AppendLine($"<div class='no-links'>No {title} issues found.</div>");
+                sb.AppendLine($"<div class='no-links'>No {HttpUtility.HtmlEncode(title)} issues found.</div>");
             }
 
             sb.AppendLine("</div>");
