@@ -110,13 +110,13 @@ Create a file named `configuration.json` in the app directory:
 
 ## 📸 Screenshots
 
-| Main View | Issue Detail | Attachments | History |
-|-----------|--------------|-------------|---------|
-| <img src="screenshots/screenshot1.png" width="200"/> | <img src="screenshots/screenshot2.png" width="200"/> | <img src="screenshots/screenshot3.png" width="200"/> | <img src="screenshots/screenshot5.png" width="200"/> |
+| Main View | Issue Detail | Attachments |
+|-----------|--------------|-------------|
+| ![](screenshots/screenshot1.png) | ![](screenshots/screenshot2.png) | ![](screenshots/screenshot3.png) |
 
-| Difference | Context Menu | Search |
-|------------|--------------|--------|
-| <img src="screenshots/screenshot6.png" width="200"/> | <img src="screenshots/screenshot7.png" width="200"/> | <img src="screenshots/screenshot8.png" width="200"/> |
+| History | Difference | Context Menu | Search |
+|---------|------------|---------------|--------|
+| ![](screenshots/screenshot5.png) | ![](screenshots/screenshot6.png) | ![](screenshots/screenshot7.png) | ![](screenshots/screenshot8.png) |
 
 
 ---
