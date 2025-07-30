@@ -83,7 +83,11 @@ namespace Monovera
         /// <summary>Application directory path.</summary>
         string appDir = "";
         /// <summary>Temporary directory path for storing files.</summary>
-        string tempDir = "";
+        string tempFolder = "";
+
+        string cssPath = "";
+        static string cssHref = "";
+        private string LoadingHtml = "";
 
         /// <summary>
         /// Root configuration for Jira integration.
@@ -215,47 +219,6 @@ namespace Monovera
             base.OnFormClosing(e);
         }
 
-        private const string LoadingHtml = @"
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset='UTF-8'>
-  <style>
-    body {
-      font-family: 'IBM Plex Sans', sans-serif;
-      background: #f8fcf8;
-      margin: 0;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-direction: column;
-    }
-    .spinner {
-      border: 8px solid #e0e0e0;
-      border-top: 8px solid #4caf50;
-      border-radius: 50%;
-      width: 60px;
-      height: 60px;
-      animation: spin 1s linear infinite;
-      margin-bottom: 24px;
-    }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-    .loading-text {
-      color: #2e7d32;
-      font-size: 1.3em;
-      font-weight: 500;
-      letter-spacing: 0.04em;
-    }
-  </style>
-</head>
-<body>
-  <div class='spinner'></div>
-  <div class='loading-text'>Loading...</div>
-</body>
-</html>
-";
-
         /// <summary>
         /// Alphanumeric comparer for natural sorting (e.g. 1,2,10,11).
         /// </summary>
@@ -299,13 +262,24 @@ namespace Monovera
         {
             AppLogger.Log($"Starting application");
 
-            InitializeComponent();
-            InitializeNotifyIcon();
-
             // Set up application and temp directories
             appDir = AppDomain.CurrentDomain.BaseDirectory;
-            tempDir = Path.Combine(appDir, "temp");
-            Directory.CreateDirectory(tempDir);
+            tempFolder = Path.Combine(appDir, "temp");
+
+            Directory.CreateDirectory(tempFolder);
+            cssPath = Path.Combine(appDir, "monovera.css");
+            cssHref = new Uri(cssPath).AbsoluteUri;
+            if (!File.Exists(cssPath))
+            {
+                AppLogger.Log($"CSS file not found at {cssPath}. Using default styles.");
+                cssHref = "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
+            }
+            else
+            {
+                AppLogger.Log($"Using custom CSS file at {cssPath}");
+            }
+            InitializeComponent();
+            InitializeNotifyIcon();
 
             // Initialize context menu for tree
             InitializeContextMenu();
@@ -1893,6 +1867,32 @@ namespace Monovera
         /// <param name="e">Event arguments.</param>
         private async void frmMain_Load(object sender, EventArgs e)
         {
+            LoadingHtml = $@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link rel='stylesheet' href='{cssHref}' />
+  <style>
+    html, body {{
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: #fff;
+      font-family: Arial, sans-serif;
+    }}
+  </style>
+</head>
+<body>
+  <div class='spinner'></div>
+</body>
+</html>
+";
+
+
             //Load home page
             AddHomeTabAsync(tabDetails);
 
@@ -2101,7 +2101,9 @@ namespace Monovera
             await webView.EnsureCoreWebView2Async();
 
             // Show loading page after WebView is ready and attached to UI
-            webView.NavigateToString(LoadingHtml);
+            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+            File.WriteAllText(htmlFilePath, LoadingHtml);
+            webView.CoreWebView2.Navigate(htmlFilePath);
 
             // Handle script dialogs
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
@@ -2130,21 +2132,7 @@ namespace Monovera
 <html>
 <head>
   <meta charset='utf-8'>
-  <style>
-    body {{
-      margin: 0;
-      padding: 0;
-      background-color: #e8f5e9;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }}
-    img {{
-      max-width: 100%;
-      height: auto;
-    }}
-  </style>
+  <link rel='stylesheet' href='{cssHref}' />
 </head>
 <body>
   <img src=""{imageUri}"" alt=""Monovera"" />
@@ -2205,7 +2193,9 @@ namespace Monovera
             // --- Step 2: Initialize WebView2 and show Loading ---
             await webView.EnsureCoreWebView2Async();
 
-            webView.NavigateToString(LoadingHtml);
+            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+            File.WriteAllText(htmlFilePath, LoadingHtml);
+            webView.CoreWebView2.Navigate(htmlFilePath);
 
             // Handle dialogs and messages
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
@@ -2313,54 +2303,7 @@ namespace Monovera
 <head>
   <meta charset='UTF-8'>
   <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
-  <style>
-    body {{
-      font-family: 'IBM Plex Sans', sans-serif;
-      margin: 30px;
-      font-size: 16px;
-      background-color: #f8fcf8;
-      color: #1c1c1c;
-    }}
-    details {{
-      border: 1px solid #c8e6c9;
-      border-radius: 6px;
-      margin-bottom: 20px;
-      background-color: #f5fbf5;
-      box-shadow: 0 2px 5px rgba(0, 64, 0, 0.04);
-    }}
-    summary {{
-      padding: 12px 18px;
-      background-color: #e9f7e9;
-      font-weight: bold;
-      font-size: 1.1em;
-      color: #2e7d32;
-      cursor: pointer;
-      border-bottom: 1px solid #d0e8d0;
-    }}
-    section {{
-      padding: 10px 20px;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 5px;
-    }}
-    td {{
-      padding: 8px;
-      border-bottom: 1px solid #eef5ee;
-    }}
-    a {{
-      color: #2e7d32;
-      text-decoration: none;
-    }}
-    a:hover {{
-      text-decoration: underline;
-    }}
-    img {{
-      vertical-align: middle;
-      margin-right: 6px;
-    }}
-  </style>
+  <link rel='stylesheet' href='{cssHref}' />
 </head>
 <body>
 {sb}
@@ -2378,7 +2321,7 @@ namespace Monovera
 </html>";
 
             // --- Step 5: Show the final HTML ---
-            string tempFilePath = Path.Combine(tempDir, "monovera_updated.html");
+            string tempFilePath = Path.Combine(tempFolder, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
         }
@@ -2637,7 +2580,9 @@ namespace Monovera
                 // Tab does not exist, create and load it
                 webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
                 await webView.EnsureCoreWebView2Async();
-                webView.NavigateToString(LoadingHtml);
+                string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+                File.WriteAllText(htmlFilePath, LoadingHtml);
+                webView.CoreWebView2.Navigate(htmlFilePath);
 
                 if (tabDetails.ImageList == null)
                 {
@@ -2687,7 +2632,9 @@ namespace Monovera
                         pageTab.Controls.Clear();
                         pageTab.Controls.Add(webView);
                     }
-                    webView.NavigateToString(LoadingHtml);
+                     string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+            File.WriteAllText(htmlFilePath, LoadingHtml);
+            webView.CoreWebView2.Navigate(htmlFilePath);
                 }
                 else
                 {
@@ -2933,117 +2880,6 @@ namespace Monovera
     document.getElementById('lightboxImg').src = '';
   }
 </script>
-<style>
-  .attachments-strip-wrapper {
-    position: relative;
-    display: flex;
-    align-items: center;
-    margin: 10px 0;
-    background: #f8fcf8;
-    border-radius: 8px;
-    padding: 8px 0;
-  }
-  .attachments-strip {
-    display: flex;
-    gap: 18px;
-    overflow-x: auto;
-    scroll-behavior: smooth;
-    padding: 8px 0;
-    flex-grow: 1;
-  }
-  .attachment-card {
-    border: 1px solid #c8e6c9;
-    background: #fff;
-    border-radius: 8px;
-    padding: 12px;
-    text-align: center;
-    font-size: 0.95em;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 180px;
-    max-width: 240px;
-    box-shadow: 0 2px 8px rgba(0,64,0,0.04);
-    color: #2a2a2a;
-  }
-  .attachment-img {
-    max-width: 220px;
-    max-height: 220px;
-    border-radius: 6px;
-    border: 1px solid #b2dfdb;
-    margin-bottom: 8px;
-    transition: box-shadow 0.2s;
-    cursor: pointer;
-  }
-  .attachment-img:hover {
-    box-shadow: 0 0 12px #4caf50;
-  }
-  .attachment-filename {
-    font-weight: 600;
-    margin-bottom: 4px;
-    color: #256029;
-    word-break: break-all;
-  }
-  .attachment-meta {
-    font-size: 0.85em;
-    color: #4b4b4b;
-    line-height: 1.3;
-    margin-bottom: 6px;
-  }
-  .download-btn {
-    display: inline-block;
-    margin-top: 6px;
-    padding: 6px 16px;
-    background: #e8f5e9;
-    color: #2e7d32;
-    border-radius: 4px;
-    text-decoration: none;
-    font-weight: 500;
-    border: none;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  .download-btn:hover {
-    background: #c8e6c9;
-    color: #1b5e20;
-  }
-  .scroll-btn {
-    background-color: #e8f5e9;
-    border: none;
-    cursor: pointer;
-    padding: 8px 12px;
-    font-size: 22px;
-    border-radius: 50%;
-    color: #2e7d32;
-    margin: 0 4px;
-    transition: background 0.3s;
-    box-shadow: 0 2px 6px rgba(0,64,0,0.08);
-    min-width: 40px;
-    min-height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .scroll-btn:hover {
-    background-color: #c8e6c9;
-  }
-  .attachment-lightbox {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-  }
-  .attachment-lightbox img {
-    max-width: 90vw;
-    max-height: 90vh;
-    border-radius: 12px;
-    box-shadow: 0 0 24px #4caf50;
-    background: #fff;
-  }
-</style>
 ");
 
             return sb.ToString();
@@ -3349,150 +3185,6 @@ function clearFilters() {
     applyFilters();
 }
 </script>
-
-<style>
-  body {
-    font-family: 'IBM Plex Sans', sans-serif;
-    margin: 30px;
-    background: #f8fcf8;
-    color: #1b3a1b;
-    font-size: 16px;
-    line-height: 1.5;
-  }
-  details {
-    margin-bottom: 30px;
-    border: 1px solid #cde0cd;
-    border-radius: 6px;
-    box-shadow: 0 2px 6px rgba(0, 64, 0, 0.05);
-  }
-  summary {
-    padding: 14px 20px;
-    background-color: #edf7ed;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 1.0em;
-    border-bottom: 1px solid #d0e8d0;
-    color: #2e4d2e;
-  }
-  section {
-    padding: 16px 20px;
-    background-color: #f8fcf8;
-  }
-  table, .history-table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    border-radius: 8px;
-    background: #f8fcf8;
-    box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
-    margin-bottom: 20px;
-    overflow: hidden;
-  }
-  th {
-    background-color: #e7f5e7;
-    color: #204020;
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: bold;
-    border-bottom: 2px solid #c4dcc4;
-  }
-  td {
-    padding: 12px 16px;
-    border-bottom: 1px solid #e0eae0;
-    color: #2a2a2a;
-  }
-  tr:hover td {
-    background-color: #f0f8f0;
-  }
-  .diff-added {
-    background-color: #e8f5e9;
-    color: #2e7d32;
-    font-weight: normal;
-  }
-  .diff-deleted {
-    background-color: #ffebee;
-    color: #d32f2f;
-    text-decoration: line-through;
-  }
-  .diff-overlay {
-    position: fixed;
-    top: 10%;
-    left: 10%;
-    right: 10%;
-    bottom: 10%;
-    background: white;
-    border: 2px solid #a5d6a7;
-    z-index: 1000;
-    overflow: auto;
-    padding: 20px;
-    box-shadow: 0 0 20px rgba(0, 64, 0, 0.2);
-    display: none;
-  }
-  .diff-columns {
-    display: flex;
-    justify-content: space-between;
-    gap: 30px;
-    font-family: monospace;
-    white-space: pre-wrap;
-  }
-  .diff-columns > div {
-    flex: 1;
-    border: 1px solid #d4e9d4;
-    padding: 10px;
-    background: #f9fef9;
-    color: #1a1a1a;
-  }
-  .diff-close {
-    position: absolute;
-    top: 10px;
-    right: 20px;
-    cursor: pointer;
-    font-size: 20px;
-    font-weight: bold;
-    color: #1a1a1a;
-  }
-  .filter-section {
-    margin-bottom: 10px;
-  }
-  .filter-section input {
-    margin-right: 10px;
-  }
-  .filter-section button {
-    margin-left: 5px;
-  }
-  .custom-alert {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background-color: rgba(0,0,0,0.5);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 2000;
-  }
-  .custom-alert-content {
-    background: white;
-    padding: 20px 30px;
-    border-radius: 8px;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-    font-family: Arial, sans-serif;
-    font-size: 16px;
-    max-width: 400px;
-    text-align: center;
-  }
-  .custom-alert-content button {
-    margin-top: 15px;
-    padding: 8px 16px;
-    border: none;
-    background-color: #0078d4;
-    color: white;
-    font-weight: bold;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-  .custom-alert-content button:hover {
-    background-color: #005a9e;
-  }
-</style>
 ");
 
             return sb.ToString();
@@ -3524,336 +3216,7 @@ function clearFilters() {
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet' />
-
-<style>
-  body {{
-    font-family: 'IBM Plex Sans', sans-serif;
-    margin: 30px;
-    background: #f8fcf8;
-    color: #1b3a1b;
-    font-size: 16x;
-    line-height: 1.5;
-  }}
-
-  h2 {{
-    color: #2e4d2e;
-    font-size: 1.6em;
-    margin-bottom: 20px;
-  }}
-
-  details {{
-    margin-bottom: 30px;
-    border: 1px solid #cde0cd;
-    border-radius: 6px;
-    box-shadow: 0 2px 6px rgba(0, 64, 0, 0.05);
-  }}
-
-  summary {{
-    padding: 14px 20px;
-    background-color: #edf7ed;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 1.0em;
-    border-bottom: 1px solid #d0e8d0;
-    color: #2e4d2e;
-  }}
-
-  section {{
-    padding: 16px 20px;
-    background-color: #f8fcf8;
-  }}
-
-  .subsection h4 {{
-    margin-top: 20px;
-    margin-bottom: 10px;
-    font-size: 1.1em;
-    color: #345e34;
-  }}
-
-  table {{
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    border-radius: 8px;
-    background: #f8fcf8;
-    box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
-    margin-bottom: 20px;
-    overflow: hidden;
-  }}
-
-  th {{
-    background-color: #e7f5e7;
-    color: #204020;
-    text-align: left;
-    padding: 12px 16px;
-    font-weight: bold;
-    border-bottom: 2px solid #c4dcc4;
-  }}
-
-  td {{
-    padding: 12px 16px;
-    border-bottom: 1px solid #e0eae0;
-    color: #2a2a2a;
-  }}
-
-  tr:hover td {{
-    background-color: #f0f8f0;
-  }}
-
-  a {{
-    color: #2e7d32;
-    text-decoration: none;
-  }}
-
-  a:hover {{
-    text-decoration: underline;
-    color: #1b5e20;
-  }}
-
-  pre[class*='language-'] {{
-    background: #f1f6f1;
-    padding: 16px;
-    border-radius: 6px;
-    overflow-x: auto;
-    font-size: 0.9em;
-    color: #1b3a1b;
-  }}
-
-  .history-day {{
-    margin: 24px 0;
-    border-left: 4px solid #4caf50;
-    padding-left: 16px;
-  }}
-
-  .history-day h5 {{
-    font-size: 1.2em;
-    color: #256029;
-    margin-bottom: 8px;
-  }}
-
-  .history-block {{
-    background: #f2fbf2;
-    padding: 12px 16px;
-    margin-bottom: 10px;
-    border: 1px solid #d0e8d0;
-    border-radius: 6px;
-  }}
-
-  .change-header {{
-    font-weight: 600;
-    color: #336633;
-    margin-bottom: 6px;
-  }}
-
-  .history-item {{
-    font-family: sans-serif;
-    margin-bottom: 5px;
-  }}
-
-  .highlight-status {{
-    background: #edf7ed;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .highlight-assignee {{
-    background: #e6f4e6;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .highlight-priority {{
-    background: #e8f5e9;
-    padding: 2px 6px;
-    border-radius: 4px;
-  }}
-
-  .from-val {{
-    color: #000000;
-  }}
-
-  .to-val {{
-    color: #2e7d32;
-  }}
-
-  .diff-added {{
-    background-color: #e8f5e9;
-    color: #2e7d32;
-    font-weight: normal;
-  }}
-
-  .diff-deleted {{
-    background-color: #ffebee;
-    color: #d32f2f;
-  }}
-
-  .diff-arrow {{
-    color: #999;
-    padding: 0 4px;
-  }}
-
-  .view-diff-btn {{
-    margin-left: 10px;
-    font-size: 0.9em;
-    cursor: pointer;
-    color: #2e7d32;
-  }}
-
-  .diff-overlay {{
-    position: fixed;
-    top: 5%;
-    left: 10%;
-    width: 80%;
-    height: 70%;
-    background: #ffffff;
-    border: 2px solid #a5d6a7;
-    z-index: 9999;
-    overflow: auto;
-    display: none;
-    box-shadow: 0 0 20px rgba(0, 64, 0, 0.2);
-  }}
-
-  .diff-overlay .diff-close {{
-    float: right;
-    margin: 10px;
-    cursor: pointer;
-    font-size: 20px;
-    color: #1a1a1a;
-  }}
-
-  .diff-columns {{
-    display: flex;
-    justify-content: space-between;
-    padding: 20px;
-    font-family: monospace;
-    white-space: pre-wrap;
-  }}
-
-  .diff-columns > div {{
-    width: 48%;
-    border: 1px solid #d4e9d4;
-    padding: 10px;
-    background: #f9fef9;
-    color: #1a1a1a;
-  }}
-
-  .no-links,
-  .no-attachments {{
-    padding: 12px;
-    color: #666;
-    font-style: italic;
-    background: #f6fdf6;
-    border: 1px solid #d6e9d6;
-    border-radius: 4px;
-  }}
-
-  .attachment-strip-wrapper {{
-    position: relative;
-    overflow: hidden;
-  }}
-
-  .attachment-strip {{
-    display: flex;
-    gap: 12px;
-    overflow-x: auto;
-    scroll-behavior: smooth;
-    padding: 8px 36px;
-  }}
-
-  .attachment-strip::-webkit-scrollbar {{
-    height: 8px;
-  }}
-
-  .attachment-strip::-webkit-scrollbar-thumb {{
-    background: #a5d6a7;
-    border-radius: 4px;
-  }}
-
-  .attachment-nav {{
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 32px;
-    height: 32px;
-    background: #edf7ed;
-    border-radius: 50%;
-    text-align: center;
-    line-height: 32px;
-    font-weight: bold;
-    cursor: pointer;
-    box-shadow: 0 0 5px rgba(0, 64, 0, 0.1);
-    z-index: 2;
-    color: #2e7d32;
-  }}
-
-  .attachment-nav.left {{
-    left: 0;
-  }}
-
-  .attachment-nav.right {{
-    right: 0;
-  }}
-
-  .attachment-card {{
-    border: 1px solid #c8e6c9;
-    background: #ffffff;
-    border-radius: 6px;
-    padding: 6px;
-    text-align: center;
-    font-size: 0.85em;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 130px;
-    max-width: 140px;
-    color: #2a2a2a;
-  }}
-
-  .attachment-filename,
-  .attachment-meta,
-  .download-btn {{
-    width: 100%;
-    box-sizing: border-box;
-    margin: 4px 0;
-  }}
-
-  .attachment-meta {{
-    font-size: 0.75em;
-    color: #4b4b4b;
-    line-height: 1.3;
-  }}
-
-  .attachments-wrapper {{
-    position: relative;
-    display: flex;
-    align-items: center;
-    margin: 10px 0;
-  }}
-
-  .attachments-strip {{
-    display: flex;
-    gap: 10px;
-    overflow-x: auto;
-    padding: 10px 0;
-    scroll-behavior: smooth;
-    flex-grow: 1;
-  }}
-
-  .scroll-btn {{
-    background-color: #e8f5e9;
-    border: none;
-    cursor: pointer;
-    padding: 8px 12px;
-    font-size: 18px;
-    border-radius: 4px;
-    color: #2e7d32;
-    transition: background 0.3s;
-  }}
-
-  .scroll-btn:hover {{
-    background-color: #c8e6c9;
-  }}
-</style>
+<link rel='stylesheet' href='{cssHref}' />
 </head
   <h2>{headerLine}</h2>
   <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
