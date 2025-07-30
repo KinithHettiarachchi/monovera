@@ -2827,10 +2827,12 @@ namespace Monovera
                 return "<div class='no-attachments'>No attachments found.</div>";
 
             var sb = new StringBuilder();
-            sb.AppendLine("<details open><summary>Attachments</summary><section>");
-            sb.AppendLine("<div class='attachments-wrapper'>");
-            sb.AppendLine("<button class='scroll-btn' onclick='scrollStrip(-1)'>&lt;</button>");
-            sb.AppendLine("<div class='attachments-strip' id='attachmentStrip'>");
+            sb.AppendLine(@"
+<details open>
+  <summary>Attachments</summary>
+  <section>
+    <div class='attachments-grid'>
+");
 
             foreach (var att in attachments.EnumerateArray())
             {
@@ -2856,7 +2858,10 @@ namespace Monovera
                         response.EnsureSuccessStatusCode();
                         var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
                         string base64 = Convert.ToBase64String(imageBytes);
-                        previewHtml = $"<a href='#' class='preview-image' data-src='data:{mimeType};base64,{base64}'><img src='data:{mimeType};base64,{base64}' style='max-width:80px;max-height:80px;border-radius:4px;border:1px solid #ccc;' /></a>";
+                        previewHtml = $@"
+<a href='#' class='preview-image' data-src='data:{mimeType};base64,{base64}'>
+  <img src='data:{mimeType};base64,{base64}' class='attachment-img' alt='{WebUtility.HtmlEncode(filename)}' />
+</a>";
                     }
                     catch
                     {
@@ -2866,20 +2871,126 @@ namespace Monovera
 
                 sb.AppendLine($@"
 <div class='attachment-card'>
-    {previewHtml}
-    <div class='attachment-filename'>{WebUtility.HtmlEncode(filename)}</div>
-    <div class='attachment-meta'>Type: {WebUtility.HtmlEncode(mimeType)}<br/>By: {WebUtility.HtmlEncode(author)}<br/>Size: {size} bytes<br/>Created: {WebUtility.HtmlEncode(created)}</div>
-    <a href='#' class='download-btn' data-filepath='{contentUrl}'>Download</a>
+  {previewHtml}
+  <div class='attachment-filename'>{WebUtility.HtmlEncode(filename)}</div>
+  <div class='attachment-meta'>
+    <span>Type: {WebUtility.HtmlEncode(mimeType)}</span><br/>
+    <span>By: {WebUtility.HtmlEncode(author)}</span><br/>
+    <span>Size: {size} bytes</span><br/>
+    <span>Created: {WebUtility.HtmlEncode(created)}</span>
+  </div>
+  <a href='#' class='download-btn' data-filepath='{contentUrl}'>Download</a>
 </div>");
             }
 
-            sb.AppendLine("</div>");
-            sb.AppendLine("<button class='scroll-btn' onclick='scrollStrip(1)'>&gt;</button>");
-            sb.AppendLine("</div>");
-            sb.AppendLine("</section></details>");
+            sb.AppendLine(@"
+    </div>
+    <!-- Lightbox for image preview -->
+    <div id='attachmentLightbox' class='attachment-lightbox' style='display:none;' onclick='closeAttachmentLightbox()'>
+      <img id='lightboxImg' src='' alt='Preview' />
+    </div>
+  </section>
+</details>
+<script>
+  document.querySelectorAll('.preview-image').forEach(link => {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      var src = link.getAttribute('data-src');
+      var lightbox = document.getElementById('attachmentLightbox');
+      var img = document.getElementById('lightboxImg');
+      img.src = src;
+      lightbox.style.display = 'flex';
+    });
+  });
+  function closeAttachmentLightbox() {
+    document.getElementById('attachmentLightbox').style.display = 'none';
+    document.getElementById('lightboxImg').src = '';
+  }
+</script>
+<style>
+  .attachments-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
+    margin: 10px 0;
+  }
+  .attachment-card {
+    border: 1px solid #c8e6c9;
+    background: #fff;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+    font-size: 0.95em;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 180px;
+    max-width: 240px;
+    box-shadow: 0 2px 8px rgba(0,64,0,0.04);
+    color: #2a2a2a;
+  }
+  .attachment-img {
+    max-width: 220px;
+    max-height: 220px;
+    border-radius: 6px;
+    border: 1px solid #b2dfdb;
+    margin-bottom: 8px;
+    transition: box-shadow 0.2s;
+    cursor: pointer;
+  }
+  .attachment-img:hover {
+    box-shadow: 0 0 12px #4caf50;
+  }
+  .attachment-filename {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #256029;
+    word-break: break-all;
+  }
+  .attachment-meta {
+    font-size: 0.85em;
+    color: #4b4b4b;
+    line-height: 1.3;
+    margin-bottom: 6px;
+  }
+  .download-btn {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 6px 16px;
+    background: #e8f5e9;
+    color: #2e7d32;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .download-btn:hover {
+    background: #c8e6c9;
+    color: #1b5e20;
+  }
+  .attachment-lightbox {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+  }
+  .attachment-lightbox img {
+    max-width: 90vw;
+    max-height: 90vh;
+    border-radius: 12px;
+    box-shadow: 0 0 24px #4caf50;
+    background: #fff;
+  }
+</style>
+");
+
             return sb.ToString();
         }
-
         private string BuildLinksTable(JsonElement fields, string title, string linkType, string prop)
         {
             var sb = new StringBuilder();
@@ -3831,19 +3942,9 @@ function clearFilters() {
             try
             {
                 string message = null;
-
-                // Try to get as string, fallback to JSON if not possible
-                try
-                {
-                    message = e.TryGetWebMessageAsString();
-                }
-                catch
-                {
-                    message = e.WebMessageAsJson;
-                }
-
+                try { message = e.TryGetWebMessageAsString(); }
+                catch { message = e.WebMessageAsJson; }
                 if (string.IsNullOrWhiteSpace(message)) return;
-
                 message = message.Trim();
 
                 if (message.StartsWith("{"))
@@ -3856,19 +3957,10 @@ function clearFilters() {
                         actionProp.GetString() == "openInBrowser")
                     {
                         string url = null;
-
-                        // Try to get "url" property from message
                         if (root.TryGetProperty("url", out var urlProp))
-                        {
                             url = urlProp.GetString();
-                        }
-
-                        // If not found, fallback to e.Source
                         if (string.IsNullOrWhiteSpace(url) && Uri.TryCreate(e.Source, UriKind.Absolute, out var fallbackUri))
-                        {
                             url = fallbackUri.ToString();
-                        }
-
                         if (!string.IsNullOrWhiteSpace(url))
                         {
                             System.Diagnostics.Process.Start(new ProcessStartInfo
@@ -3877,7 +3969,6 @@ function clearFilters() {
                                 UseShellExecute = true
                             });
                         }
-
                         return;
                     }
 
@@ -3885,21 +3976,26 @@ function clearFilters() {
                     if (root.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "download")
                     {
                         var filePath = root.GetProperty("path").GetString();
-
                         if (!string.IsNullOrEmpty(filePath))
                         {
                             if (filePath.StartsWith("file:///"))
                                 filePath = Uri.UnescapeDataString(filePath.Substring(8));
 
-                            SaveFile(filePath);
+                            // If it's a Jira REST API URL, download and save
+                            if (filePath.StartsWith("/rest/api/3/attachment/content") || filePath.StartsWith("http"))
+                            {
+                                DownloadAndOpenJiraAttachment(filePath);
+                            }
+                            else
+                            {
+                                SaveFile(filePath);
+                            }
                         }
-
                         return;
                     }
                 }
                 else
                 {
-                    // Handle plain string messages (e.g. Jira issue key)
                     SelectAndLoadTreeNode(message);
                 }
             }
@@ -3909,6 +4005,55 @@ function clearFilters() {
             }
         }
 
+        private async void DownloadAndOpenJiraAttachment(string contentUrl)
+        {
+            try
+            {
+                string fullUrl = contentUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? contentUrl
+                    : jiraBaseUrl.TrimEnd('/') + contentUrl;
+
+                var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                // Jira may redirect, so allow auto-redirect
+                var response = await client.GetAsync(fullUrl, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+
+                // Get filename from Content-Disposition header or fallback
+                string filename = null;
+                if (response.Content.Headers.ContentDisposition != null)
+                {
+                    filename = response.Content.Headers.ContentDisposition.FileName?.Trim('"');
+                }
+                if (string.IsNullOrWhiteSpace(filename))
+                {
+                    filename = Path.GetFileName(new Uri(fullUrl).AbsolutePath);
+                }
+
+                // Save to temp folder
+                string tempFolder = Path.Combine(Directory.GetCurrentDirectory(), "temp");
+                Directory.CreateDirectory(tempFolder);
+                string destFilePath = Path.Combine(tempFolder, filename);
+
+                using (var fs = new FileStream(destFilePath, FileMode.Create, FileAccess.Write))
+                {
+                    await response.Content.CopyToAsync(fs);
+                }
+
+                // Open the saved file
+                System.Diagnostics.Process.Start(new ProcessStartInfo
+                {
+                    FileName = destFilePath,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error downloading or opening attachment: " + ex.Message);
+            }
+        }
 
 
         /// <summary>
