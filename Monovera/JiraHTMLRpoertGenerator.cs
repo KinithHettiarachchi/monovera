@@ -310,150 +310,22 @@ public class JiraHtmlReportGenerator
     /// <returns>Path to the generated HTML file.</returns>
     private async Task<string> CreateHtmlReport(List<(JiraIssue issue, string html, string number)> issues)
     {
-        // Get application base directory
         string appDir = AppDomain.CurrentDomain.BaseDirectory;
         string reportsDir = Path.Combine(appDir, "reports");
         Directory.CreateDirectory(reportsDir);
 
-        // Build filename: Report_issue key_YYYYMMDDHHMMSS.html
         string issueKey = issues[0].issue.Key;
         string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         string filename = Path.Combine(reportsDir, $"Report_{issueKey}_{timestamp}.html");
 
+        // Use monovera.css from the app directory
+        string cssPath = Path.Combine(appDir, "monovera.css");
+        string cssHref = new Uri(cssPath).AbsoluteUri;
+
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report [{issues[0].issue.Key}]</title>");
-
-        var css = @"
-body {
-  font-family: 'IBM Plex Sans', sans-serif;
-  margin: 30px;
-  background: #f8fcf8;
-  color: #1a1a1a;
-  font-size: 18px;
-  line-height: 1.7;
-}
-
-h2 {
-  color: #2e4d2e;
-  font-size: 1.9em;
-  margin-bottom: 20px;
-}
-
-details {
-  margin-bottom: 30px;
-  border: 1px solid #cde0cd;
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(0, 64, 0, 0.05);
-}
-
-summary {
-  padding: 14px 20px;
-  background-color: #edf7ed;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 1.2em;
-  border-bottom: 1px solid #d0e8d0;
-  color: #2e4d2e;
-}
-
-.number {
-  display: inline-block;
-  min-width: 3em;
-  color: #5a7f5a;
-  font-weight: bold;
-  margin-right: 8px;
-}
-
-section {
-  padding: 16px 20px;
-  background-color: #f8fcf8;
-}
-
-.subsection h4 {
-  margin-top: 20px;
-  margin-bottom: 10px;
-  font-size: 1.1em;
-  color: #345e34;
-}
-
-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  border-radius: 8px;
-  background: #f8fcf8;
-  box-shadow: 0 2px 8px rgba(0, 64, 0, 0.04);
-  margin-bottom: 20px;
-  overflow: hidden;
-}
-
-th {
-  background-color: #e7f5e7;
-  color: #204020;
-  text-align: left;
-  padding: 12px 16px;
-  font-weight: bold;
-  border-bottom: 2px solid #c4dcc4;
-}
-
-td {
-  padding: 12px 16px;
-  border-bottom: 1px solid #e0eae0;
-  color: #2a2a2a;
-}
-
-tr:hover td {
-  background-color: #f0f8f0;
-}
-
-a {
-  color: #2e7d32;
-  text-decoration: none;
-}
-
-a:hover {
-  text-decoration: underline;
-  color: #1b5e20;
-}
-
-pre[class*='language-'] {
-  background: #f1f6f1;
-  padding: 16px;
-  border-radius: 6px;
-  overflow-x: auto;
-  font-size: 0.9em;
-  color: #1b3a1b;
-}
-
-.issue {
-  margin-bottom: 24px;
-}
-
-.issue summary {
-  display: flex;
-  align-items: center;
-}
-
-.issue .icon {
-  width: 18px;
-  height: 18px;
-  margin-right: 6px;
-  vertical-align: middle;
-}
-
-.number {
-  display: inline-block;
-  min-width: 3em;
-  color: #5a7f5a;
-  font-weight: bold;
-  margin-right: 8px;
-}
-
-";
-
-        sb.AppendLine("<style>");
-        sb.AppendLine(css);
-        sb.AppendLine("</style>");
+        sb.AppendLine($"<link rel='stylesheet' href='{cssHref}' />");
+        sb.AppendLine("</head><body>");
 
         // Generate table of contents (TOC) with outline numbers
         sb.AppendLine($"<h1>{issues[0].issue.Summary} [{issues[0].issue.Key}]</h1>");

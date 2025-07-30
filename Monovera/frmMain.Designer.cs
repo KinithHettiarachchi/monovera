@@ -55,6 +55,7 @@
             // 
             // splitContainer1
             // 
+            splitContainer1.BackColor = Color.White;
             splitContainer1.Dock = DockStyle.Fill;
             splitContainer1.Location = new Point(0, 0);
             splitContainer1.Name = "splitContainer1";
@@ -73,7 +74,7 @@
             // 
             // tree
             // 
-            tree.BackColor = Color.Honeydew;
+            tree.BackColor = Color.White;
             tree.Dock = DockStyle.Fill;
             tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
@@ -84,6 +85,7 @@
             // 
             // panelTabs
             // 
+            panelTabs.BackColor = Color.White;
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
@@ -219,8 +221,6 @@
             statusStrip1.ResumeLayout(false);
             statusStrip1.PerformLayout();
             ResumeLayout(false);
-
-            AppLogger.Log($"Initialize GUI components");
         }
 
         #endregion

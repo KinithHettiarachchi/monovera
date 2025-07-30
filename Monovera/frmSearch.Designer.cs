@@ -184,7 +184,7 @@
             btnClose.Text = "Close";
             btnClose.UseVisualStyleBackColor = true;
             // 
-            // SearchDialog
+            // frmSearch
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
@@ -197,10 +197,10 @@
             MaximizeBox = false;
             MinimizeBox = false;
             MinimumSize = new Size(600, 400);
-            Name = "SearchDialog";
+            Name = "frmSearch";
             Opacity = 0.9D;
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "M O N O V E R A - SEARCH";
+            Text = "S E A R C H";
             ((System.ComponentModel.ISupportInitialize)webViewResults).EndInit();
             topPanel.ResumeLayout(false);
             topPanel.PerformLayout();

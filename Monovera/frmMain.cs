@@ -201,20 +201,17 @@ namespace Monovera
             notifyIcon.Icon = SystemIcons.Information; // You can use your own .ico file if needed
             notifyIcon.BalloonTipIcon = ToolTipIcon.Info;
             notifyIcon.BalloonTipTitle = "Node Not Found!";
-            AppLogger.Log($"Initialize system notification 'Node not found'");
         }
 
         private void ShowTrayNotification(string key)
         {
             string message = $"{key} was not found in the tree. If this belongs to one of loaded projects, please update the hierarchy to view it.";
-            AppLogger.Log($"Display system notification {message}");
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            AppLogger.Log($"Exit application");
             notifyIcon?.Dispose();
             base.OnFormClosing(e);
         }
@@ -260,8 +257,6 @@ namespace Monovera
         /// </summary>
         public frmMain()
         {
-            AppLogger.Log($"Starting application");
-
             // Set up application and temp directories
             appDir = AppDomain.CurrentDomain.BaseDirectory;
             tempFolder = Path.Combine(appDir, "temp");
@@ -271,12 +266,11 @@ namespace Monovera
             cssHref = new Uri(cssPath).AbsoluteUri;
             if (!File.Exists(cssPath))
             {
-                AppLogger.Log($"CSS file not found at {cssPath}. Using default styles.");
                 cssHref = "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
             }
             else
             {
-                AppLogger.Log($"Using custom CSS file at {cssPath}");
+                
             }
             InitializeComponent();
             InitializeNotifyIcon();
@@ -289,7 +283,8 @@ namespace Monovera
             tabDetails = new TabControl
             {
                 Dock = DockStyle.Fill,
-                Name = "tabDetails"
+                Name = "tabDetails",
+                BackColor = Color.White
             };
             tabDetails.SelectedIndexChanged += TabDetails_SelectedIndexChanged;
             tabDetails.ShowToolTips = true;
@@ -320,7 +315,6 @@ namespace Monovera
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
-            AppLogger.Log($"Application is ready!");
         }
 
         private TreeNode draggedNode;
@@ -331,20 +325,23 @@ namespace Monovera
             bool isSelected = (e.State & TreeNodeStates.Selected) == TreeNodeStates.Selected;
 
             // Set background color
-            Color backColor = isSelected ? Color.LightGreen : tree.BackColor;
-            using (var bgBrush = new SolidBrush(backColor))
+            Color nodeBackColor = isSelected ? GetTreeSelectionColorFromCSS(cssPath) : tree.BackColor;
+            Color nodeForeColor = tree.ForeColor;
+
+            using (var bgBrush = new SolidBrush(nodeBackColor))
             {
                 e.Graphics.FillRectangle(bgBrush, e.Bounds);
             }
 
             // Set font style
             Font nodeFont = isSelected ? new Font(e.Node.NodeFont ?? tree.Font, FontStyle.Underline) : (e.Node.NodeFont ?? tree.Font);
+
             TextRenderer.DrawText(
                 e.Graphics,
                 e.Node.Text,
                 nodeFont,
                 e.Bounds,
-                tree.ForeColor,
+                nodeForeColor,
                 TextFormatFlags.GlyphOverhangPadding | TextFormatFlags.VerticalCenter
             );
 
@@ -655,7 +652,6 @@ namespace Monovera
         /// </summary>
         private void InitializeContextMenu()
         {
-            AppLogger.Log($"Initializing context menus...");
             // Create the context menu strip
             treeContextMenu = new ContextMenuStrip();
 
@@ -696,12 +692,10 @@ namespace Monovera
 
             if (editorMode)
             {
-                AppLogger.Log($"Editor mode found. Initializing editor context menus...");
                 AddLinkRelatedMenu();
                 AddChangeParentMenu();
                 AddCreateIssueMenus();
                 AddUpDownMenus();
-                AppLogger.Log($"Initialized editor context menus");
             }
 
             treeContextMenu.Opening += (s, e) =>
@@ -1859,6 +1853,68 @@ namespace Monovera
 }";
         }
 
+        private Color GetTreeBackgroundColorFromCSS(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpTree\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the background-color property
+                var colorMatch = Regex.Match(block, @"background-color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.Window;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.Window;
+        }
+
+        private Color GetTreeSelectionColorFromCSS(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpTree\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+
         /// <summary>
         /// Handles the form load event. Initializes configuration, icons, loads all projects into the tree,
         /// and displays recently updated issues.
@@ -1867,6 +1923,9 @@ namespace Monovera
         /// <param name="e">Event arguments.</param>
         private async void frmMain_Load(object sender, EventArgs e)
         {
+            // Example: Set TreeView background to match CSS section background
+            tree.BackColor = GetTreeBackgroundColorFromCSS(cssPath);
+
             LoadingHtml = $@"
 <!DOCTYPE html>
 <html>
@@ -3922,7 +3981,6 @@ function clearFilters() {
 
             tabDetails.MouseUp += TabDetails_MouseUp;
 
-            AppLogger.Log($"Initialized tab context menus");
         }
 
         private void TabDetails_MouseUp(object sender, MouseEventArgs e)
@@ -3960,43 +4018,6 @@ function clearFilters() {
                 }
             }
             return bmp;
-        }
-
-        private async void EditCurrentIssue()
-        {
-            if (tabDetails.SelectedTab == null) return;
-            string issueKey = tabDetails.SelectedTab.Text;
-            if (string.IsNullOrWhiteSpace(issueKey)) return;
-
-            // Fetch current summary and description
-            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-            using var client = new HttpClient();
-            client.BaseAddress = new Uri(jiraBaseUrl);
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-            var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields");
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var fields = doc.RootElement.GetProperty("fields");
-            string summary = fields.GetProperty("summary").GetString() ?? "";
-            string description = "";
-            if (doc.RootElement.TryGetProperty("renderedFields", out var renderedFields) &&
-                renderedFields.TryGetProperty("description", out var descProp) &&
-                descProp.ValueKind == JsonValueKind.String)
-            {
-                description = descProp.GetString() ?? "";
-            }
-
-            // Show the editor dialog
-            using var editor = new frmIssueEditor(issueKey, summary, description, jiraBaseUrl, jiraEmail, jiraToken);
-            if (editor.ShowDialog(this) == DialogResult.OK)
-            {
-                // On save, reload the issue tab
-                TreeNode node = FindNodeByKey(tree.Nodes, issueKey, false);
-                if (node != null)
-                    Tree_AfterSelect(tree, new TreeViewEventArgs(node));
-            }
         }
 
         private async void CloseTab(TabPage tab)
