@@ -112,11 +112,11 @@ Create a file named `configuration.json` in the app directory:
 
 | Main View | Issue Detail | Attachments |
 |-----------|--------------|-------------|
-| ![](screenshots/screenshot1.png) | ![](screenshots/screenshot2.png) | ![](screenshots/screenshot3.png) |
+| ![](screenshots/Screenshot1.png) | ![](screenshots/Screenshot2.png) | ![](screenshots/Screenshot3.png) |
 
 | History | Difference | Context Menu | Search |
 |---------|------------|---------------|--------|
-| ![](screenshots/screenshot5.png) | ![](screenshots/screenshot6.png) | ![](screenshots/screenshot7.png) | ![](screenshots/screenshot8.png) |
+| ![](screenshots/Screenshot5.png) | ![](screenshots/Screenshot6.png) | ![](screenshots/Screenshot7.png) | ![](screenshots/Screenshot8.png) |
 
 
 ---
