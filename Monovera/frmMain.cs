@@ -2798,9 +2798,25 @@ namespace Monovera
                 /**
                 * Combine all sections in to one HTML detail page
                  */
-                string html = BuildIssueDetailFullPageHtml(headerLine, issueType, statusIcon, status, createdDate, lastUpdated, issueUrl, resolvedDescriptionHTML, attachmentsHtml, linksHtml, historyHtml, responseHTML);
+                string tempFolder = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp"); // or use Path.GetTempPath() if preferred
+                string htmlFilePath = Path.Combine(tempFolder, $"{issueKey}.html");
 
-                webView.NavigateToString(html);
+                // Ensure the temp folder exists
+                Directory.CreateDirectory(tempFolder);
+
+                // Build the full HTML
+                string html = BuildIssueDetailFullPageHtml(
+                    headerLine, issueType, statusIcon, status,
+                    createdDate, lastUpdated, issueUrl,
+                    resolvedDescriptionHTML, attachmentsHtml,
+                    linksHtml, historyHtml, responseHTML
+                );
+
+                // Write to file (overwrite if exists)
+                File.WriteAllText(htmlFilePath, html);
+
+                // Load into WebView2
+                webView.Source = new Uri(htmlFilePath);
 
                 webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
                 {
@@ -2831,7 +2847,9 @@ namespace Monovera
 <details open>
   <summary>Attachments</summary>
   <section>
-    <div class='attachments-grid'>
+    <div class='attachments-strip-wrapper'>
+      <button class='scroll-btn left' onclick='scrollAttachments(-1)' aria-label='Scroll left'>&#8592;</button>
+      <div class='attachments-strip' id='attachmentsStrip'>
 ");
 
             foreach (var att in attachments.EnumerateArray())
@@ -2884,6 +2902,8 @@ namespace Monovera
             }
 
             sb.AppendLine(@"
+      </div>
+      <button class='scroll-btn right' onclick='scrollAttachments(1)' aria-label='Scroll right'>&#8594;</button>
     </div>
     <!-- Lightbox for image preview -->
     <div id='attachmentLightbox' class='attachment-lightbox' style='display:none;' onclick='closeAttachmentLightbox()'>
@@ -2892,6 +2912,12 @@ namespace Monovera
   </section>
 </details>
 <script>
+  function scrollAttachments(direction) {
+    var strip = document.getElementById('attachmentsStrip');
+    if (strip) {
+      strip.scrollLeft += direction * 220; // Adjust scroll amount as needed
+    }
+  }
   document.querySelectorAll('.preview-image').forEach(link => {
     link.addEventListener('click', function(e) {
       e.preventDefault();
@@ -2908,11 +2934,22 @@ namespace Monovera
   }
 </script>
 <style>
-  .attachments-grid {
+  .attachments-strip-wrapper {
+    position: relative;
     display: flex;
-    flex-wrap: wrap;
-    gap: 24px;
+    align-items: center;
     margin: 10px 0;
+    background: #f8fcf8;
+    border-radius: 8px;
+    padding: 8px 0;
+  }
+  .attachments-strip {
+    display: flex;
+    gap: 18px;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    padding: 8px 0;
+    flex-grow: 1;
   }
   .attachment-card {
     border: 1px solid #c8e6c9;
@@ -2970,6 +3007,26 @@ namespace Monovera
     background: #c8e6c9;
     color: #1b5e20;
   }
+  .scroll-btn {
+    background-color: #e8f5e9;
+    border: none;
+    cursor: pointer;
+    padding: 8px 12px;
+    font-size: 22px;
+    border-radius: 50%;
+    color: #2e7d32;
+    margin: 0 4px;
+    transition: background 0.3s;
+    box-shadow: 0 2px 6px rgba(0,64,0,0.08);
+    min-width: 40px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .scroll-btn:hover {
+    background-color: #c8e6c9;
+  }
   .attachment-lightbox {
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
@@ -2991,6 +3048,7 @@ namespace Monovera
 
             return sb.ToString();
         }
+
         private string BuildLinksTable(JsonElement fields, string title, string linkType, string prop)
         {
             var sb = new StringBuilder();
