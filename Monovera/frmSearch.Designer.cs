@@ -108,6 +108,7 @@
             // webViewResults
             // 
             webViewResults.AllowExternalDrop = true;
+            webViewResults.BackColor = Color.White;
             webViewResults.CreationProperties = null;
             webViewResults.DefaultBackgroundColor = Color.White;
             webViewResults.Dock = DockStyle.Fill;
@@ -119,6 +120,7 @@
             // 
             // topPanel
             // 
+            topPanel.BackColor = Color.White;
             topPanel.Controls.Add(lblProgress);
             topPanel.Controls.Add(pbProgress);
             topPanel.Controls.Add(cmbProject);
@@ -149,7 +151,7 @@
             // 
             pbProgress.Location = new Point(12, 56);
             pbProgress.Name = "pbProgress";
-            pbProgress.Size = new Size(1462, 10);
+            pbProgress.Size = new Size(1462, 5);
             pbProgress.TabIndex = 9;
             // 
             // cmbProject

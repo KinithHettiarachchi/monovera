@@ -2,6 +2,12 @@ csharpTree {
   color: #97cbff;
   background-color: #f5faff;
 }
+csharpDataGrid {
+	background-color: #0080ff;
+}
+csharpTitle {
+	color: #004182;
+}
 body {
   font-family: 'IBM Plex Sans', sans-serif;
   margin: 30px;

@@ -37,6 +37,7 @@ namespace Monovera
         {
             InitializeComponent();
             InitializeUI();
+            this.BackColor= GetTreeBackgroundColorFromCSS(frmMain.cssPath);
             this.Load += ConfigForm_Load;
         }
 
@@ -66,6 +67,7 @@ namespace Monovera
                 if (idx >= 0)
                 {
                     var dlg = new frmProject(_config.Projects[idx]);
+                    dlg.BackColor = GetTreeBackgroundColorFromCSS(frmMain.cssPath);
                     if (dlg.ShowDialog() == DialogResult.OK)
                     {
                         _config.Projects[idx] = dlg.Project;

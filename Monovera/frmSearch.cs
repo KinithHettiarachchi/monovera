@@ -406,75 +406,7 @@ namespace Monovera
 <head>
   <meta charset='UTF-8'>
  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
-
-<style>
-  body {{
-    font-family: 'IBM Plex Sans', sans-serif;
-    margin: 30px;
-    font-size: 18px;
-    padding: 20px;
-    background-color: #f8fcf8;
-    color: #1c1c1c;
-  }}
-
-  details {{border: 1px solid #c8e6c9;
-    border-radius: 6px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 5px rgba(0, 64, 0, 0.04);
-    background-color: #f5fbf5;
-  }}
-
-  summary {{padding: 10px 14px;
-    font-weight: bold;
-    background-color: #e9f7e9;
-    cursor: pointer;
-    font-size: 1.1em;
-    color: #2e7d32;
-    border-bottom: 1px solid #d0e8d0;
-  }}
-
-  section {{padding: 10px 20px;
-    background-color: #f8fcf8;
-  }}
-
-  table {{width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-    background-color: #f8fcf8;
-    border: 1px solid #e0f2e0;
-    border-radius: 4px;
-    box-shadow: 0 1px 3px rgba(0, 64, 0, 0.03);
-  
-            }}
-
-  td, th {{padding: 8px 10px;
-    border-bottom: 1px solid #eef5ee;
-    text-align: left;
-  
-            }}
-
-  th {{background-color: #e3f4e3;
-    color: #1a3d1a;
-    font-weight: 600;
-    font-size: 0.95em;
-  }}
-
-  tr:hover td {{background-color: #f1faf1;
-  }}
-
-  a {{color: #2e7d32;
-    text-decoration: none;
-  }}
-
-  a:hover {{text-decoration: underline;
-    color: #1b5e20;
-  }}
-
-  img {{vertical-align: middle;
-    margin-right: 8px;
-  }}
-</style>
-
+ <link rel='stylesheet' href='{frmMain.cssHref}' />
 </head>
 <body>
   <details open>

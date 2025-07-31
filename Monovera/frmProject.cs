@@ -31,6 +31,9 @@ namespace Monovera
         public frmProject(ProjectConfig existing = null)
         {
             InitializeComponent();
+            this.BackColor = frmMain.GetTreeBackgroundColorFromCSS(frmMain.cssPath);
+            dgvStatus.DefaultCellStyle.SelectionBackColor = frmMain.GetDataGridSelectionColorFromCSS(frmMain.cssPath);
+            dgvTypes.DefaultCellStyle.SelectionBackColor = frmMain.GetDataGridSelectionColorFromCSS(frmMain.cssPath);
 
             // Clone the existing project config if editing, or create a new one
             Project = existing != null ? CloneProject(existing) : new ProjectConfig();
