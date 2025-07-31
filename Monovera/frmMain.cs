@@ -253,6 +253,31 @@ namespace Monovera
         }
 
         /// <summary>
+        /// Gets an Image from the application's images folder by file name.
+        /// Returns null if the file does not exist or cannot be loaded.
+        /// </summary>
+        /// <param name="fileName">The image file name (e.g., "settings.png").</param>
+        /// <returns>The loaded Image, or null if not found.</returns>
+        public static System.Drawing.Image? GetImageFromImagesFolder(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+                return null;
+
+            string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+            if (!File.Exists(imagePath))
+                return null;
+
+            try
+            {
+                return System.Drawing.Image.FromFile(imagePath);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Initializes the main form, sets up UI controls, event handlers, and directories.
         /// </summary>
         public frmMain()
@@ -278,6 +303,16 @@ namespace Monovera
             // Initialize context menu for tree
             InitializeContextMenu();
             SetupSpinMessages();
+
+            //Set menu icons
+            mnuSettings.Image = GetImageFromImagesFolder("Settings.png");
+            mnuUpdateHierarchy.Image = GetImageFromImagesFolder("Update.png");
+            mnuConfiguration.Image = GetImageFromImagesFolder("Configuration.png");
+
+            mnuActions.Image = GetImageFromImagesFolder("Actions.png");
+            mnuSearch.Image = GetImageFromImagesFolder("Search.png");
+            mnuReport.Image = GetImageFromImagesFolder("GenerateReport.png");
+            mnuRead.Image = GetImageFromImagesFolder("Read.png");
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -2165,6 +2200,29 @@ namespace Monovera
         }
 
         /// <summary>
+        /// Sets the icon for a ToolStripMenuItem based on its description text.
+        /// The icon is loaded from the application's images folder using the first word of the description.
+        /// Example: "Settings..." will use "images/settings.png".
+        /// </summary>
+        /// <param name="menuItem">The ToolStripMenuItem to set the icon for.</param>
+        public void SetMenuIconFromDescription(ToolStripMenuItem menuItem)
+        {
+            if (menuItem == null || string.IsNullOrWhiteSpace(menuItem.Text))
+                return;
+
+            // Get the first word (before space or punctuation)
+            string firstWord = menuItem.Text.Split(new[] { ' ', '.', ',', '-', '!' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            if (string.IsNullOrWhiteSpace(firstWord))
+                return;
+
+            string imageFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", $"{firstWord.ToLower()}.png");
+            if (File.Exists(imageFile))
+            {
+                menuItem.Image = System.Drawing.Image.FromFile(imageFile);
+            }
+        }
+
+        /// <summary>
         /// Adds a "Home" tab to the provided TabControl, displaying a welcome banner for Monovera.
         /// This tab uses a WebView2 control to render a styled HTML page with a banner image.
         /// </summary>
@@ -2508,146 +2566,6 @@ namespace Monovera
             }
 
             return false;
-        }
-
-
-
-        /// <summary>
-        /// Parses a JSON string containing Jira issues and returns a list of JiraIssueDto objects.
-        /// Only issues with summary, type, and hierarchy links are processed.
-        /// </summary>
-        /// <param name="json">The raw JSON string from Jira REST API.</param>
-        /// <returns>List of JiraIssueDto objects parsed from the JSON.</returns>
-        private List<JiraIssueDto> ParseIssuesFromJson(string json, JiraProjectConfig projectConfig)
-        {
-            var issues = new List<JiraIssueDto>();
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var issuesArray = root.GetProperty("issues").EnumerateArray();
-
-            foreach (var issue in issuesArray)
-            {
-                // Extract basic fields
-                var key = issue.GetProperty("key").GetString();
-                var fields = issue.GetProperty("fields");
-                var summary = fields.GetProperty("summary").GetString();
-                var type = fields.GetProperty("issuetype").GetProperty("name").GetString();
-                var customFields = new Dictionary<string, object>();
-
-                if (projectConfig?.SortingField != null)
-                {
-                    if (fields.TryGetProperty(projectConfig.SortingField, out var sortProp))
-                    {
-                        // Store as string or DateTime as needed
-                        customFields[projectConfig.SortingField] = sortProp.ValueKind == JsonValueKind.String
-                            ? sortProp.GetString()
-                            : sortProp.ToString();
-                    }
-                }
-                var issueLinksList = new List<JiraIssueLink>();
-
-                // Extract hierarchy links (e.g. "Blocks" outward links)
-                if (fields.TryGetProperty("issuelinks", out var links) && links.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var link in links.EnumerateArray())
-                    {
-                        var linkTypeName = link.GetProperty("type").GetProperty("name").GetString();
-                        if (linkTypeName == hierarchyLinkTypeName.Split(",")[0].ToString() && link.TryGetProperty("outwardIssue", out var outward))
-                        {
-                            var outwardKey = outward.GetProperty("key").GetString();
-                            var outwardFields = outward.GetProperty("fields");
-                            var outwardSummary = outwardFields.GetProperty("summary").GetString();
-                            var outwardType = outwardFields.GetProperty("issuetype").GetProperty("name").GetString();
-
-                            issueLinksList.Add(new JiraIssueLink
-                            {
-                                LinkTypeName = linkTypeName,
-                                OutwardIssueKey = outwardKey,
-                                OutwardIssueSummary = outwardSummary,
-                                OutwardIssueType = outwardType
-                            });
-                        }
-                    }
-                }
-
-                // Add the parsed issue to the result list
-                issues.Add(new JiraIssueDto
-                {
-                    Key = key,
-                    Summary = summary,
-                    Type = type,
-                    IssueLinks = issueLinksList,
-                    CustomFields = customFields
-                });
-            }
-
-            return issues;
-        }
-
-        private async Task<string> DownloadAllIssuesJson(HttpClient client, string jql, string fields, IProgress<(int completed, int total)> progress)
-        {
-            //Load tab page first
-
-            const int pageSize = 100;
-            const int maxParallelism = 5;
-            const int maxRequestsPerMinute = 300;
-            const int delayBetweenBatchesMs = 60000 / (maxRequestsPerMinute / maxParallelism);
-
-            var totalResponse = await client.GetAsync($"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt=0&maxResults=1");
-            totalResponse.EnsureSuccessStatusCode();
-            var totalJson = await totalResponse.Content.ReadAsStringAsync();
-            using var totalDoc = JsonDocument.Parse(totalJson);
-            int totalIssues = totalDoc.RootElement.GetProperty("total").GetInt32();
-            int totalPages = (int)Math.Ceiling(totalIssues / (double)pageSize);
-
-            var allIssues = new List<JsonElement>();
-            int completed = 0;
-
-            for (int batchStart = 0; batchStart < totalPages; batchStart += maxParallelism)
-            {
-                var batchTasks = new List<Task<JsonElement[]>>();
-
-                for (int i = 0; i < maxParallelism && (batchStart + i) < totalPages; i++)
-                {
-                    int startAt = (batchStart + i) * pageSize;
-                    batchTasks.Add(Task.Run(async () =>
-                    {
-                        var res = await client.GetAsync($"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields={fields}");
-                        res.EnsureSuccessStatusCode();
-                        var json = await res.Content.ReadAsStringAsync();
-                        using var doc = JsonDocument.Parse(json);
-                        return doc.RootElement.GetProperty("issues")
-                            .EnumerateArray()
-                            .Select(e => JsonDocument.Parse(e.GetRawText()).RootElement.Clone())
-                            .ToArray();
-                    }));
-                }
-
-                var batchResults = await Task.WhenAll(batchTasks);
-                foreach (var result in batchResults)
-                {
-                    allIssues.AddRange(result);
-                    completed += result.Length;
-                    progress?.Report((completed, totalIssues));
-                }
-
-                if ((batchStart + maxParallelism) < totalPages)
-                    await Task.Delay(delayBetweenBatchesMs);
-            }
-
-            using var ms = new MemoryStream();
-            using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
-            {
-                writer.WriteStartObject();
-                writer.WritePropertyName("issues");
-                writer.WriteStartArray();
-                foreach (var issue in allIssues)
-                    issue.WriteTo(writer);
-                writer.WriteEndArray();
-                writer.WriteEndObject();
-            }
-
-            return Encoding.UTF8.GetString(ms.ToArray());
         }
 
         private TreeNode CreateTreeNode(JiraIssue issue)

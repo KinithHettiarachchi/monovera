@@ -35,13 +35,13 @@
             panelTabs = new Panel();
             statusStrip1 = new StatusStrip();
             lblUser = new ToolStripStatusLabel();
-            menuActions = new ToolStripDropDownButton();
+            mnuActions = new ToolStripDropDownButton();
             mnuSearch = new ToolStripMenuItem();
             mnuReport = new ToolStripMenuItem();
-            menuRead = new ToolStripMenuItem();
+            mnuRead = new ToolStripMenuItem();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
-            configurationToolStripMenuItem = new ToolStripMenuItem();
+            mnuConfiguration = new ToolStripMenuItem();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
@@ -94,7 +94,7 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, menuActions, mnuSettings, pbProgress, lblProgress, lblShortcuts });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuSettings, pbProgress, lblProgress, lblShortcuts });
             statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
@@ -106,23 +106,21 @@
             // 
             lblUser.Font = new Font("Segoe UI", 9.75F);
             lblUser.Name = "lblUser";
-            lblUser.Size = new Size(130, 18);
-            lblUser.Text = "    Not connected!    ";
+            lblUser.Size = new Size(152, 18);
+            lblUser.Text = "    ❌ Not connected!    ";
             // 
-            // menuActions
+            // mnuActions
             // 
-            menuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuSearch, mnuReport, menuRead });
-            menuActions.Font = new Font("Segoe UI", 9.75F);
-            menuActions.Image = Properties.Resources.Actions;
-            menuActions.ImageTransparentColor = Color.Magenta;
-            menuActions.Name = "menuActions";
-            menuActions.Size = new Size(79, 21);
-            menuActions.Text = "Actions";
+            mnuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuSearch, mnuReport, mnuRead });
+            mnuActions.Font = new Font("Segoe UI", 9.75F);
+            mnuActions.ImageTransparentColor = Color.Magenta;
+            mnuActions.Name = "mnuActions";
+            mnuActions.Size = new Size(63, 21);
+            mnuActions.Text = "Actions";
             // 
             // mnuSearch
             // 
             mnuSearch.Font = new Font("Segoe UI", 9.75F);
-            mnuSearch.Image = Properties.Resources.Search;
             mnuSearch.Name = "mnuSearch";
             mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
             mnuSearch.Size = new Size(246, 22);
@@ -132,50 +130,45 @@
             // mnuReport
             // 
             mnuReport.Font = new Font("Segoe UI", 9.75F);
-            mnuReport.Image = Properties.Resources.Report;
             mnuReport.Name = "mnuReport";
             mnuReport.ShortcutKeys = Keys.Control | Keys.P;
             mnuReport.Size = new Size(246, 22);
             mnuReport.Text = "Generate Report...";
             mnuReport.Click += mnuReport_Click;
             // 
-            // menuRead
+            // mnuRead
             // 
-            menuRead.Font = new Font("Segoe UI", 9.75F);
-            menuRead.Image = Properties.Resources.Speak;
-            menuRead.Name = "menuRead";
-            menuRead.ShortcutKeys = Keys.Control | Keys.Shift | Keys.Z;
-            menuRead.Size = new Size(246, 22);
-            menuRead.Text = "Read out loud...";
-            menuRead.Click += menuRead_Click;
+            mnuRead.Font = new Font("Segoe UI", 9.75F);
+            mnuRead.Name = "mnuRead";
+            mnuRead.ShortcutKeys = Keys.Control | Keys.Shift | Keys.Z;
+            mnuRead.Size = new Size(246, 22);
+            mnuRead.Text = "Read out loud...";
+            mnuRead.Click += menuRead_Click;
             // 
             // mnuSettings
             // 
-            mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, configurationToolStripMenuItem });
+            mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, mnuConfiguration });
             mnuSettings.Font = new Font("Segoe UI", 9.75F);
-            mnuSettings.Image = Properties.Resources.settings;
             mnuSettings.ImageTransparentColor = Color.Magenta;
             mnuSettings.Name = "mnuSettings";
-            mnuSettings.Size = new Size(86, 21);
+            mnuSettings.Size = new Size(70, 21);
             mnuSettings.Text = "Settings";
             // 
             // mnuUpdateHierarchy
             // 
             mnuUpdateHierarchy.Font = new Font("Segoe UI", 9.75F);
-            mnuUpdateHierarchy.Image = Properties.Resources.Update;
             mnuUpdateHierarchy.Name = "mnuUpdateHierarchy";
             mnuUpdateHierarchy.Size = new Size(185, 22);
             mnuUpdateHierarchy.Text = "Update hierarchy...";
             mnuUpdateHierarchy.Click += updateHierarchyToolStripMenuItem_Click;
             // 
-            // configurationToolStripMenuItem
+            // mnuConfiguration
             // 
-            configurationToolStripMenuItem.Font = new Font("Segoe UI", 9.75F);
-            configurationToolStripMenuItem.Image = Properties.Resources.Configuration;
-            configurationToolStripMenuItem.Name = "configurationToolStripMenuItem";
-            configurationToolStripMenuItem.Size = new Size(185, 22);
-            configurationToolStripMenuItem.Text = "Configuration...";
-            configurationToolStripMenuItem.Click += configurationToolStripMenuItem_Click;
+            mnuConfiguration.Font = new Font("Segoe UI", 9.75F);
+            mnuConfiguration.Name = "mnuConfiguration";
+            mnuConfiguration.Size = new Size(185, 22);
+            mnuConfiguration.Text = "Configuration...";
+            mnuConfiguration.Click += configurationToolStripMenuItem_Click;
             // 
             // pbProgress
             // 
@@ -235,11 +228,11 @@
         private ToolStripStatusLabel lblShortcuts;
         private ToolStripSplitButton mnuSettings;
         private ToolStripMenuItem mnuUpdateHierarchy;
-        private ToolStripMenuItem configurationToolStripMenuItem;
+        private ToolStripMenuItem mnuConfiguration;
         private ToolStripStatusLabel lblUser;
-        private ToolStripDropDownButton menuActions;
+        private ToolStripDropDownButton mnuActions;
         private ToolStripMenuItem mnuSearch;
         private ToolStripMenuItem mnuReport;
-        private ToolStripMenuItem menuRead;
+        private ToolStripMenuItem mnuRead;
     }
 }

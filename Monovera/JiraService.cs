@@ -248,7 +248,75 @@ public class JiraService
         }
 
         string serialized = JsonSerializer.Serialize(allIssues, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(cacheFile, serialized);
+
+        // Post-process the JSON to remove unwanted properties/values
+        using var doc = JsonDocument.Parse(serialized);
+        var filtered = new List<JsonElement>();
+
+        foreach (var issue in doc.RootElement.EnumerateArray())
+        {
+            using var objDoc = JsonDocument.Parse(issue.GetRawText());
+            var obj = objDoc.RootElement;
+
+            using var ms = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartObject();
+                foreach (var prop in obj.EnumerateObject())
+                {
+                    // Exclude unwanted properties/values
+                    if (prop.Name == "Updated" && prop.Value.ValueKind == JsonValueKind.Null)
+                        continue;
+                    if (prop.Name == "Created" && prop.Value.ValueKind == JsonValueKind.Null)
+                        continue;
+                    if (prop.Name == "CustomFields")
+                        continue;
+                    if (prop.Name == "IssueLinks" && prop.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        // Filter IssueLinks array
+                        writer.WritePropertyName("IssueLinks");
+                        writer.WriteStartArray();
+                        foreach (var link in prop.Value.EnumerateArray())
+                        {
+                            using var linkDoc = JsonDocument.Parse(link.GetRawText());
+                            var linkObj = linkDoc.RootElement;
+                            writer.WriteStartObject();
+                            foreach (var linkProp in linkObj.EnumerateObject())
+                            {
+                                if (linkProp.Name == "OutwardIssueSummary" && linkProp.Value.GetString() == "")
+                                    continue;
+                                if (linkProp.Name == "OutwardIssueType" && linkProp.Value.GetString() == "")
+                                    continue;
+                                writer.WritePropertyName(linkProp.Name);
+                                linkProp.Value.WriteTo(writer);
+                            }
+                            writer.WriteEndObject();
+                        }
+                        writer.WriteEndArray();
+                    }
+                    else
+                    {
+                        writer.WritePropertyName(prop.Name);
+                        prop.Value.WriteTo(writer);
+                    }
+                }
+                writer.WriteEndObject();
+            }
+            filtered.Add(JsonDocument.Parse(ms.ToArray()).RootElement.Clone());
+        }
+
+        // Write filtered JSON to file
+        using (var ms = new MemoryStream())
+        {
+            using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+            {
+                writer.WriteStartArray();
+                foreach (var item in filtered)
+                    item.WriteTo(writer);
+                writer.WriteEndArray();
+            }
+            await File.WriteAllTextAsync(cacheFile, Encoding.UTF8.GetString(ms.ToArray()));
+        }
 
         return allIssues;
     }
