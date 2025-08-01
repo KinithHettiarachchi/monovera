@@ -3222,12 +3222,12 @@ string html = $@"
 
                     changes.Add($@"
 <tr data-date='{createdStr}' data-user='{HttpUtility.HtmlEncode(author)}' data-field='{HttpUtility.HtmlEncode(field)}'>
-    <td><input type='checkbox' class='compare-check' value='{changeId}' data-from='{fromEsc}' data-to='{toEsc}' data-field='{HttpUtility.HtmlEncode(field)}'></td>
-    <td>{createdStr}<br><small>{timeStr}</small></td>
-    <td>{HttpUtility.HtmlEncode(author)}</td>
-    <td>{fieldIcon} <strong>{HttpUtility.HtmlEncode(field)}</strong></td>
-    <td class='from-val'>{HttpUtility.HtmlEncode(from)}</td>
-    <td class='to-val'>{HttpUtility.HtmlEncode(to)}</td>
+    <td class='confluenceTd'><input type='checkbox' class='compare-check' value='{changeId}' data-from='{fromEsc}' data-to='{toEsc}' data-field='{HttpUtility.HtmlEncode(field)}'></td>
+    <td class='confluenceTd'>{createdStr}<br><small>{timeStr}</small></td>
+    <td class='confluenceTd'>{HttpUtility.HtmlEncode(author)}</td>
+    <td class='confluenceTd'>{fieldIcon} <strong>{HttpUtility.HtmlEncode(field)}</strong></td>
+    <td class='confluenceTd'>{HttpUtility.HtmlEncode(from)}</td>
+    <td class='confluenceTd'>{HttpUtility.HtmlEncode(to)}</td>
 </tr>");
                     changeId++;
                 }
@@ -3251,22 +3251,23 @@ string html = $@"
     <button onclick='viewSelectedDiff()'>🔍 Show Difference</button>
 </div>
 
-<table class='history-table'>
-    <thead>
-        <tr>
-            <th></th>
-            <th>Date</th>
-            <th>User</th>
-            <th>Type</th>
-            <th>Before</th>
-            <th>After</th>
-        </tr>
-    </thead>
-    <tbody>
-        " + string.Join("\n", changes) + @"
-    </tbody>
-</table>
-
+<div class='table-wrap'>
+    <table class='confluenceTable'>
+        <thead>
+            <tr>
+                <th class='confluenceTh'></th>
+                <th class='confluenceTh'>Date</th>
+                <th class='confluenceTh'>User</th>
+                <th class='confluenceTh'>Type</th>
+                <th class='confluenceTh'>Before</th>
+                <th class='confluenceTh'>After</th>
+            </tr>
+        </thead>
+        <tbody>
+            " + string.Join("\n", changes) + @"
+        </tbody>
+    </table>
+</div>
 <div class='diff-overlay' id='diffOverlay' style='display:none'>
     <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
     <h3 id='diffTitle'></h3>
@@ -3381,7 +3382,7 @@ function applyFilters() {
     const user = document.getElementById('filterUser').value.toLowerCase();
     const field = document.getElementById('filterField').value.toLowerCase();
 
-    document.querySelectorAll('.history-table tbody tr').forEach(row => {
+    document.querySelectorAll('.confluenceTable tbody tr').forEach(row => {
         const matchesDate = !date || row.dataset.date === date;
         const matchesUser = !user || row.dataset.user.toLowerCase() === user;
         const matchesField = !field || row.dataset.field.toLowerCase() === field;
@@ -3393,7 +3394,7 @@ function populateDropdowns() {
     const userSet = new Set();
     const fieldSet = new Set();
 
-    document.querySelectorAll('.history-table tbody tr').forEach(row => {
+    document.querySelectorAll('.confluenceTable tbody tr').forEach(row => {
         userSet.add(row.dataset.user);
         fieldSet.add(row.dataset.field);
     });
