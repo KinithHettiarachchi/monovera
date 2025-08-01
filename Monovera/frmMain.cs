@@ -2591,45 +2591,58 @@ namespace Monovera
             }
 
             // --- Step 4: Generate the HTML content ---
-            var sb = new StringBuilder();
+var sb = new StringBuilder();
 
-            foreach (var group in grouped)
-            {
-                sb.AppendLine($@"
+foreach (var group in grouped)
+{
+    sb.AppendLine($@"
 <details open>
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
-    <table>");
+    <div class='subsection'>
+      <div style='display: flex; flex-wrap: wrap; gap: 18px; justify-content: flex-start;'>");
 
-                foreach (var issue in group)
+    foreach (var issue in group)
+    {
+        string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
+        string key = issue.Key;
+        string iconPath = "";
+
+        string typeIconKey = frmMain.GetIconForType(issue.Type);
+        if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
+        {
+            string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+            if (File.Exists(fullPath))
+            {
+                try
                 {
-                    string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
-                    string key = issue.Key;
-                    string iconPath = "";
+                    byte[] bytes = File.ReadAllBytes(fullPath);
+                    string base64 = Convert.ToBase64String(bytes);
+                    iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;margin-bottom:8px;border-radius:6px;background:#e8f5e9;' />";
+                }
+                catch { }
+            }
+        }
 
-                    string typeIconKey = frmMain.GetIconForType(issue.Type);
-                    if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
-                    {
-                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                        if (File.Exists(fullPath))
-                        {
-                            try
-                            {
-                                byte[] bytes = File.ReadAllBytes(fullPath);
-                                string base64 = Convert.ToBase64String(bytes);
-                                iconPath = $"<img src='data:image/png;base64,{base64}' width='20' height='20' />";
-                            }
-                            catch { }
-                        }
-                    }
-
-                    sb.AppendLine($"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath} {summary} [{key}]</a></td></tr>");
+                    sb.AppendLine($@"
+<div class='attachment-card' style='min-width:220px;max-width:320px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;'>
+  <div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
+    {iconPath}
+    <div class='attachment-filename' style='font-weight:600;margin-top:6px;'>{summary}</div>
+  </div>
+  <div class='attachment-meta' style='margin-bottom:8px;'>[{key}]</div>
+  <a href='#' data-key='{key}' class='download-btn' style='margin-top:6px;'>View Details</a>
+</div>");
                 }
 
-                sb.AppendLine("</table></section></details>");
-            }
+    sb.AppendLine(@"
+      </div>
+    </div>
+  </section>
+</details>");
+}
 
-            string html = $@"
+string html = $@"
 <!DOCTYPE html>
 <html>
 <head>
@@ -2640,7 +2653,7 @@ namespace Monovera
 <body>
 {sb}
 <script>
-  document.querySelectorAll('a').forEach(link => {{
+  document.querySelectorAll('a[data-key]').forEach(link => {{
     link.addEventListener('click', e => {{
       e.preventDefault();
       const key = link.dataset.key;
