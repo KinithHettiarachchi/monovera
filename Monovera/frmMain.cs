@@ -3238,10 +3238,16 @@ string html = $@"
             sb.AppendLine(@"
 <div class='filter-section'>
     <label>Date: <input type='date' id='filterDate'></label>
-    <label>User: <input type='text' id='filterUser'></label>
-    <label>Type: <input type='text' id='filterField'></label>
-    <button onclick='applyFilters()'>✅ Apply Filter</button>
-    <button onclick='clearFilters()'>❌ Clear</button>
+    <label>User: 
+        <select id='filterUser'>
+            <option value=''>-- All Users --</option>
+        </select>
+    </label>
+    <label>Type: 
+        <select id='filterField'>
+            <option value=''>-- All Types --</option>
+        </select>
+    </label>
     <button onclick='viewSelectedDiff()'>🔍 Show Difference</button>
 </div>
 
@@ -3377,22 +3383,51 @@ function applyFilters() {
 
     document.querySelectorAll('.history-table tbody tr').forEach(row => {
         const matchesDate = !date || row.dataset.date === date;
-        const matchesUser = !user || row.dataset.user.toLowerCase().includes(user);
-        const matchesField = !field || row.dataset.field.toLowerCase().includes(field);
+        const matchesUser = !user || row.dataset.user.toLowerCase() === user;
+        const matchesField = !field || row.dataset.field.toLowerCase() === field;
         row.style.display = (matchesDate && matchesUser && matchesField) ? '' : 'none';
     });
 }
 
-function clearFilters() {
-    document.getElementById('filterDate').value = '';
-    document.getElementById('filterUser').value = '';
-    document.getElementById('filterField').value = '';
-    applyFilters();
+function populateDropdowns() {
+    const userSet = new Set();
+    const fieldSet = new Set();
+
+    document.querySelectorAll('.history-table tbody tr').forEach(row => {
+        userSet.add(row.dataset.user);
+        fieldSet.add(row.dataset.field);
+    });
+
+    const userSelect = document.getElementById('filterUser');
+    userSet.forEach(user => {
+        const opt = document.createElement('option');
+        opt.value = user;
+        opt.textContent = user;
+        userSelect.appendChild(opt);
+    });
+
+    const fieldSelect = document.getElementById('filterField');
+    fieldSet.forEach(field => {
+        const opt = document.createElement('option');
+        opt.value = field;
+        opt.textContent = field;
+        fieldSelect.appendChild(opt);
+    });
 }
+
+document.getElementById('filterDate').addEventListener('input', applyFilters);
+document.getElementById('filterUser').addEventListener('change', applyFilters);
+document.getElementById('filterField').addEventListener('change', applyFilters);
+
+document.addEventListener('DOMContentLoaded', () => {
+    populateDropdowns();
+    applyFilters();
+});
 </script>
 ");
 
             return sb.ToString();
+
         }
 
 
