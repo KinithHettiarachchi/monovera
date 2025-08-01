@@ -1,9 +1,14 @@
 csharpTree {
-  color: #97cbff;
-  background-color: #f5faff;
+  color: #2a2a2a;
+	accent-color: #97cbff;
+	background-color: #f5faff;
+  flood-color:#003862;
 }
 csharpDataGrid {
-	background-color: #0080ff;
+	accent-color: #1565c0;
+	flood-color:#ffffff;
+	background-color: #ffffff;
+	color: #2a2a2a;
 }
 csharpTitle {
 	color: #004182;
@@ -20,21 +25,27 @@ h2 {
   color: #1b4e8c;
   font-size: 1.6em;
   margin-bottom: 20px;
+  text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
 }
 details {
   margin-bottom: 30px;
   border: 1px solid #c0daf3;
-  border-radius: 10px;
-  box-shadow: 0 2px 6px rgba(0, 32, 64, 0.05);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 64, 128, 0.06);
+  overflow: hidden;
 }
 summary {
   padding: 14px 20px;
   background-color: #f2faff;
   cursor: pointer;
   font-weight: 600;
-  font-size: 1.0em;
+  font-size: 1em;
   border-bottom: 1px solid #96caf4;
   color: #1b4e8c;
+  transition: background 0.2s;
+}
+summary:hover {
+  background-color: #e9f4fe;
 }
 section {
   padding: 16px 20px;
@@ -45,16 +56,16 @@ section {
   margin-bottom: 10px;
   font-size: 1.1em;
   color: #1565c0;
+  text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
 }
 table, .history-table {
   width: 100%;
   border-collapse: separate;
-  border-spacing: 0;
-  border-radius: 8px;
+  border-spacing: 1;
+  border-radius: 10px;
   background: #f5faff;
-  box-shadow: 0 2px 8px rgba(0, 32, 64, 0.04);
+  box-shadow: 0 4px 12px rgba(0, 64, 128, 0.06);
   margin-bottom: 20px;
-  overflow: hidden;
 }
 th {
   background-color: #e1f0ff;
@@ -68,6 +79,7 @@ td {
   padding: 12px 16px;
   border-bottom: 1px solid #dbe9f9;
   color: #2a2a2a;
+  transition: background 0.2s ease;
 }
 tr:hover td {
   background-color: #edf7ff;
@@ -75,6 +87,7 @@ tr:hover td {
 a {
   color: #1565c0;
   text-decoration: none;
+  transition: color 0.2s ease;
 }
 a:hover {
   text-decoration: underline;
@@ -83,7 +96,8 @@ a:hover {
 pre[class*='language-'] {
   background: #eaf4fe;
   padding: 16px;
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow: inset 0 1px 2px rgba(0, 32, 64, 0.05);
   overflow-x: auto;
   font-size: 0.9em;
   color: #1a3c5d;
@@ -103,7 +117,8 @@ pre[class*='language-'] {
   padding: 12px 16px;
   margin-bottom: 10px;
   border: 1px solid #bbdefb;
-  border-radius: 6px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 32, 64, 0.04);
 }
 .change-header {
   font-weight: 600;
@@ -114,20 +129,21 @@ pre[class*='language-'] {
   font-family: sans-serif;
   margin-bottom: 5px;
 }
+.highlight-status,
+.highlight-assignee,
+.highlight-priority {
+  padding: 2px 6px;
+  border-radius: 6px;
+  box-shadow: inset 0 1px 1px rgba(0,64,128,0.05);
+}
 .highlight-status {
   background: #e3f2fd;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 .highlight-assignee {
   background: #d0e9ff;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 .highlight-priority {
   background: #dcefff;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 .from-val {
   color: #000000;
@@ -139,10 +155,14 @@ pre[class*='language-'] {
   background-color: #dcffe5;
   color: #00b63d;
   font-weight: normal;
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 .diff-deleted {
   background-color: #ffebee;
   color: #e10000;
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 .diff-arrow {
   color: #999;
@@ -165,7 +185,8 @@ pre[class*='language-'] {
   z-index: 9999;
   overflow: auto;
   display: none;
-  box-shadow: 0 0 20px rgba(0, 64, 128, 0.2);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(0, 64, 128, 0.2);
 }
 .diff-overlay .diff-close {
   float: right;
@@ -180,6 +201,7 @@ pre[class*='language-'] {
   padding: 20px;
   font-family: monospace;
   white-space: pre-wrap;
+  gap: 2%;
 }
 .diff-columns > div {
   width: 48%;
@@ -187,6 +209,8 @@ pre[class*='language-'] {
   padding: 10px;
   background: #f5faff;
   color: #1a1a1a;
+  border-radius: 6px;
+  box-shadow: inset 0 1px 2px rgba(0,32,64,0.05);
 }
 .no-links,
 .no-attachments {
@@ -195,7 +219,7 @@ pre[class*='language-'] {
   font-style: italic;
   background: #edf6fd;
   border: 1px solid #bbdefb;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 .attachments-strip-wrapper {
   position: relative;
@@ -203,8 +227,9 @@ pre[class*='language-'] {
   align-items: center;
   margin: 10px 0;
   background: #f5faff;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 8px 0;
+  box-shadow: 0 2px 6px rgba(0,64,128,0.05);
 }
 .attachments-strip {
   display: flex;
@@ -217,7 +242,7 @@ pre[class*='language-'] {
 .attachment-card {
   border: 1px solid #b3d4f6;
   background: #fff;
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 12px;
   text-align: center;
   font-size: 0.95em;
@@ -226,8 +251,12 @@ pre[class*='language-'] {
   align-items: center;
   min-width: 180px;
   max-width: 240px;
-  box-shadow: 0 2px 8px rgba(0,64,128,0.04);
+  box-shadow: 0 4px 10px rgba(0,64,128,0.06);
   color: #2a2a2a;
+  transition: transform 0.2s ease;
+}
+.attachment-card:hover {
+  transform: translateY(-4px);
 }
 .attachment-img {
   max-width: 220px;
@@ -239,13 +268,13 @@ pre[class*='language-'] {
   cursor: pointer;
 }
 .attachment-img:hover {
-  box-shadow: 0 0 12px #2196f3;
+  box-shadow: 0 0 14px #2196f3;
 }
 .attachment-filename {
   font-weight: 600;
   margin-bottom: 4px;
   color: #1565c0;
-  word-break: break-all;
+  word-break: break-word;
 }
 .attachment-meta {
   font-size: 0.85em;
@@ -259,7 +288,7 @@ pre[class*='language-'] {
   padding: 6px 16px;
   background: #dcefff;
   color: #1565c0;
-  border-radius: 4px;
+  border-radius: 6px;
   text-decoration: none;
   font-weight: 500;
   border: none;
@@ -279,7 +308,7 @@ pre[class*='language-'] {
   border-radius: 50%;
   color: #1565c0;
   margin: 0 4px;
-  transition: background 0.3s;
+  transition: background 0.3s, transform 0.2s;
   box-shadow: 0 2px 6px rgba(0,64,128,0.08);
   min-width: 40px;
   min-height: 40px;
@@ -289,6 +318,7 @@ pre[class*='language-'] {
 }
 .scroll-btn:hover {
   background-color: #bbdefb;
+  transform: scale(1.1);
 }
 .attachment-lightbox {
   position: fixed;
@@ -327,8 +357,8 @@ pre[class*='language-'] {
 .custom-alert-content {
   background: white;
   padding: 20px 30px;
-  border-radius: 8px;
-  box-shadow: 0 4px 10px rgba(33,150,243,0.3);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(33,150,243,0.3);
   font-family: Arial, sans-serif;
   font-size: 16px;
   max-width: 400px;
@@ -342,7 +372,8 @@ pre[class*='language-'] {
   color: white;
   font-weight: bold;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
+  transition: background 0.2s ease;
 }
 .custom-alert-content button:hover {
   background-color: #005a9e;
@@ -363,6 +394,7 @@ pre[class*='language-'] {
   border-top: 10px solid #2196f3;
   border-radius: 50%;
   animation: spin 1s linear infinite;
+  box-shadow: 0 2px 8px rgba(0, 64, 128, 0.1);
 }
 @keyframes spin {
   0% { transform: rotate(0deg); }

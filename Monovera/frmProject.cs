@@ -31,9 +31,16 @@ namespace Monovera
         public frmProject(ProjectConfig existing = null)
         {
             InitializeComponent();
-            this.BackColor = frmMain.GetTreeBackgroundColorFromCSS(frmMain.cssPath);
-            dgvStatus.DefaultCellStyle.SelectionBackColor = frmMain.GetDataGridSelectionColorFromCSS(frmMain.cssPath);
-            dgvTypes.DefaultCellStyle.SelectionBackColor = frmMain.GetDataGridSelectionColorFromCSS(frmMain.cssPath);
+            this.BackColor = frmMain.GetCSSColor_Tree_Background(frmMain.cssPath);
+
+            dgvStatus.DefaultCellStyle.SelectionBackColor = frmMain.GetCSSColor_DataGrid_SelectionBackground(frmMain.cssPath);
+            dgvTypes.DefaultCellStyle.SelectionBackColor = frmMain.GetCSSColor_DataGrid_SelectionBackground(frmMain.cssPath);
+            dgvStatus.DefaultCellStyle.SelectionForeColor = frmMain.GetCSSColor_DataGrid_SelectionForeground(frmMain.cssPath);
+            dgvTypes.DefaultCellStyle.SelectionForeColor = frmMain.GetCSSColor_DataGrid_SelectionForeground(frmMain.cssPath);
+            dgvStatus.DefaultCellStyle.BackColor = frmMain.GetCSSColor_DataGrid_Background(frmMain.cssPath);
+            dgvTypes.DefaultCellStyle.BackColor = frmMain.GetCSSColor_DataGrid_Background(frmMain.cssPath);
+            dgvStatus.DefaultCellStyle.ForeColor = frmMain.GetCSSColor_DataGrid_Foreground(frmMain.cssPath);
+            dgvTypes.DefaultCellStyle.ForeColor = frmMain.GetCSSColor_DataGrid_Foreground(frmMain.cssPath);
 
             // Clone the existing project config if editing, or create a new one
             Project = existing != null ? CloneProject(existing) : new ProjectConfig();

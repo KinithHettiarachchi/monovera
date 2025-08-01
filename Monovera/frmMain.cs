@@ -333,6 +333,9 @@ namespace Monovera
             InitializeTabContextMenu();
             EnableTabDragDrop();
 
+
+            tree.BackColor = GetCSSColor_Tree_Background(cssPath);
+            tree.ForeColor = GetCSSColor_Tree_Foreground(cssPath);
             tree.DrawMode = TreeViewDrawMode.OwnerDrawText;
             tree.DrawNode += Tree_DrawNode;
 
@@ -360,8 +363,8 @@ namespace Monovera
             bool isSelected = (e.State & TreeNodeStates.Selected) == TreeNodeStates.Selected;
 
             // Set background color
-            Color nodeBackColor = isSelected ? GetTreeSelectionColorFromCSS(cssPath) : tree.BackColor;
-            Color nodeForeColor = tree.ForeColor;
+            Color nodeBackColor = isSelected ? GetCSSColor_Tree_SelectionBackground(cssPath) : GetCSSColor_Tree_Background(cssPath);
+            Color nodeForeColor = GetCSSColor_Tree_Foreground(cssPath);
 
             using (var bgBrush = new SolidBrush(nodeBackColor))
             {
@@ -802,7 +805,7 @@ namespace Monovera
                 StartPosition = FormStartPosition.Manual,
                 Width = 700,
                 Height = 440,
-                BackColor = GetTreeBackgroundColorFromCSS(cssPath),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -819,7 +822,7 @@ namespace Monovera
                 ColumnCount = 1,
                 RowCount = 4,
                 Padding = new Padding(18, 18, 18, 18),
-                BackColor = GetTreeBackgroundColorFromCSS(cssPath),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 AutoSize = false
             };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
@@ -834,7 +837,7 @@ namespace Monovera
                 Dock = DockStyle.Top,
                 Height = 32,
                 TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = GetTitleColorFromCSS(cssPath)
+                ForeColor = GetCSSColor_Title(cssPath)
             };
             layout.Controls.Add(lblTitle, 0, 0);
 
@@ -881,14 +884,15 @@ namespace Monovera
                 AllowUserToDeleteRows = true,
                 ReadOnly = true,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                BackgroundColor = Color.White,
+                BackgroundColor = GetCSSColor_DataGrid_Background(cssPath),
+                ForeColor= GetCSSColor_DataGrid_Foreground(cssPath),
                 RowHeadersVisible = false,
                 MultiSelect = false,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
                 DefaultCellStyle = new DataGridViewCellStyle
                 {
-                    SelectionBackColor = GetDataGridSelectionColorFromCSS(cssPath),
-                    SelectionForeColor = Color.White
+                    SelectionBackColor = GetCSSColor_DataGrid_SelectionBackground(cssPath),
+                    SelectionForeColor = GetCSSColor_DataGrid_SelectionForeground(cssPath)
                 },
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom
             };
@@ -991,7 +995,7 @@ namespace Monovera
                 FlowDirection = FlowDirection.RightToLeft,
                 Dock = DockStyle.Top, // Ensures full visibility in TableLayoutPanel
                 Padding = new Padding(0, 8, 0, 0),
-                BackColor =GetTreeBackgroundColorFromCSS(cssPath),
+                BackColor =GetCSSColor_Tree_Background(cssPath),
                 AutoSize = false,
                 Height = 56 // Should match or exceed button height
             };
@@ -1088,7 +1092,7 @@ namespace Monovera
                     dlg.Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
                     dlg.Width = 420;
                     dlg.Height = 210;
-                    dlg.BackColor = GetTreeBackgroundColorFromCSS(cssPath);
+                    dlg.BackColor = GetCSSColor_Tree_Background(cssPath);
                     dlg.MaximizeBox = false;
                     dlg.MinimizeBox = false;
                     dlg.ShowInTaskbar = false;
@@ -1100,7 +1104,7 @@ namespace Monovera
                         ColumnCount = 2,
                         RowCount = 3,
                         Padding = new Padding(24, 18, 24, 18),
-                        BackColor=GetTreeBackgroundColorFromCSS(cssPath),
+                        BackColor=GetCSSColor_Tree_Background(cssPath),
                         AutoSize = true
                     };
                     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -1116,7 +1120,7 @@ namespace Monovera
                         Dock = DockStyle.Top,
                         Height = 32,
                         TextAlign = ContentAlignment.MiddleLeft,
-                        ForeColor = GetTitleColorFromCSS(cssPath)
+                        ForeColor = GetCSSColor_Title(cssPath)
                     };
                     layout.SetColumnSpan(lblTitle, 2);
                     layout.Controls.Add(lblTitle, 0, 0);
@@ -1148,7 +1152,7 @@ namespace Monovera
                         FlowDirection = FlowDirection.RightToLeft,
                         Dock = DockStyle.Fill,
                         Padding = new Padding(0, 8, 0, 0),
-                        BackColor=GetTreeBackgroundColorFromCSS(cssPath)
+                        BackColor=GetCSSColor_Tree_Background(cssPath)
                     };
                     var btnOk = new System.Windows.Forms.Button
                     {
@@ -1330,7 +1334,7 @@ namespace Monovera
                 Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition)),
                 Width = 700,
                 Height = 280,
-                BackColor = GetTreeBackgroundColorFromCSS(cssPath),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -1343,7 +1347,7 @@ namespace Monovera
                 ColumnCount = 2,
                 RowCount = 5,
                 Padding = new Padding(10, 18, 24, 18),
-                BackColor = GetTreeBackgroundColorFromCSS(cssPath),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 AutoSize = true
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -1361,7 +1365,7 @@ namespace Monovera
                 Dock = DockStyle.Top,
                 Height = 32,
                 TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = GetTitleColorFromCSS(cssPath)
+                ForeColor = GetCSSColor_Title(cssPath)
             };
             layout.SetColumnSpan(lblTitle, 2);
             layout.Controls.Add(lblTitle, 0, 0);
@@ -1888,7 +1892,7 @@ namespace Monovera
 }";
         }
 
-        public static Color GetTreeBackgroundColorFromCSS(string cssFilePath)
+        public static Color GetCSSColor_Tree_Background(string cssFilePath)
         {
             // Read the CSS file
             string css = File.ReadAllText(cssFilePath);
@@ -1919,7 +1923,69 @@ namespace Monovera
             return SystemColors.Window;
         }
 
-        public static Color GetTreeSelectionColorFromCSS(string cssFilePath)
+        public static Color GetCSSColor_Tree_SelectionBackground(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpTree\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"accent-color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+
+        public static Color GetCSSColor_Tree_SelectionForeground(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpTree\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"flood-color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+
+        public static Color GetCSSColor_Tree_Foreground(string cssFilePath)
         {
             // Read the CSS file
             string css = File.ReadAllText(cssFilePath);
@@ -1950,7 +2016,70 @@ namespace Monovera
             return SystemColors.HighlightText;
         }
 
-        public static Color GetDataGridSelectionColorFromCSS(string cssFilePath)
+        public static Color GetCSSColor_DataGrid_SelectionForeground(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpDataGrid\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"flood-color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+
+        public static Color GetCSSColor_DataGrid_SelectionBackground(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpDataGrid\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"accent-color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+
+
+        public static Color GetCSSColor_DataGrid_Background(string cssFilePath)
         {
             // Read the CSS file
             string css = File.ReadAllText(cssFilePath);
@@ -1981,7 +2110,37 @@ namespace Monovera
             return SystemColors.HighlightText;
         }
 
-        public static Color GetTitleColorFromCSS(string cssFilePath)
+        public static Color GetCSSColor_DataGrid_Foreground(string cssFilePath)
+        {
+            // Read the CSS file
+            string css = File.ReadAllText(cssFilePath);
+
+            // Find the csharpTree selector block
+            var match = Regex.Match(css, @"csharpDataGrid\s*\{([^}]*)\}", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (match.Success)
+            {
+                string block = match.Groups[1].Value;
+
+                // Find the color property
+                var colorMatch = Regex.Match(block, @"color\s*:\s*([^;]+);", RegexOptions.IgnoreCase);
+                if (colorMatch.Success)
+                {
+                    string colorValue = colorMatch.Groups[1].Value.Trim();
+                    try
+                    {
+                        return ColorTranslator.FromHtml(colorValue);
+                    }
+                    catch
+                    {
+                        // Fallback to default if parsing fails
+                        return SystemColors.HighlightText;
+                    }
+                }
+            }
+            // Fallback to default if not found
+            return SystemColors.HighlightText;
+        }
+        public static Color GetCSSColor_Title(string cssFilePath)
         {
             // Read the CSS file
             string css = File.ReadAllText(cssFilePath);
@@ -2021,8 +2180,8 @@ namespace Monovera
         private async void frmMain_Load(object sender, EventArgs e)
         {
             // Example: Set TreeView background to match CSS section background
-            tree.BackColor = GetTreeBackgroundColorFromCSS(cssPath);
-            splitContainer1.BackColor = GetTreeBackgroundColorFromCSS(cssPath);
+            tree.BackColor = GetCSSColor_Tree_Background(cssPath);
+            splitContainer1.BackColor = GetCSSColor_Tree_Background(cssPath);
 
 
             LoadingHtml = $@"
@@ -2031,19 +2190,7 @@ namespace Monovera
 <head>
   <meta charset='UTF-8'>
   <link rel='stylesheet' href='{cssHref}' />
-  <style>
-    html, body {{
-      height: 100%;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      background-color: #fff;
-      font-family: Arial, sans-serif;
-    }}
-  </style>
-</head>
+ </head>
 <body>
   <div class='spinner'></div>
 </body>
@@ -2267,13 +2414,13 @@ namespace Monovera
             {
                 ImageKey = iconKey,
                 ToolTipText = "Welcome to Monovera!",
-                BackColor= GetTreeBackgroundColorFromCSS(cssPath)
+                BackColor= GetCSSColor_Tree_Background(cssPath)
             };
 
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2
             {
                 Dock = DockStyle.Fill,
-                BackColor= GetTreeBackgroundColorFromCSS(cssPath)
+                BackColor= GetCSSColor_Tree_Background(cssPath)
             };
 
             homePage.Controls.Add(webView);
@@ -2338,14 +2485,14 @@ namespace Monovera
         {
             // --- Step 1: Prepare WebView2 control and TabPage first ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-            webView.BackColor= GetTreeBackgroundColorFromCSS(cssPath);
+            webView.BackColor= GetCSSColor_Tree_Background(cssPath);
 
             // Create the tab page immediately
             var updatePage = new TabPage("Recent Updates!")
             {
                 ImageKey = "updates",
                 ToolTipText = "Issues that were updated during past 30 days!",
-                BackColor= GetTreeBackgroundColorFromCSS(cssPath)
+                BackColor= GetCSSColor_Tree_Background(cssPath)
             };
             updatePage.Controls.Add(webView);
 
