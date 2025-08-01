@@ -176,7 +176,7 @@ pre[class*='language-'] {
 }
 
 .to-val {
-	color: #000000;
+	color: #1565c0;
 }
 
 .diff-added {
@@ -221,32 +221,239 @@ pre[class*='language-'] {
 	box-shadow: 0 6px 18px rgba(0, 64, 128, 0.2);
 }
 
-	.diff-overlay .diff-close {
-		float: right;
-		margin: 10px;
-		cursor: pointer;
-		font-size: 20px;
-		color: #1a1a1a;
-	}
+.diff-overlay-header {
+	position: sticky;
+	top: 0;
+	z-index: 1001;
+	background-color: #f2faff;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 14px 20px;
+	border-bottom: 1px solid #96caf4;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
+	font-weight: 600;
+	font-size: 1em;
+	color: #1b4e8c;
+	transition: background 0.2s;
+}
+
+.diff-overlay-header h3#diffTitle {
+	margin: 0;
+	font-size: 1.25em;
+	color: #1565c0;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+}
+
+.diff-close {
+	background: #e53935;
+	color: #fff;
+	font-size: 1.6em;
+	font-weight: bold;
+	border-radius: 8px;
+	padding: 0 16px;
+	margin-left: 18px;
+	cursor: pointer;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
+	border: none;
+	transition: background 0.2s;
+	position: relative;
+	top: 0;
+}
+
+.diff-close:hover {
+	background: #b71c1c;
+}
 
 .diff-columns {
 	display: flex;
-	justify-content: space-between;
-	padding: 20px;
-	font-family: monospace;
-	white-space: pre-wrap;
-	gap: 2%;
+	gap: 24px;
+	padding: 24px;
 }
 
-	.diff-columns > div {
-		width: 48%;
-		border: 1px solid #c5e1f9;
-		padding: 10px;
-		background: #f5faff;
-		color: #1a1a2a;
-		border-radius: 6px;
-		box-shadow: inset 0 1px 2px rgba(0,32,64,0.05);
+.diff-columns > div {
+	width: 48%;
+	border: 1px solid #b3d4f6;
+	padding: 12px;
+	background: #f7fbff;
+	color: #1a1a2a;
+	border-radius: 6px;
+	box-shadow: inset 0 1px 2px rgba(0,32,64,0.05);
+	min-height: 200px;
+	overflow: auto;
+}
+
+.diff-columns h4 {
+	color: #1565c0;
+	margin-bottom: 8px;
+}
+
+.history-day {
+	margin: 24px 0;
+	border-left: 4px solid #2196f3;
+	padding-left: 16px;
+}
+
+	.history-day h5 {
+		font-size: 1.2em;
+		color: #1565c0;
+		margin-bottom: 8px;
 	}
+
+.history-block {
+	background: #f0f9ff;
+	padding: 12px 16px;
+	margin-bottom: 10px;
+	border: 1px solid #bbdefb;
+	border-radius: 8px;
+	box-shadow: 0 1px 3px rgba(0, 32, 64, 0.04);
+}
+
+.change-header {
+	font-weight: 600;
+	color: #0d47a1;
+	margin-bottom: 6px;
+}
+
+.history-item {
+	font-family: sans-serif;
+	margin-bottom: 5px;
+}
+
+.highlight-status,
+.highlight-assignee,
+.highlight-priority {
+	padding: 2px 6px;
+	border-radius: 6px;
+	box-shadow: inset 0 1px 1px rgba(0,64,128,0.05);
+}
+
+.highlight-status {
+	background: #e3f2fd;
+}
+
+.highlight-assignee {
+	background: #d0e9ff;
+}
+
+.highlight-priority {
+	background: #dcefff;
+}
+
+.from-val {
+	color: #000000;
+}
+
+.to-val {
+	color: #1565c0;
+}
+
+.diff-added {
+	background-color: #dcffe5;
+	color: #00b63d;
+	font-weight: normal;
+	border-radius: 4px;
+	padding: 2px 4px;
+}
+
+.diff-deleted {
+	background-color: #ffebee;
+	color: #e10000;
+	border-radius: 4px;
+	padding: 2px 4px;
+}
+
+.diff-arrow {
+	color: #999;
+	padding: 0 4px;
+}
+
+.view-diff-btn {
+	margin-left: 10px;
+	font-size: 0.9em;
+	cursor: pointer;
+	color: #1565c0;
+}
+
+.diff-overlay {
+	position: fixed;
+	top: 5%;
+	left: 10%;
+	width: 80%;
+	height: 70%;
+	background: #ffffff;
+	border: 2px solid #90caf9;
+	z-index: 9999;
+	overflow: auto;
+	display: none;
+	border-radius: 10px;
+	box-shadow: 0 6px 18px rgba(0, 64, 128, 0.2);
+}
+
+.diff-overlay-header {
+	position: sticky;
+	top: 0;
+	z-index: 1001;
+	background: #fff;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 12px 24px 12px 18px;
+	border-bottom: 2px solid #b3d4f6;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
+}
+
+.diff-overlay-header h3#diffTitle {
+	margin: 0;
+	font-size: 1.25em;
+	color: #1565c0;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+}
+
+.diff-close {
+	background: #e53935;
+	color: #fff;
+	font-size: 1.6em;
+	font-weight: bold;
+	border-radius: 8px;
+	padding: 0 16px;
+	margin-left: 18px;
+	cursor: pointer;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
+	border: none;
+	transition: background 0.2s;
+	position: relative;
+	top: 0;
+}
+
+.diff-close:hover {
+	background: #b71c1c;
+}
+
+.diff-columns {
+	display: flex;
+	gap: 24px;
+	padding: 24px;
+}
+
+.diff-columns > div {
+	width: 48%;
+	border: 1px solid #b3d4f6;
+	padding: 12px;
+	background: #f7fbff;
+	color: #1a1a2a;
+	border-radius: 6px;
+	box-shadow: inset 0 1px 2px rgba(0,32,64,0.05);
+	min-height: 200px;
+	overflow: auto;
+}
+
+.diff-columns h4 {
+	color: #1565c0;
+	margin-bottom: 8px;
+}
 
 .no-links,
 .no-attachments {

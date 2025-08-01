@@ -3273,11 +3273,19 @@ string html = $@"
     </table>
 </div>
 <div class='diff-overlay' id='diffOverlay' style='display:none'>
-    <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
-    <h3 id='diffTitle'></h3>
+    <div class='diff-overlay-header'>
+        <h3 id='diffTitle'></h3>
+        <div class='diff-close' onclick=""document.getElementById('diffOverlay').style.display='none'"">✖</div>
+    </div>
     <div class='diff-columns'>
-        <div><h4>Older Version</h4><div id='diffFrom'></div></div>
-        <div><h4>New Version</h4><div id='diffTo'></div></div>
+        <div>
+            <h4>Older Version</h4>
+            <div id='diffFrom'></div>
+        </div>
+        <div>
+            <h4>New Version</h4>
+            <div id='diffTo'></div>
+        </div>
     </div>
 </div>
 
