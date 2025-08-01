@@ -400,3 +400,228 @@ pre[class*='language-'] {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
 }
+
+/* --- JIRA/Confluence HTML Tag Styling Additions --- */
+
+/* Table wrapper for confluence tables */
+.table-wrap {
+  margin: 24px 0;
+  padding: 0;
+  background: none;
+}
+
+/* Confluence Table */
+table.confluenceTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f5faff 60%, #e3f2fd 100%);
+  box-shadow: 0 6px 24px rgba(33,150,243,0.10);
+  margin-bottom: 24px;
+  overflow: hidden;
+  animation: fadeInTable 0.8s;
+  border: 1px solid #b3d4f6;
+}
+
+th.confluenceTh {
+  background: linear-gradient(90deg, #e1f0ff 60%, #bbdefb 100%);
+  color: #0d47a1;
+  text-align: left;
+  padding: 16px 20px;
+  font-weight: bold;
+  border-bottom: 2px solid #b3d4f6;
+  font-size: 1.05em;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 8px rgba(33,150,243,0.04);
+}
+
+td.confluenceTd {
+  padding: 14px 20px;
+  border-bottom: 1px solid #dbe9f9;
+  color: #2a2a2a;
+  background: transparent;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+tr:hover td.confluenceTd {
+  background: #d0e9ff;
+  box-shadow: 0 4px 16px rgba(33,150,243,0.08);
+  transform: scale(1.01);
+}
+
+/* Panel styles for different info types */
+.panel {
+  border-radius: 10px;
+  border: 1.5px solid #b3d4f6;
+  margin: 18px 0;
+  box-shadow: 0 4px 16px rgba(33,150,243,0.08);
+  overflow: hidden;
+  animation: fadeInPanel 0.6s;
+}
+
+@keyframes fadeInPanel {
+  from { opacity: 0; transform: translateY(16px);}
+  to { opacity: 1; transform: translateY(0);}
+}
+
+.panelContent {
+  padding: 18px 24px;
+  font-size: 1em;
+  border-radius: 0 0 10px 10px;
+  font-family: inherit;
+}
+
+.panel[style*="#deebff"], .panelContent[style*="#deebff"] { /* Info */
+  background: linear-gradient(90deg, #deebff 80%, #e3f2fd 100%);
+  border-left: 6px solid #2684ff;
+}
+.panel[style*="#eae6ff"], .panelContent[style*="#eae6ff"] { /* Doc */
+  background: linear-gradient(90deg, #eae6ff 80%, #f5faff 100%);
+  border-left: 6px solid #6554c0;
+}
+.panel[style*="#e3fcef"], .panelContent[style*="#e3fcef"] { /* Success */
+  background: linear-gradient(90deg, #e3fcef 80%, #f5faff 100%);
+  border-left: 6px solid #36b37e;
+}
+.panel[style*="#fffae6"], .panelContent[style*="#fffae6"] { /* Exclamation */
+  background: linear-gradient(90deg, #fffae6 80%, #fffde7 100%);
+  border-left: 6px solid #ffab00;
+}
+.panel[style*="#ffebe6"], .panelContent[style*="#ffebe6"] { /* Error */
+  background: linear-gradient(90deg, #ffebe6 80%, #fffde7 100%);
+  border-left: 6px solid #ff5630;
+}
+
+/* Preformatted code panel */
+.preformatted.panel {
+  background: #f5faff;
+  border-left: 6px solid #1565c0;
+}
+.preformattedContent.panelContent {
+  background: #eaf4fe;
+  padding: 0;
+}
+.preformattedContent pre {
+  background: #eaf4fe;
+  color: #1a3c5d;
+  font-family: 'IBM Plex Mono', 'Consolas', monospace;
+  font-size: 0.98em;
+  border-radius: 8px;
+  margin: 0;
+  padding: 16px;
+  box-shadow: 0 2px 8px rgba(33,150,243,0.08);
+}
+
+/* Lists */
+ul, ol {
+  margin: 16px 0 16px 32px;
+  padding-left: 18px;
+}
+ul ul, ol ol, ul ol, ol ul {
+  margin-top: 4px;
+  margin-bottom: 4px;
+  padding-left: 18px;
+}
+li {
+  margin-bottom: 6px;
+  font-size: 1em;
+  line-height: 1.6;
+}
+
+/* User hover link */
+a.user-hover {
+  color: #1565c0;
+  font-weight: 600;
+  background: linear-gradient(90deg, #e3f2fd 60%, #bbdefb 100%);
+  border-radius: 6px;
+  padding: 2px 8px;
+  transition: background 0.2s, color 0.2s;
+}
+a.user-hover:hover {
+  background: #bbdefb;
+  color: #0d47a1;
+  text-decoration: underline;
+}
+
+/* External link */
+a.external-link {
+  color: #1565c0;
+  font-weight: 500;
+  text-decoration: underline;
+  background: linear-gradient(90deg, #e3f2fd 60%, #bbdefb 100%);
+  border-radius: 6px;
+  padding: 2px 8px;
+  transition: background 0.2s, color 0.2s;
+}
+a.external-link:hover {
+  background: #bbdefb;
+  color: #0d47a1;
+}
+
+/* Horizontal rule */
+hr {
+  border: none;
+  border-top: 2px solid #b3d4f6;
+  margin: 24px 0;
+  opacity: 0.7;
+}
+
+/* Blockquote */
+blockquote {
+  border-left: 6px solid #97cbff;
+  background: linear-gradient(90deg, #f5faff 80%, #e3f2fd 100%);
+  margin: 18px 0;
+  padding: 16px 24px;
+  font-style: italic;
+  color: #1565c0;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(33,150,243,0.06);
+}
+
+/* Font tag (for status coloring) */
+font[color="#36B37E"] {
+  color: #36B37E !important;
+  font-weight: bold;
+  letter-spacing: 1px;
+  font-size: 1.05em;
+}
+
+/* Monospace date/time */
+tt, code {
+  font-family: 'IBM Plex Mono', 'Consolas', monospace;
+  background: #eaf4fe;
+  color: #1565c0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.98em;
+}
+
+/* Emoji in paragraph */
+p {
+  font-size: 1em;
+  line-height: 1.7;
+  margin-bottom: 12px;
+}
+p:has(> img), p:has(> .emoji) {
+  font-size: 1.3em;
+  text-align: center;
+}
+
+/* Ensure existing styles are not lost; all additions are scoped to new selectors */
+
+/* Add a visually appealing border for all images in the report */
+section img {
+	border: 2.5px solid #90caf9;
+	border-radius: 10px;
+	box-shadow: 0 2px 12px rgba(33,150,243,0.10);
+	padding: 4px;
+	background: linear-gradient(135deg, #f5faff 70%, #e3f2fd 100%);
+	transition: box-shadow 0.2s;
+	max-width: 100%;
+	height: auto;
+}
+
+section img:hover {
+	box-shadow: 0 0 18px #2196f3;
+}

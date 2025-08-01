@@ -328,7 +328,7 @@ public class JiraHtmlReportGenerator
         sb.AppendLine("</head><body>");
 
         // Generate table of contents (TOC) with outline numbers
-        sb.AppendLine($"<h1>{issues[0].issue.Summary} [{issues[0].issue.Key}]</h1>");
+        sb.AppendLine($"<details open style=\"margin-left:0em;\" id=\"TOC\" class=\"issue\">\r\n  <summary>{issues[0].issue.Summary} [{issues[0].issue.Key}]</summary>\r\n  <section class=\"desc\">");
         sb.AppendLine("<ul>");
 
         int previousLevel = 0;
@@ -354,7 +354,7 @@ public class JiraHtmlReportGenerator
         }
         for (int i = 0; i < previousLevel; i++)
             sb.AppendLine("</ul>");
-        sb.AppendLine("</ul><hr>");
+        sb.AppendLine("\r\n</section>\r\n</details>\r\n<hr>");
 
         // Render each issue as a collapsible section with description and related issues
         foreach (var (issue, html, number) in issues)
