@@ -3236,19 +3236,23 @@ string html = $@"
             var sb = new StringBuilder();
 
             sb.AppendLine(@"
-<div class='filter-section'>
-    <label>Date: <input type='date' id='filterDate'></label>
-    <label>User: 
-        <select id='filterUser'>
+<div class='filter-section' style='margin-bottom:18px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;'>
+    <label style='font-weight:500;color:#1565c0;'>Date:
+        <input type='date' id='filterDate' style='padding:6px 12px;min-width:120px;margin-left:8px;'/>
+    </label>
+    <label style='font-weight:500;color:#1565c0;'>User:
+        <select id='filterUser' class='download-btn' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
             <option value=''>-- All Users --</option>
         </select>
     </label>
-    <label>Type: 
-        <select id='filterField'>
+    <label style='font-weight:500;color:#1565c0;'>Type:
+        <select id='filterField' class='download-btn' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
             <option value=''>-- All Types --</option>
         </select>
     </label>
-    <button onclick='viewSelectedDiff()'>🔍 Show Difference</button>
+    <button onclick='viewSelectedDiff()' class='download-btn' style='margin-left:18px;font-size:1em;display:flex;align-items:center;gap:6px;'>
+        <span style='font-size:1.2em;'>🔍</span> Show Difference
+    </button>
 </div>
 
 <div class='table-wrap'>
