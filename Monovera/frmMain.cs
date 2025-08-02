@@ -1328,7 +1328,7 @@ namespace Monovera
             if (tree.SelectedNode == null) return;
 
             string selectedKey = "";
-            string baseKey= tree.SelectedNode.Tag?.ToString();
+            string baseKey = tree.SelectedNode.Tag?.ToString();
 
             if (mode == "Sibling")
             {
@@ -1336,8 +1336,9 @@ namespace Monovera
             }
             else if (mode == "Child")
             {
-                 selectedKey = tree.SelectedNode.Tag?.ToString();
-            } else
+                selectedKey = tree.SelectedNode.Tag?.ToString();
+            }
+            else
             {
                 MessageBox.Show("Invalid mode specified for adding issue.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
@@ -1489,13 +1490,11 @@ namespace Monovera
             dlg.AcceptButton = btnCreate;
             dlg.CancelButton = btnCancel;
 
-
             if (dlg.ShowDialog(tree) == DialogResult.OK)
             {
                 string linkMode = cmbMode.SelectedItem.ToString();
                 string issueType = cmbType.SelectedItem.ToString();
                 string summary = txtSummary.Text.Trim();
-                //string description = txtDesc.Text.Trim();
 
                 if (string.IsNullOrWhiteSpace(summary))
                 {
@@ -1504,7 +1503,6 @@ namespace Monovera
                 }
 
                 // Call async create method
-                // Example usage in frmMain.cs
                 string? newIssueKey = await jiraService.CreateAndLinkJiraIssueAsync(
                     selectedKey,
                     linkMode,
@@ -1512,11 +1510,68 @@ namespace Monovera
                     summary,
                     config);
 
-                MessageBox.Show($"New issue {newIssueKey} has been created as a {mode} of {tree.SelectedNode.Tag?.ToString()}.");
+                if (!string.IsNullOrWhiteSpace(newIssueKey))
+                {
+                    // Immediately open the created issue in the Edit dialog
+                    await Task.Delay(500); // Optional: give Jira a moment to process
+                    EditCurrentIssue(newIssueKey, summary);
+                }
+
+                MessageBox.Show($"New issue {newIssueKey} has been created as a {mode} of {tree.SelectedNode.Tag?.ToString()}.\nPlease update your hierarchy to show it in the tree view.","New issue created!",MessageBoxButtons.OK,MessageBoxIcon.Information);
             }
         }
 
-        
+        // Overload for EditCurrentIssue to accept key and summary directly
+        private async void EditCurrentIssue(string issueKey, string issueSummary)
+        {
+            if (string.IsNullOrWhiteSpace(issueKey)) return;
+
+            string url = $"{jiraBaseUrl}/browse/{issueKey}";
+
+            using (var dlg = new Form())
+            {
+                dlg.Text = $"Edit : {issueSummary} [{issueKey}]";
+                dlg.Width = 1200;
+                dlg.Height = 800;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MinimizeBox = false;
+                dlg.MaximizeBox = true;
+
+                // Set dialog icon from Monovera.ico in images folder
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                if (File.Exists(iconPath))
+                {
+                    dlg.Icon = new Icon(iconPath);
+                }
+
+                var webView = new Microsoft.Web.WebView2.WinForms.WebView2
+                {
+                    Dock = DockStyle.Fill
+                };
+                dlg.Controls.Add(webView);
+
+                dlg.Shown += async (s, e) =>
+                {
+                    await webView.EnsureCoreWebView2Async();
+                    webView.CoreWebView2.Navigate(url);
+                };
+
+                dlg.FormClosed += async (s, e) =>
+                {
+                    var node = FindNodeByKey(tree.Nodes, issueKey, false);
+                    if (node != null)
+                    {
+                        lastTreeMouseButton = MouseButtons.Left;
+                        await Tree_AfterSelect_Internal(tree, new TreeViewEventArgs(node), true);
+                    }
+                };
+
+                dlg.ShowDialog(this);
+            }
+        }
+
+
 
 
         /// <summary>
@@ -2590,7 +2645,7 @@ namespace Monovera
 
             // --- Step 3: Build the JQL and get issues ---
             DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
-            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND updated >= -14d ORDER BY updated DESC";
+            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -14d OR updated >= -14d) ORDER BY updated DESC";
             var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
 
             var tasks = rawIssues.Select(async issue =>
@@ -2730,6 +2785,17 @@ string html = $@"
             var content = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(content);
 
+            // Check if the issue was created in the last 30 days
+            if (doc.RootElement.TryGetProperty("fields", out var fields))
+            {
+                if (fields.TryGetProperty("created", out var createdProp) &&
+                    DateTime.TryParse(createdProp.GetString(), out var createdDate) &&
+                    createdDate >= DateTime.UtcNow.AddDays(-30))
+                {
+                    return true;
+                }
+            }
+
             // Look for changelog histories
             if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
                 changelog.TryGetProperty("histories", out var histories))
@@ -2738,10 +2804,10 @@ string html = $@"
                 {
                     // Check if the change was made in the last 30 days
                     if (history.TryGetProperty("created", out var createdProp) &&
-                        DateTime.TryParse(createdProp.GetString(), out var created) &&
-                        created >= DateTime.UtcNow.AddDays(-30))
+                        DateTime.TryParse(createdProp.GetString(), out var changeDate) &&
+                        changeDate >= DateTime.UtcNow.AddDays(-30))
                     {
-                        // Check if the change was to summary or description
+                        // Check if the change was to summary, description, or parent
                         if (history.TryGetProperty("items", out var items))
                         {
                             foreach (var item in items.EnumerateArray())
@@ -2749,7 +2815,7 @@ string html = $@"
                                 if (item.TryGetProperty("field", out var fieldName))
                                 {
                                     string field = fieldName.GetString();
-                                    if (field == "summary" || field == "description")
+                                    if (field == "summary" || field == "description" || field.ToLower().Contains("parent"))
                                         return true;
                                 }
                             }
