@@ -692,47 +692,22 @@ namespace Monovera
         {
             // Create the context menu strip
             treeContextMenu = new ContextMenuStrip();
-
-            // Create icons for menu items using Unicode characters
-            var iconSearch = CreateUnicodeIcon("🔍");
-            var iconReport = CreateUnicodeIcon("📄");
-
-            // Create the search menu item with shortcut and icon
-            searchMenuItem = new ToolStripMenuItem("Search")
-            {
-                Image = iconSearch,
-                ShortcutKeys = Keys.Control | Keys.Q,
-                ShowShortcutKeys = true
-            };
-
-            // Create the report menu item with shortcut and icon
-            reportMenuItem = new ToolStripMenuItem("Generate Report")
-            {
-                Image = iconReport,
-                ShortcutKeys = Keys.Control | Keys.P,
-                ShowShortcutKeys = true
-            };
-
-            // Attach event handlers for menu item clicks
-            searchMenuItem.Click += (s, e) => ShowSearchDialog(tree);
-
-            reportMenuItem.Click += async (s, e) =>
-            {
-                GenerateReport();
-            };
-
-            // Add menu items to the context menu
-            treeContextMenu.Items.Add(searchMenuItem);
-            treeContextMenu.Items.Add(reportMenuItem);
-
             // Assign the context menu to the tree view
-            tree.ContextMenuStrip = treeContextMenu;
+            tree.ContextMenuStrip = treeContextMenu;           
+
+            AddSearchMenu();
+            AddGenerateReportMenu();
 
             if (editorMode)
             {
+                AddSeparatorMenu();
                 AddLinkRelatedMenu();
                 AddChangeParentMenu();
+                AddSeparatorMenu();
+                AddEditMenu();
+                AddSeparatorMenu();
                 AddCreateIssueMenus();
+                AddSeparatorMenu();
                 AddUpDownMenus();
             }
 
@@ -757,11 +732,69 @@ namespace Monovera
                     else if (item.Text.StartsWith("Link related") 
                     || item.Text.StartsWith("Change Parent") 
                     || item.Text.StartsWith("Move Up") 
-                    || item.Text.StartsWith("Move Down")) { 
+                    || item.Text.StartsWith("Move Down")
+                    || item.Text.StartsWith("Edit")) { 
                         item.Enabled = canModify;
                     }
                 }
             };
+        }
+
+
+        private void AddSeparatorMenu()
+        {
+            var separatorMenu = new ToolStripSeparator();
+            treeContextMenu.Items.Add(separatorMenu);
+        }
+
+        private void AddSearchMenu()
+        {
+            // Create the search menu item with shortcut and icon
+            var iconSearch = CreateUnicodeIcon("🔍");
+            searchMenuItem = new ToolStripMenuItem("Search")
+            {
+                Image = iconSearch,
+                ShortcutKeys = Keys.Control | Keys.Q,
+                ShowShortcutKeys = true
+            };
+
+            // Attach event handlers for menu item clicks
+            searchMenuItem.Click += (s, e) => ShowSearchDialog(tree);
+
+            // Add menu items to the context menu
+            treeContextMenu.Items.Add(searchMenuItem);
+        }
+
+        private void AddGenerateReportMenu()
+        {
+            // Create the report menu item with shortcut and icon
+            var iconReport = CreateUnicodeIcon("📄");
+            reportMenuItem = new ToolStripMenuItem("Generate Report")
+            {
+                Image = iconReport,
+                ShortcutKeys = Keys.Control | Keys.P,
+                ShowShortcutKeys = true
+            };
+
+            reportMenuItem.Click += async (s, e) =>
+            {
+                GenerateReport();
+            };
+
+            treeContextMenu.Items.Add(reportMenuItem);
+        }
+
+        private void AddEditMenu()
+        {
+            // Add Edit... menu item to tree context menu
+            var iconEdit = CreateUnicodeIcon("✏️");
+            var editMenuItem = new ToolStripMenuItem("Edit...", iconEdit);
+            editMenuItem.Click += async (s, e) =>
+            { 
+                EditCurrentIssue(true); 
+            };
+
+            treeContextMenu.Items.Add(editMenuItem);
         }
 
         private void AddLinkRelatedMenu()
@@ -4210,23 +4243,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
         }
 
-        private async void EditCurrentIssue()
+        private async void EditCurrentIssue(bool loadedFromTreeContextMenu = false)
         {
-            if (rightClickedTab == null) return;
-            string issueKey = rightClickedTab.Text;
+            string issueKey = null;
+            string issueSummaryAndKey = null;
+
+            if (loadedFromTreeContextMenu)
+            {
+                // Handle tree context menu
+                if (tree.SelectedNode == null) return;
+                issueKey = tree.SelectedNode.Tag?.ToString();
+                issueSummaryAndKey = tree.SelectedNode.Text;
+            }
+            else
+            {
+                // Handle tab context menu
+                if (rightClickedTab == null) return;
+                issueKey = rightClickedTab.Text;
+                issueSummaryAndKey = rightClickedTab.ToolTipText;
+            }
+
             if (string.IsNullOrWhiteSpace(issueKey)) return;
 
             string url = $"{jiraBaseUrl}/browse/{issueKey}";
 
             using (var dlg = new Form())
             {
-                dlg.Text = $"Edit {issueKey}";
+                dlg.Text = $"Edit : {issueSummaryAndKey}";
                 dlg.Width = 1200;
                 dlg.Height = 800;
                 dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.FormBorderStyle = FormBorderStyle.Sizable;
-                dlg.MinimizeBox = true;
+                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
+                dlg.MinimizeBox = false;
                 dlg.MaximizeBox = true;
+
+                // Set dialog icon from Monovera.ico in images folder
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                if (File.Exists(iconPath))
+                {
+                    dlg.Icon = new Icon(iconPath);
+                }
 
                 var webView = new Microsoft.Web.WebView2.WinForms.WebView2
                 {
@@ -4240,14 +4296,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     webView.CoreWebView2.Navigate(url);
                 };
 
-                // When dialog closes, reload the selected tab's issue as if Ctrl+Click
                 dlg.FormClosed += async (s, e) =>
                 {
                     var node = FindNodeByKey(tree.Nodes, issueKey, false);
                     if (node != null)
                     {
                         lastTreeMouseButton = MouseButtons.Left;
-                        // Force reload by passing true for forcedReload
                         await Tree_AfterSelect_Internal(tree, new TreeViewEventArgs(node), true);
                     }
                 };
