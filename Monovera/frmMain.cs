@@ -83,11 +83,11 @@ namespace Monovera
         /// <summary>Application directory path.</summary>
         string appDir = "";
         /// <summary>Temporary directory path for storing files.</summary>
-        string tempFolder = "";
+        public static string tempFolder = "";
 
         public static string cssPath = "";
         public static string cssHref = "";
-        public string LoadingHtml = "";
+        public static string LoadingHtml = "";
 
         /// <summary>
         /// Root configuration for Jira integration.
@@ -2278,12 +2278,22 @@ namespace Monovera
 <head>
   <meta charset='UTF-8'>
   <link rel='stylesheet' href='{cssHref}' />
- </head>
+  <style>
+    body {{
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }}
+  </style>
+</head>
 <body>
   <div class='spinner'></div>
 </body>
 </html>
 ";
+
 
 
             //Load home page

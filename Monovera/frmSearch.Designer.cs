@@ -114,7 +114,7 @@
             webViewResults.Dock = DockStyle.Fill;
             webViewResults.Location = new Point(0, 70);
             webViewResults.Name = "webViewResults";
-            webViewResults.Size = new Size(1605, 568);
+            webViewResults.Size = new Size(1605, 675);
             webViewResults.TabIndex = 0;
             webViewResults.ZoomFactor = 1D;
             // 
@@ -190,7 +190,7 @@
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(1605, 638);
+            ClientSize = new Size(1605, 745);
             Controls.Add(webViewResults);
             Controls.Add(topPanel);
             Font = new Font("Segoe UI", 9F);

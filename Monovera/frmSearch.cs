@@ -180,6 +180,10 @@ namespace Monovera
         /// </summary>
         private async void BtnSearch_Click(object sender, EventArgs e)
         {
+            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+            File.WriteAllText(htmlFilePath, frmMain.LoadingHtml);
+            webViewResults.CoreWebView2.Navigate(htmlFilePath);
+
             string query = txtSearch.Text.Trim();
             string queryKey = query.ToUpperInvariant();
 

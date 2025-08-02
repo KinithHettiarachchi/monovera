@@ -111,7 +111,7 @@
             // 
             // mnuActions
             // 
-            mnuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuSearch, mnuReport, mnuRead });
+            mnuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuRead, mnuReport, mnuSearch });
             mnuActions.Font = new Font("Segoe UI", 9.75F);
             mnuActions.ImageTransparentColor = Color.Magenta;
             mnuActions.Name = "mnuActions";
@@ -123,7 +123,7 @@
             mnuSearch.Font = new Font("Segoe UI", 9.75F);
             mnuSearch.Name = "mnuSearch";
             mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
-            mnuSearch.Size = new Size(246, 22);
+            mnuSearch.Size = new Size(226, 22);
             mnuSearch.Text = "Search...";
             mnuSearch.Click += mnuSearch_Click;
             // 
@@ -132,7 +132,7 @@
             mnuReport.Font = new Font("Segoe UI", 9.75F);
             mnuReport.Name = "mnuReport";
             mnuReport.ShortcutKeys = Keys.Control | Keys.P;
-            mnuReport.Size = new Size(246, 22);
+            mnuReport.Size = new Size(226, 22);
             mnuReport.Text = "Generate Report...";
             mnuReport.Click += mnuReport_Click;
             // 
@@ -140,8 +140,8 @@
             // 
             mnuRead.Font = new Font("Segoe UI", 9.75F);
             mnuRead.Name = "mnuRead";
-            mnuRead.ShortcutKeys = Keys.Control | Keys.Shift | Keys.Z;
-            mnuRead.Size = new Size(246, 22);
+            mnuRead.ShortcutKeys = Keys.Control | Keys.R;
+            mnuRead.Size = new Size(226, 22);
             mnuRead.Text = "Read out loud...";
             mnuRead.Click += menuRead_Click;
             // 
