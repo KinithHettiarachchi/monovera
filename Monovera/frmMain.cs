@@ -2745,6 +2745,11 @@ string html = $@"
 
         private async void Tree_AfterSelect(object sender, TreeViewEventArgs e)
         {
+            await Tree_AfterSelect_Internal(sender, e, false);
+        }
+
+        private async Task Tree_AfterSelect_Internal(object sender, TreeViewEventArgs e, bool forcedReload)
+            {
             if (suppressAfterSelect)
                 return;
 
@@ -2826,7 +2831,7 @@ string html = $@"
             {
                 tabDetails.SelectedTab = pageTab;
                 // Always reload if Ctrl+LeftClick, even if tab is already focused
-                if (isLeftClick && isCtrlPressed)
+                if ((isLeftClick && isCtrlPressed) || forcedReload)
                 {
                     // Always reload, even if tab is already focused
                     webView = pageTab.Controls.OfType<Microsoft.Web.WebView2.WinForms.WebView2>().FirstOrDefault();
@@ -3306,31 +3311,56 @@ function escapeHtml(text) {
                .replace(/'/g, '&#039;');
 }
 
-function simpleDiffHtml(from, to) {
-    let i = 0;
-    let minLen = Math.min(from.length, to.length);
-    let commonPrefix = '';
+function simpleDiffHtml(oldText, newText) {
+    const oldWords = oldText.split(/(\s+|\b)/);  // split by words and spaces
+    const newWords = newText.split(/(\s+|\b)/);
 
-    while(i < minLen && from[i] === to[i]) {
-        commonPrefix += from[i];
-        i++;
+    const dp = Array(oldWords.length + 1).fill(null).map(() =>
+        Array(newWords.length + 1).fill(0));
+
+    for (let i = 1; i <= oldWords.length; i++) {
+        for (let j = 1; j <= newWords.length; j++) {
+            if (oldWords[i - 1] === newWords[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
     }
 
-    let fromDeleted = from.slice(i);
-    let toAdded = to.slice(i);
+    let i = oldWords.length, j = newWords.length;
+    const fromDiff = [], toDiff = [];
 
-    let htmlFrom = escapeHtml(commonPrefix);
-    if(fromDeleted.length > 0) {
-        htmlFrom += `<span class='diff-deleted'>${escapeHtml(fromDeleted)}</span>`;
+    while (i > 0 && j > 0) {
+        if (oldWords[i - 1] === newWords[j - 1]) {
+            fromDiff.unshift(escapeHtml(oldWords[i - 1]));
+            toDiff.unshift(escapeHtml(newWords[j - 1]));
+            i--;
+            j--;
+        } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+            fromDiff.unshift(`<span class='diff-deleted'>${escapeHtml(oldWords[i - 1])}</span>`);
+            i--;
+        } else {
+            toDiff.unshift(`<span class='diff-added'>${escapeHtml(newWords[j - 1])}</span>`);
+            j--;
+        }
     }
 
-    let htmlTo = escapeHtml(commonPrefix);
-    if(toAdded.length > 0) {
-        htmlTo += `<span class='diff-added'>${escapeHtml(toAdded)}</span>`;
+    while (i > 0) {
+        fromDiff.unshift(`<span class='diff-deleted'>${escapeHtml(oldWords[i - 1])}</span>`);
+        i--;
+    }
+    while (j > 0) {
+        toDiff.unshift(`<span class='diff-added'>${escapeHtml(newWords[j - 1])}</span>`);
+        j--;
     }
 
-    return { htmlFrom, htmlTo };
+    return {
+        htmlFrom: fromDiff.join(''),
+        htmlTo: toDiff.join('')
+    };
 }
+
 
 function showCustomAlert(message) {
     document.getElementById('customAlertMessage').innerText = message;
@@ -4166,7 +4196,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 ImageScalingSize = new Size(24, 24) // Increase image space if needed
             };
 
-            //tabContextMenu.Items.Add("Edit", null, (s, e) => EditCurrentIssue());
+            tabContextMenu.Items.Add(new ToolStripMenuItem("Edit...", CreateIconFromUnicode("✏️"), (s, e) => EditCurrentIssue())
+            {
+                ImageScaling = ToolStripItemImageScaling.None
+            });
             tabContextMenu.Items.Add(new ToolStripMenuItem("Close This Tab", CreateIconFromUnicode("❌"), (s, e) => CloseTab(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
             tabContextMenu.Items.Add(new ToolStripMenuItem("Close All Other Tabs", CreateIconFromUnicode("🔀"), (s, e) => CloseAllOtherTabs(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
             tabContextMenu.Items.Add(new ToolStripMenuItem("Close Tabs on Left", CreateIconFromUnicode("⬅️"), (s, e) => CloseTabsOnLeft(rightClickedTab)) { ImageScaling = ToolStripItemImageScaling.None });
@@ -4175,6 +4208,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
             tabDetails.MouseUp += TabDetails_MouseUp;
 
+        }
+
+        private async void EditCurrentIssue()
+        {
+            if (rightClickedTab == null) return;
+            string issueKey = rightClickedTab.Text;
+            if (string.IsNullOrWhiteSpace(issueKey)) return;
+
+            string url = $"{jiraBaseUrl}/browse/{issueKey}";
+
+            using (var dlg = new Form())
+            {
+                dlg.Text = $"Edit {issueKey}";
+                dlg.Width = 1200;
+                dlg.Height = 800;
+                dlg.StartPosition = FormStartPosition.CenterParent;
+                dlg.FormBorderStyle = FormBorderStyle.Sizable;
+                dlg.MinimizeBox = true;
+                dlg.MaximizeBox = true;
+
+                var webView = new Microsoft.Web.WebView2.WinForms.WebView2
+                {
+                    Dock = DockStyle.Fill
+                };
+                dlg.Controls.Add(webView);
+
+                dlg.Shown += async (s, e) =>
+                {
+                    await webView.EnsureCoreWebView2Async();
+                    webView.CoreWebView2.Navigate(url);
+                };
+
+                // When dialog closes, reload the selected tab's issue as if Ctrl+Click
+                dlg.FormClosed += async (s, e) =>
+                {
+                    var node = FindNodeByKey(tree.Nodes, issueKey, false);
+                    if (node != null)
+                    {
+                        lastTreeMouseButton = MouseButtons.Left;
+                        // Force reload by passing true for forcedReload
+                        await Tree_AfterSelect_Internal(tree, new TreeViewEventArgs(node), true);
+                    }
+                };
+
+                dlg.ShowDialog(this);
+            }
         }
 
         private void TabDetails_MouseUp(object sender, MouseEventArgs e)
