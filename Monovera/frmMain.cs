@@ -2650,11 +2650,14 @@ namespace Monovera
 
             var tasks = rawIssues.Select(async issue =>
             {
-                if (await HasSummaryOrDescriptionChangeAsync(issue.Key))
+                var (hasChange, changeType) = await HasSummaryOrDescriptionChangeAsync(issue.Key);
+                if (hasChange)
+                {
+                    issue.CustomFields["ChangeTypeTag"] = changeType;
                     return issue;
+                }
                 return null;
             });
-
             var withChanges = await Task.WhenAll(tasks);
             var filteredIssues = withChanges.Where(i => i != null).ToList();
 
@@ -2692,11 +2695,14 @@ foreach (var group in grouped)
 
     foreach (var issue in group)
     {
-        string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
-        string key = issue.Key;
-        string iconPath = "";
+                    string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
+                    string key = issue.Key;
+                    string iconPath = "";
+                    string changeTag = issue.CustomFields.TryGetValue("ChangeTypeTag", out var tagObj) && tagObj is string tagStr && !string.IsNullOrWhiteSpace(tagStr)
+                        ? $"<span class='change-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>"
+                        : "";
 
-        string typeIconKey = frmMain.GetIconForType(issue.Type);
+                    string typeIconKey = frmMain.GetIconForType(issue.Type);
         if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
         {
             string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
@@ -2714,10 +2720,12 @@ foreach (var group in grouped)
 
                     sb.AppendLine($@"
 <div class='attachment-card' style='min-width:220px;max-width:320px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;'>
-  <div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
-    {iconPath}
-    <div class='attachment-filename' style='font-weight:600;margin-top:6px;'>{summary}</div>
+<div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
+  <div style='display:flex;align-items:center;gap:8px;'>
+    {iconPath} {changeTag}
   </div>
+  <div class='attachment-filename' style='font-weight:600;margin-top:6px;'>{summary}</div>
+</div>
   <div class='attachment-meta' style='margin-bottom:8px;'>[{key}]</div>
   <a href='#' data-key='{key}' class='download-btn' style='margin-top:6px;'>View Details</a>
 </div>");
@@ -2768,22 +2776,22 @@ string html = $@"
         /// <returns>
         /// True if the issue's summary or description was changed in the last 30 days; otherwise, false.
         /// </returns>
-        private async Task<bool> HasSummaryOrDescriptionChangeAsync(string issueKey)
+        private async Task<(bool hasChange, string changeType)> HasSummaryOrDescriptionChangeAsync(string issueKey)
         {
-            // Build the REST API URL to fetch issue changelog
             var url = $"{jiraBaseUrl}/rest/api/3/issue/{issueKey}?expand=changelog";
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
                 Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
 
-            // Request the issue data from Jira
             var response = await client.GetAsync(url);
             if (!response.IsSuccessStatusCode)
-                return false;
+                return (false, "");
 
-            // Parse the JSON response
             var content = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(content);
+
+            DateTime latestChangeDate = DateTime.MinValue;
+            string latestChangeType = "";
 
             // Check if the issue was created in the last 30 days
             if (doc.RootElement.TryGetProperty("fields", out var fields))
@@ -2792,7 +2800,8 @@ string html = $@"
                     DateTime.TryParse(createdProp.GetString(), out var createdDate) &&
                     createdDate >= DateTime.UtcNow.AddDays(-30))
                 {
-                    return true;
+                    latestChangeDate = createdDate;
+                    latestChangeType = "Created";
                 }
             }
 
@@ -2802,21 +2811,35 @@ string html = $@"
             {
                 foreach (var history in histories.EnumerateArray())
                 {
-                    // Check if the change was made in the last 30 days
                     if (history.TryGetProperty("created", out var createdProp) &&
                         DateTime.TryParse(createdProp.GetString(), out var changeDate) &&
                         changeDate >= DateTime.UtcNow.AddDays(-30))
                     {
-                        // Check if the change was to summary, description, or parent
-                        if (history.TryGetProperty("items", out var items))
+                        if (changeDate > latestChangeDate)
                         {
-                            foreach (var item in items.EnumerateArray())
+                            if (history.TryGetProperty("items", out var items))
                             {
-                                if (item.TryGetProperty("field", out var fieldName))
+                                foreach (var item in items.EnumerateArray())
                                 {
-                                    string field = fieldName.GetString();
-                                    if (field == "summary" || field == "description" || field.ToLower().Contains("parent"))
-                                        return true;
+                                    if (item.TryGetProperty("field", out var fieldName))
+                                    {
+                                        string field = fieldName.GetString();
+                                        if (field == "summary")
+                                        {
+                                            latestChangeDate = changeDate;
+                                            latestChangeType = "Summary Updated";
+                                        }
+                                        else if (field == "description")
+                                        {
+                                            latestChangeDate = changeDate;
+                                            latestChangeType = "Description Updated";
+                                        }
+                                        else if (field.ToLower().Contains("parent"))
+                                        {
+                                            latestChangeDate = changeDate;
+                                            latestChangeType = "Parent Changed";
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2824,7 +2847,9 @@ string html = $@"
                 }
             }
 
-            return false;
+            if (!string.IsNullOrEmpty(latestChangeType))
+                return (true, latestChangeType);
+            return (false, "");
         }
 
         private TreeNode CreateTreeNode(JiraIssue issue)

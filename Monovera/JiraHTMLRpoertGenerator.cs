@@ -368,7 +368,7 @@ public class JiraHtmlReportGenerator
 
             sb.AppendLine($"""
 <details open style="margin-left:{level * 2}em;" id="{anchor}" class="issue">
-  <summary>{iconImg}<span class="number">{number}</span>{title} [{key}]</summary>
+  <summary>{iconImg}<span class="number">{number} </span>{title} [{key}]</summary>
   <section class="desc">{html}</section>
 """);
 
