@@ -2490,7 +2490,7 @@ namespace Monovera
             // Load the tab icon
             string iconKey = "home";
             System.Drawing.Image iconImage = null;
-            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.ico");
 
             if (File.Exists(iconFile))
             {
@@ -2561,11 +2561,30 @@ namespace Monovera
 <head>
   <meta charset='utf-8'>
   <link rel='stylesheet' href='{cssHref}' />
+  <style>
+    html, body {{
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background-color: white;
+    }}
+    img {{
+      max-width: 100%;
+      max-height: 100%;
+      height: auto;
+      width: auto;
+    }}
+  </style>
 </head>
 <body>
   <img src=""{imageUri}"" alt=""Monovera"" />
 </body>
 </html>";
+
 
             // Finally navigate to the final HTML
             webView.NavigateToString(html);
