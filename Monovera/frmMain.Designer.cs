@@ -36,9 +36,10 @@
             statusStrip1 = new StatusStrip();
             lblUser = new ToolStripStatusLabel();
             mnuActions = new ToolStripDropDownButton();
-            mnuSearch = new ToolStripMenuItem();
-            mnuReport = new ToolStripMenuItem();
             mnuRead = new ToolStripMenuItem();
+            mnuReport = new ToolStripMenuItem();
+            mnuRecentUpdates = new ToolStripMenuItem();
+            mnuSearch = new ToolStripMenuItem();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             mnuConfiguration = new ToolStripMenuItem();
@@ -111,21 +112,21 @@
             // 
             // mnuActions
             // 
-            mnuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuRead, mnuReport, mnuSearch });
+            mnuActions.DropDownItems.AddRange(new ToolStripItem[] { mnuRead, mnuReport, mnuRecentUpdates, mnuSearch });
             mnuActions.Font = new Font("Segoe UI", 9.75F);
             mnuActions.ImageTransparentColor = Color.Magenta;
             mnuActions.Name = "mnuActions";
             mnuActions.Size = new Size(63, 21);
             mnuActions.Text = "Actions";
             // 
-            // mnuSearch
+            // mnuRead
             // 
-            mnuSearch.Font = new Font("Segoe UI", 9.75F);
-            mnuSearch.Name = "mnuSearch";
-            mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
-            mnuSearch.Size = new Size(226, 22);
-            mnuSearch.Text = "Search...";
-            mnuSearch.Click += mnuSearch_Click;
+            mnuRead.Font = new Font("Segoe UI", 9.75F);
+            mnuRead.Name = "mnuRead";
+            mnuRead.ShortcutKeys = Keys.Control | Keys.R;
+            mnuRead.Size = new Size(226, 22);
+            mnuRead.Text = "Read out loud...";
+            mnuRead.Click += menuRead_Click;
             // 
             // mnuReport
             // 
@@ -136,14 +137,22 @@
             mnuReport.Text = "Generate Report...";
             mnuReport.Click += mnuReport_Click;
             // 
-            // mnuRead
+            // mnuRecentUpdates
             // 
-            mnuRead.Font = new Font("Segoe UI", 9.75F);
-            mnuRead.Name = "mnuRead";
-            mnuRead.ShortcutKeys = Keys.Control | Keys.R;
-            mnuRead.Size = new Size(226, 22);
-            mnuRead.Text = "Read out loud...";
-            mnuRead.Click += menuRead_Click;
+            mnuRecentUpdates.Name = "mnuRecentUpdates";
+            mnuRecentUpdates.ShortcutKeys = Keys.Control | Keys.N;
+            mnuRecentUpdates.Size = new Size(226, 22);
+            mnuRecentUpdates.Text = "Recent Updates...";
+            mnuRecentUpdates.Click += mnuRecentUpdates_Click;
+            // 
+            // mnuSearch
+            // 
+            mnuSearch.Font = new Font("Segoe UI", 9.75F);
+            mnuSearch.Name = "mnuSearch";
+            mnuSearch.ShortcutKeys = Keys.Control | Keys.Q;
+            mnuSearch.Size = new Size(226, 22);
+            mnuSearch.Text = "Search...";
+            mnuSearch.Click += mnuSearch_Click;
             // 
             // mnuSettings
             // 
@@ -234,5 +243,6 @@
         private ToolStripMenuItem mnuSearch;
         private ToolStripMenuItem mnuReport;
         private ToolStripMenuItem mnuRead;
+        private ToolStripMenuItem mnuRecentUpdates;
     }
 }

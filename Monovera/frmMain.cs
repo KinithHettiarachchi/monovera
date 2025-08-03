@@ -295,7 +295,7 @@ namespace Monovera
             }
             else
             {
-                
+
             }
             InitializeComponent();
             InitializeNotifyIcon();
@@ -349,7 +349,7 @@ namespace Monovera
                 tree.DragDrop += tree_DragDrop;
                 tree.MouseUp += tree_MouseUp;
             }
-           
+
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
@@ -481,7 +481,7 @@ namespace Monovera
             {
                 string siblingKey = targetNode.Nodes[i].Tag as string;
                 int sequence = i + 1;
-                
+
                 try
                 {
                     await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
@@ -495,7 +495,7 @@ namespace Monovera
                     return;
                 }
             }
-                      
+
             tree.SelectedNode = nodeToMove;
         }
 
@@ -550,7 +550,7 @@ namespace Monovera
             siblings.RemoveAt(index);
             siblings.Insert(newIndex, node);
 
-            tree.Enabled= false;
+            tree.Enabled = false;
 
             // Update sequence for all siblings
             for (int i = 0; i < siblings.Count; i++)
@@ -693,7 +693,7 @@ namespace Monovera
             // Create the context menu strip
             treeContextMenu = new ContextMenuStrip();
             // Assign the context menu to the tree view
-            tree.ContextMenuStrip = treeContextMenu;           
+            tree.ContextMenuStrip = treeContextMenu;
 
             AddSearchMenu();
             AddGenerateReportMenu();
@@ -725,15 +725,17 @@ namespace Monovera
                 // Enable/disable create menu items based on permission
                 foreach (ToolStripItem item in treeContextMenu.Items)
                 {
-                    if (item.Text.StartsWith("Add Child") 
-                    || item.Text.StartsWith("Add Sibling")) {
+                    if (item.Text.StartsWith("Add Child")
+                    || item.Text.StartsWith("Add Sibling"))
+                    {
                         item.Enabled = canCreate;
-                    } 
-                    else if (item.Text.StartsWith("Link related") 
-                    || item.Text.StartsWith("Change Parent") 
-                    || item.Text.StartsWith("Move Up") 
+                    }
+                    else if (item.Text.StartsWith("Link related")
+                    || item.Text.StartsWith("Change Parent")
+                    || item.Text.StartsWith("Move Up")
                     || item.Text.StartsWith("Move Down")
-                    || item.Text.StartsWith("Edit")) { 
+                    || item.Text.StartsWith("Edit"))
+                    {
                         item.Enabled = canModify;
                     }
                 }
@@ -790,8 +792,8 @@ namespace Monovera
             var iconEdit = CreateUnicodeIcon("✏️");
             var editMenuItem = new ToolStripMenuItem("Edit...", iconEdit);
             editMenuItem.Click += async (s, e) =>
-            { 
-                EditCurrentIssue(true); 
+            {
+                EditCurrentIssue(true);
             };
 
             treeContextMenu.Items.Add(editMenuItem);
@@ -918,7 +920,7 @@ namespace Monovera
                 ReadOnly = true,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 BackgroundColor = GetCSSColor_DataGrid_Background(cssPath),
-                ForeColor= GetCSSColor_DataGrid_Foreground(cssPath),
+                ForeColor = GetCSSColor_DataGrid_Foreground(cssPath),
                 RowHeadersVisible = false,
                 MultiSelect = false,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
@@ -1028,7 +1030,7 @@ namespace Monovera
                 FlowDirection = FlowDirection.RightToLeft,
                 Dock = DockStyle.Top, // Ensures full visibility in TableLayoutPanel
                 Padding = new Padding(0, 8, 0, 0),
-                BackColor =GetCSSColor_Tree_Background(cssPath),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 AutoSize = false,
                 Height = 56 // Should match or exceed button height
             };
@@ -1137,7 +1139,7 @@ namespace Monovera
                         ColumnCount = 2,
                         RowCount = 3,
                         Padding = new Padding(24, 18, 24, 18),
-                        BackColor=GetCSSColor_Tree_Background(cssPath),
+                        BackColor = GetCSSColor_Tree_Background(cssPath),
                         AutoSize = true
                     };
                     layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -1185,7 +1187,7 @@ namespace Monovera
                         FlowDirection = FlowDirection.RightToLeft,
                         Dock = DockStyle.Fill,
                         Padding = new Padding(0, 8, 0, 0),
-                        BackColor=GetCSSColor_Tree_Background(cssPath)
+                        BackColor = GetCSSColor_Tree_Background(cssPath)
                     };
                     var btnOk = new System.Windows.Forms.Button
                     {
@@ -1282,7 +1284,7 @@ namespace Monovera
             };
             treeContextMenu.Items.Add(changeParentMenuItem);
         }
-        
+
         private void AddCreateIssueMenus()
         {
             // Add these inside InitializeContextMenu()
@@ -1517,7 +1519,7 @@ namespace Monovera
                     EditCurrentIssue(newIssueKey, summary);
                 }
 
-                MessageBox.Show($"New issue {newIssueKey} has been created as a {mode} of {tree.SelectedNode.Tag?.ToString()}.\nPlease update your hierarchy to show it in the tree view.","New issue created!",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                MessageBox.Show($"New issue {newIssueKey} has been created as a {mode} of {tree.SelectedNode.Tag?.ToString()}.\nPlease update your hierarchy to show it in the tree view.", "New issue created!", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -1913,7 +1915,7 @@ namespace Monovera
 
             if (isConnected)
             {
-                jiraUserName=jiraService.GetConnectedUserNameAsync().Result;
+                jiraUserName = jiraService.GetConnectedUserNameAsync().Result;
                 lblUser.Text = $"    👤 Connected as :  {jiraUserName}      ";
 
                 foreach (var project in config.Projects)
@@ -2512,13 +2514,13 @@ namespace Monovera
             {
                 ImageKey = iconKey,
                 ToolTipText = "Welcome to Monovera!",
-                BackColor= GetCSSColor_Tree_Background(cssPath)
+                BackColor = GetCSSColor_Tree_Background(cssPath)
             };
 
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2
             {
                 Dock = DockStyle.Fill,
-                BackColor= GetCSSColor_Tree_Background(cssPath)
+                BackColor = GetCSSColor_Tree_Background(cssPath)
             };
 
             homePage.Controls.Add(webView);
@@ -2598,18 +2600,18 @@ namespace Monovera
         /// The tab uses a WebView2 control to render a styled HTML report, with clickable links to load issue details.
         /// </summary>
         /// <param name="tabDetails">The TabControl to which the "Recent Updates" tab will be added.</param>
-        public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails)
+        public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails, int days=14)
         {
             // --- Step 1: Prepare WebView2 control and TabPage first ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-            webView.BackColor= GetCSSColor_Tree_Background(cssPath);
+            webView.BackColor = GetCSSColor_Tree_Background(cssPath);
 
             // Create the tab page immediately
             var updatePage = new TabPage("Recent Updates!")
             {
                 ImageKey = "updates",
-                ToolTipText = "Issues that were updated during past 30 days!",
-                BackColor= GetCSSColor_Tree_Background(cssPath)
+                ToolTipText = $"Issues that were updated during past {days} days!",
+                BackColor = GetCSSColor_Tree_Background(cssPath)
             };
             updatePage.Controls.Add(webView);
 
@@ -2674,18 +2676,68 @@ namespace Monovera
 
             // --- Step 3: Build the JQL and get issues ---
             DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
-            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -14d OR updated >= -14d) ORDER BY updated DESC";
+            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}4d) ORDER BY updated DESC";
             var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
 
+            // When building filteredIssues, collect all change types for the issue:
             var tasks = rawIssues.Select(async issue =>
             {
-                var (hasChange, changeType) = await HasSummaryOrDescriptionChangeAsync(issue.Key);
-                if (hasChange)
+                var url = $"{jiraBaseUrl}/rest/api/3/issue/{issue.Key}?expand=changelog";
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
+                    Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
+
+                var response = await client.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                var content = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(content);
+
+                var changeTags = new List<string>();
+
+                if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
+                    changelog.TryGetProperty("histories", out var histories))
                 {
-                    issue.CustomFields["ChangeTypeTag"] = changeType;
-                    return issue;
+                    foreach (var history in histories.EnumerateArray())
+                    {
+                        if (history.TryGetProperty("created", out var createdProp) &&
+                            DateTime.TryParse(createdProp.GetString(), out var changeDate) &&
+                            changeDate.Date == issue.Updated?.ToLocalTime().Date) // Only changes on the update date
+                        {
+                            if (history.TryGetProperty("items", out var items))
+                            {
+                                foreach (var item in items.EnumerateArray())
+                                {
+                                    if (item.TryGetProperty("field", out var fieldName))
+                                    {
+                                        string field = fieldName.GetString();
+                                        if (field == "summary")
+                                            changeTags.Add("Summary");
+                                        else if (field == "description")
+                                            changeTags.Add("Description");
+                                        else if (field.ToLower().Contains("parent"))
+                                            changeTags.Add("Parent");
+                                        else if (field.ToLower().Contains("link"))
+                                            changeTags.Add("Link");
+                                        else if (field.ToLower().Contains("issue sequence"))
+                                            changeTags.Add("Order");
+                                        else
+                                        {
+                                            changeTags.Add("Other");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                return null;
+
+                changeTags.Sort();
+                if (changeTags.Count > 0)
+                    issue.CustomFields["ChangeTypeTags"] = changeTags.Distinct().ToList();
+
+                return issue;
             });
             var withChanges = await Task.WhenAll(tasks);
             var filteredIssues = withChanges.Where(i => i != null).ToList();
@@ -2711,63 +2763,77 @@ namespace Monovera
             }
 
             // --- Step 4: Generate the HTML content ---
-var sb = new StringBuilder();
+            var sb = new StringBuilder();
 
-foreach (var group in grouped)
-{
-    sb.AppendLine($@"
+            foreach (var group in grouped)
+            {
+                sb.AppendLine($@"
 <details open>
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <div class='subsection'>
       <div style='display: flex; flex-wrap: wrap; gap: 18px; justify-content: flex-start;'>");
 
-    foreach (var issue in group)
-    {
+
+                foreach (var issue in group)
+                {
                     string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                     string key = issue.Key;
                     string iconPath = "";
-                    string changeTag = issue.CustomFields.TryGetValue("ChangeTypeTag", out var tagObj) && tagObj is string tagStr && !string.IsNullOrWhiteSpace(tagStr)
-                        ? $"<span class='change-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>"
-                        : "";
+
+                    // --- NEW: Render all change tags for this issue ---
+                    List<string> changeTags = new();
+                    if (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
+                    {
+                        foreach (var tag in tagsList)
+                        {
+                            if (!string.IsNullOrWhiteSpace(tag))
+                                changeTags.Add($"<span class='change-tag'>{HttpUtility.HtmlEncode(tag)}</span>");
+                        }
+                    }
+                    else if (issue.CustomFields.TryGetValue("ChangeTypeTag", out var tagObj) && tagObj is string tagStr && !string.IsNullOrWhiteSpace(tagStr))
+                    {
+                        // Fallback for legacy single tag
+                        changeTags.Add($"<span class='change-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>");
+                    }
+                    string changeTagsHtml = string.Join(" ", changeTags);
 
                     string typeIconKey = frmMain.GetIconForType(issue.Type);
-        if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
-        {
-            string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-            if (File.Exists(fullPath))
-            {
-                try
-                {
-                    byte[] bytes = File.ReadAllBytes(fullPath);
-                    string base64 = Convert.ToBase64String(bytes);
-                    iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;margin-bottom:8px;border-radius:6px;background:#e8f5e9;' />";
-                }
-                catch { }
-            }
-        }
+                    if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
+                    {
+                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                        if (File.Exists(fullPath))
+                        {
+                            try
+                            {
+                                byte[] bytes = File.ReadAllBytes(fullPath);
+                                string base64 = Convert.ToBase64String(bytes);
+                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;margin-bottom:8px;border-radius:6px;background:#e8f5e9;' />";
+                            }
+                            catch { }
+                        }
+                    }
 
                     sb.AppendLine($@"
 <div class='attachment-card' style='min-width:220px;max-width:320px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;'>
-<div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
-  <div style='display:flex;align-items:center;gap:8px;'>
-    {iconPath} {changeTag}
+  <div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
+    <div style='display:flex;align-items:center;gap:8px;'>
+      {iconPath} {changeTagsHtml}
+    </div>
+    <a href='#' data-key='{key}' class='attachment-filename' style='font-weight:600;margin-top:6px;color:#1565c0;text-decoration:underline;cursor:pointer;'>{summary} [{key}]</a>
   </div>
-  <div class='attachment-filename' style='font-weight:600;margin-top:6px;'>{summary}</div>
-</div>
-  <div class='attachment-meta' style='margin-bottom:8px;'>[{key}]</div>
-  <a href='#' data-key='{key}' class='download-btn' style='margin-top:6px;'>View Details</a>
 </div>");
                 }
 
-    sb.AppendLine(@"
+                sb.AppendLine(@"
       </div>
     </div>
   </section>
 </details>");
-}
+            }
 
-string html = $@"
+            // Update the script to handle summary clicks instead of the Open button
+            string html = $@"
 <!DOCTYPE html>
 <html>
 <head>
@@ -2778,7 +2844,7 @@ string html = $@"
 <body>
 {sb}
 <script>
-  document.querySelectorAll('a[data-key]').forEach(link => {{
+  document.querySelectorAll('a.attachment-filename[data-key]').forEach(link => {{
     link.addEventListener('click', e => {{
       e.preventDefault();
       const key = link.dataset.key;
@@ -2902,7 +2968,7 @@ string html = $@"
         }
 
         private async Task Tree_AfterSelect_Internal(object sender, TreeViewEventArgs e, bool forcedReload)
-            {
+        {
             if (suppressAfterSelect)
                 return;
 
@@ -2995,9 +3061,9 @@ string html = $@"
                         pageTab.Controls.Clear();
                         pageTab.Controls.Add(webView);
                     }
-                     string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-            File.WriteAllText(htmlFilePath, LoadingHtml);
-            webView.CoreWebView2.Navigate(htmlFilePath);
+                    string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
+                    File.WriteAllText(htmlFilePath, LoadingHtml);
+                    webView.CoreWebView2.Navigate(htmlFilePath);
                 }
                 else
                 {
@@ -3082,11 +3148,11 @@ string html = $@"
                 string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
                 string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
 
-               /**
-               * Build attachments section
-               */
+                /**
+                * Build attachments section
+                */
                 string attachmentsHtml = BuildAttachmentsHtml(fields, issueKey);
-                
+
                 /**
                 * Build links section
                 */
@@ -3100,9 +3166,9 @@ string html = $@"
                 */
                 string historyHtml = BuildHistoryHtml(root);
 
-               /**
-               * Build JSON response section
-               */
+                /**
+                * Build JSON response section
+                */
                 string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
 
                 /**
@@ -4591,6 +4657,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     // Run TTS in background to keep UI responsive
                     _ = Task.Run(() => TextToSpeechHelper.SpeakWithGoogleDefaultVoice(selectedText));
                 }
+            }
+        }
+
+        private async void mnuRecentUpdates_Click(object sender, EventArgs e)
+        {
+            // Look for an existing "Recent Updates!" tab
+            TabPage recentTab = null;
+            foreach (TabPage tab in tabDetails.TabPages)
+            {
+                if (tab.Text == "Recent Updates!")
+                {
+                    recentTab = tab;
+                    break;
+                }
+            }
+
+            if (recentTab != null)
+            {
+                // Tab exists, just focus it
+                tabDetails.SelectedTab = recentTab;
+            }
+            else
+            {
+                // Tab does not exist, create it
+                await ShowRecentlyUpdatedIssuesAsync(tabDetails);
             }
         }
     }

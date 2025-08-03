@@ -539,7 +539,7 @@ pre[class*='language-'] {
 .download-btn {
 	display: inline-block;
 	margin-top: 6px;
-	padding: 8px 20px;
+	padding: 1px 10px; /* Reduced vertical and horizontal padding */
 	background: linear-gradient(90deg, #dcefff 60%, #bbdefb 100%);
 	color: #1565c0;
 	border-radius: 8px;
@@ -994,5 +994,18 @@ section,
 	border-radius: 8px;
 	font-size: 0.9em;
 	margin-left: 8px;
+	margin-bottom: 4px;
 	display: inline-block;
+	max-width: 90px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.attachment-card .change-tags-wrapper {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+	align-items: center;
+	max-width: 100%;
 }
