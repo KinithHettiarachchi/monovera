@@ -2676,7 +2676,7 @@ namespace Monovera
 
             // --- Step 3: Build the JQL and get issues ---
             DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
-            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}4d) ORDER BY updated DESC";
+            string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC";
             var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
 
             // When building filteredIssues, collect all change types for the issue:
@@ -2694,17 +2694,36 @@ namespace Monovera
                 var content = await response.Content.ReadAsStringAsync();
                 using var doc = JsonDocument.Parse(content);
 
+                // Extract the created date from the fields property
+                DateTime? createdDate = null;
+                
                 var changeTags = new List<string>();
 
                 if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
                     changelog.TryGetProperty("histories", out var histories))
                 {
+                    if (doc.RootElement.TryGetProperty("fields", out var fields) &&
+                    fields.TryGetProperty("created", out var createdProp) &&
+                    createdProp.ValueKind == JsonValueKind.String)
+                    {
+                        if (DateTime.TryParse(createdProp.GetString(), out var dt))
+                            createdDate = dt;
+                    }
+
+                    issue.Created = createdDate;
+
                     foreach (var history in histories.EnumerateArray())
                     {
-                        if (history.TryGetProperty("created", out var createdProp) &&
-                            DateTime.TryParse(createdProp.GetString(), out var changeDate) &&
-                            changeDate.Date == issue.Updated?.ToLocalTime().Date) // Only changes on the update date
+                        if (history.TryGetProperty("created", out var createdDateOfHistory) &&
+                            DateTime.TryParse(createdDateOfHistory.GetString(), out var changeDate) &&
+                            (changeDate.Date == issue.Updated?.ToLocalTime().Date)) // Only changes on the update date
                         {
+                            // Add "Created" tag if this history matches the issue's Created date and has no items
+                            if (issue.Created.Value.Date == changeDate.Date)
+                            {
+                                    changeTags.Add("Created");
+                            }
+
                             if (history.TryGetProperty("items", out var items))
                             {
                                 foreach (var item in items.EnumerateArray())
@@ -2712,19 +2731,13 @@ namespace Monovera
                                     if (item.TryGetProperty("field", out var fieldName))
                                     {
                                         string field = fieldName.GetString();
-                                        if (field == "summary")
-                                            changeTags.Add("Summary");
-                                        else if (field == "description")
-                                            changeTags.Add("Description");
-                                        else if (field.ToLower().Contains("parent"))
-                                            changeTags.Add("Parent");
-                                        else if (field.ToLower().Contains("link"))
-                                            changeTags.Add("Link");
-                                        else if (field.ToLower().Contains("issue sequence"))
-                                            changeTags.Add("Order");
+                                        if (field.ToLower().Contains("issue sequence"))
+                                            changeTags.Add("order");
+                                        else if (field.ToLower().Contains("issuetype"))
+                                            changeTags.Add("type");
                                         else
                                         {
-                                            changeTags.Add("Other");
+                                            changeTags.Add(field);
                                         }
                                     }
                                 }
@@ -2860,91 +2873,6 @@ namespace Monovera
             string tempFilePath = Path.Combine(tempFolder, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
-        }
-
-
-        /// <summary>
-        /// Checks if a Jira issue has had its summary or description changed in the last 30 days.
-        /// This is used to filter issues for the "Recently Updated" tab.
-        /// </summary>
-        /// <param name="issueKey">The Jira issue key (e.g. "REQ-123").</param>
-        /// <returns>
-        /// True if the issue's summary or description was changed in the last 30 days; otherwise, false.
-        /// </returns>
-        private async Task<(bool hasChange, string changeType)> HasSummaryOrDescriptionChangeAsync(string issueKey)
-        {
-            var url = $"{jiraBaseUrl}/rest/api/3/issue/{issueKey}?expand=changelog";
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic",
-                Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
-
-            var response = await client.GetAsync(url);
-            if (!response.IsSuccessStatusCode)
-                return (false, "");
-
-            var content = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(content);
-
-            DateTime latestChangeDate = DateTime.MinValue;
-            string latestChangeType = "";
-
-            // Check if the issue was created in the last 30 days
-            if (doc.RootElement.TryGetProperty("fields", out var fields))
-            {
-                if (fields.TryGetProperty("created", out var createdProp) &&
-                    DateTime.TryParse(createdProp.GetString(), out var createdDate) &&
-                    createdDate >= DateTime.UtcNow.AddDays(-30))
-                {
-                    latestChangeDate = createdDate;
-                    latestChangeType = "Created";
-                }
-            }
-
-            // Look for changelog histories
-            if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
-                changelog.TryGetProperty("histories", out var histories))
-            {
-                foreach (var history in histories.EnumerateArray())
-                {
-                    if (history.TryGetProperty("created", out var createdProp) &&
-                        DateTime.TryParse(createdProp.GetString(), out var changeDate) &&
-                        changeDate >= DateTime.UtcNow.AddDays(-30))
-                    {
-                        if (changeDate > latestChangeDate)
-                        {
-                            if (history.TryGetProperty("items", out var items))
-                            {
-                                foreach (var item in items.EnumerateArray())
-                                {
-                                    if (item.TryGetProperty("field", out var fieldName))
-                                    {
-                                        string field = fieldName.GetString();
-                                        if (field == "summary")
-                                        {
-                                            latestChangeDate = changeDate;
-                                            latestChangeType = "Summary Updated";
-                                        }
-                                        else if (field == "description")
-                                        {
-                                            latestChangeDate = changeDate;
-                                            latestChangeType = "Description Updated";
-                                        }
-                                        else if (field.ToLower().Contains("parent"))
-                                        {
-                                            latestChangeDate = changeDate;
-                                            latestChangeType = "Parent Changed";
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (!string.IsNullOrEmpty(latestChangeType))
-                return (true, latestChangeType);
-            return (false, "");
         }
 
         private TreeNode CreateTreeNode(JiraIssue issue)
@@ -3811,62 +3739,6 @@ document.addEventListener('DOMContentLoaded', () => {
 </html>";
         }
 
-
-        /// <summary>
-        /// Generates a simple HTML diff between two strings, highlighting added and removed text.
-        /// Finds the common prefix, then marks removed text from the original and added text from the new value.
-        /// Used for inline change visualization in history views.
-        /// </summary>
-        /// <param name="from">The original string value (may be null).</param>
-        /// <param name="to">The new string value (may be null).</param>
-        /// <returns>
-        /// HTML string showing removed and added text, or empty string if values are identical.
-        /// </returns>
-        private static string DiffText(string? from, string? to)
-        {
-            if (from == to) return "";
-
-            from ??= "";
-            to ??= "";
-
-            // Function to remove all {color} tags
-            string StripColorTags(string text) =>
-                Regex.Replace(text, @"\{color(:[^}]*)?\}", "", RegexOptions.IgnoreCase);
-
-            // Strip color tags for clean comparison
-            string fromClean = StripColorTags(from);
-            string toClean = StripColorTags(to);
-
-            if (fromClean == toClean)
-                return ""; // Only formatting changed
-
-            var diff = new StringBuilder();
-            int minLen = Math.Min(fromClean.Length, toClean.Length);
-            int i = 0;
-
-            // Find common prefix
-            while (i < minLen && fromClean[i] == toClean[i])
-            {
-                i++;
-            }
-
-            // Deleted part (from)
-            if (i < fromClean.Length)
-            {
-                var deleted = WebUtility.HtmlEncode(fromClean.Substring(i));
-                diff.Append($@"<br/><br/>Removed <br/><span class='diff-deleted'>{deleted}</span>");
-            }
-
-            // Added part (to)
-            if (i < toClean.Length)
-            {
-                var added = WebUtility.HtmlEncode(toClean.Substring(i));
-                diff.Append($@"<br/><br/>Added <br/><span class='diff-added'>{added}</span>");
-            }
-
-            return diff.ToString();
-        }
-
         /// <summary>
         /// Handles messages received from the embedded WebView2 browser.
         /// Supports navigation, file download, and node selection based on messages from the HTML UI.
@@ -4381,31 +4253,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        /// <summary>
-        /// Helper to get the value of a field for sorting.
-        /// Supports standard fields and custom fields if present in JiraIssueDto.
-        /// </summary>
-        /// <param name="issueKey">The Jira issue key.</param>
-        /// <param name="fieldName">The field name to retrieve (case-insensitive).</param>
-        /// <returns>The value of the field, or an empty string if not found.</returns>
-        private object GetFieldValue(string issueKey, string fieldName)
-        {
-            // Try to get the JiraIssueDto for this key
-            if (issueDtoDict.TryGetValue(issueKey, out var dto))
-            {
-                // Use reflection for custom fields if needed
-                var prop = typeof(JiraIssueDto).GetProperty(fieldName, System.Reflection.BindingFlags.IgnoreCase | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                if (prop != null)
-                    return prop.GetValue(dto) ?? "";
-                // For custom fields, you may need to parse from a dictionary or JSON
-                // If you store custom fields in a dictionary, add logic here
-            }
-            // Fallback to summary from issueDict
-            if (issueDict.TryGetValue(issueKey, out var issue))
-                return issue.Summary ?? "";
-            return "";
-        }
-
         // In your frmMain constructor or initialization method:
         private void InitializeTabContextMenu()
         {
@@ -4673,6 +4520,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
+            int days = 14; // Default value
+
+            // If Ctrl is pressed, prompt for number of days
+            if ((Control.ModifierKeys & Keys.Control) == Keys.Control)
+            {
+                string input = Interaction.InputBox("Enter the number of days to view changes:", "Recent Updates", days.ToString());
+                if (!string.IsNullOrWhiteSpace(input) && int.TryParse(input, out int parsedDays) && parsedDays > 0)
+                {
+                    days = parsedDays;
+                }
+            }
+
             if (recentTab != null)
             {
                 // Tab exists, just focus it
@@ -4681,7 +4540,7 @@ document.addEventListener('DOMContentLoaded', () => {
             else
             {
                 // Tab does not exist, create it
-                await ShowRecentlyUpdatedIssuesAsync(tabDetails);
+                await ShowRecentlyUpdatedIssuesAsync(tabDetails, days);
             }
         }
     }
