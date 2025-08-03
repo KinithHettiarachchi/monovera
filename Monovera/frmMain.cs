@@ -313,6 +313,7 @@ namespace Monovera
             mnuSearch.Image = GetImageFromImagesFolder("Search.png");
             mnuReport.Image = GetImageFromImagesFolder("GenerateReport.png");
             mnuRead.Image = GetImageFromImagesFolder("Read.png");
+            mnuRecentUpdates.Image= GetImageFromImagesFolder("Monovera.png");  
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -2785,8 +2786,7 @@ namespace Monovera
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <div class='subsection'>
-      <div style='display: flex; flex-wrap: wrap; gap: 18px; justify-content: flex-start;'>");
-
+      <div style='display: flex; flex-direction: column; gap: 18px; width: 100%;'>");
 
                 foreach (var issue in group)
                 {
@@ -2794,22 +2794,23 @@ namespace Monovera
                     string key = issue.Key;
                     string iconPath = "";
 
-                    // --- NEW: Render all change tags for this issue ---
+                    // Render all change tags for this issue
                     List<string> changeTags = new();
                     if (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
                     {
                         foreach (var tag in tagsList)
                         {
                             if (!string.IsNullOrWhiteSpace(tag))
-                                changeTags.Add($"<span class='change-tag'>{HttpUtility.HtmlEncode(tag)}</span>");
+                                changeTags.Add($"<span class='recent-update-tag'>{HttpUtility.HtmlEncode(tag)}</span>");
                         }
                     }
                     else if (issue.CustomFields.TryGetValue("ChangeTypeTag", out var tagObj) && tagObj is string tagStr && !string.IsNullOrWhiteSpace(tagStr))
                     {
-                        // Fallback for legacy single tag
-                        changeTags.Add($"<span class='change-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>");
+                        changeTags.Add($"<span class='recent-update-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>");
                     }
-                    string changeTagsHtml = string.Join(" ", changeTags);
+                    string changeTagsHtml = changeTags.Count > 0
+                        ? $"<div class='recent-update-tags'>{string.Join(" ", changeTags)}</div>"
+                        : "";
 
                     string typeIconKey = frmMain.GetIconForType(issue.Type);
                     if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
@@ -2821,20 +2822,19 @@ namespace Monovera
                             {
                                 byte[] bytes = File.ReadAllBytes(fullPath);
                                 string base64 = Convert.ToBase64String(bytes);
-                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;margin-bottom:8px;border-radius:6px;background:#e8f5e9;' />";
+                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:28px;width:28px;vertical-align:middle;margin-right:12px;border-radius:6px;background:#e8f5e9;' />";
                             }
                             catch { }
                         }
                     }
 
                     sb.AppendLine($@"
-<div class='attachment-card' style='min-width:220px;max-width:320px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-start;text-align:left;'>
-  <div style='width:100%;margin-bottom:8px;display:flex;flex-direction:column;align-items:flex-start;'>
-    <div style='display:flex;align-items:center;gap:8px;'>
-      {iconPath} {changeTagsHtml}
-    </div>
-    <a href='#' data-key='{key}' class='attachment-filename' style='font-weight:600;margin-top:6px;color:#1565c0;text-decoration:underline;cursor:pointer;'>{summary} [{key}]</a>
+<div class='recent-update-card'>
+  <div class='recent-update-header'>
+    {iconPath}
+    <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
   </div>
+  {changeTagsHtml}
 </div>");
                 }
 
@@ -2845,7 +2845,7 @@ namespace Monovera
 </details>");
             }
 
-            // Update the script to handle summary clicks instead of the Open button
+            // Update the script to handle summary clicks
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -2857,7 +2857,7 @@ namespace Monovera
 <body>
 {sb}
 <script>
-  document.querySelectorAll('a.attachment-filename[data-key]').forEach(link => {{
+  document.querySelectorAll('a.recent-update-summary[data-key]').forEach(link => {{
     link.addEventListener('click', e => {{
       e.preventDefault();
       const key = link.dataset.key;
