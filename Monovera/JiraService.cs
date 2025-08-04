@@ -173,7 +173,7 @@ public class JiraService
         string linkTypeName = "Blocks",
         bool forceSync = false,
         Action<int, int, double> progressUpdate = null,
-        int maxParallelism = 15)
+        int maxParallelism = 40)
     {
         string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{projectKey}.json");
 

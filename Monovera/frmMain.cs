@@ -838,7 +838,7 @@ namespace Monovera
             {
                 Text = $"Link related issues to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.Manual,
+                StartPosition = FormStartPosition.CenterParent,
                 Width = 700,
                 Height = 440,
                 BackColor = GetCSSColor_Tree_Background(cssPath),
@@ -847,10 +847,6 @@ namespace Monovera
                 ShowInTaskbar = false,
                 Font = new Font("Segoe UI", 10)
             };
-
-            // Set dialog location to mouse position
-            var mousePos = Control.MousePosition;
-            dlg.Location = mousePos;
 
             var layout = new TableLayoutPanel
             {
@@ -1124,8 +1120,7 @@ namespace Monovera
                 {
                     dlg.Text = $"Change Parent of {childKey}";
                     dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                    dlg.StartPosition = FormStartPosition.Manual;
-                    dlg.Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition));
+                    dlg.StartPosition = FormStartPosition.CenterScreen;
                     dlg.Width = 420;
                     dlg.Height = 210;
                     dlg.BackColor = GetCSSColor_Tree_Background(cssPath);
@@ -1367,8 +1362,7 @@ namespace Monovera
             {
                 Text = $"Add {mode.ToLower()} node to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.Manual,
-                Location = tree.PointToScreen(tree.PointToClient(Control.MousePosition)),
+                StartPosition = FormStartPosition.CenterScreen,
                 Width = 700,
                 Height = 280,
                 BackColor = GetCSSColor_Tree_Background(cssPath),
@@ -2308,11 +2302,13 @@ namespace Monovera
             // Initialize icons for issue types and statuses
             InitializeIcons();
 
+            // Show a tab with recently updated issuesup
+            ShowRecentlyUpdatedIssuesAsync(tabDetails);
+
             // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync();
 
-            // Show a tab with recently updated issuesup
-            ShowRecentlyUpdatedIssuesAsync(tabDetails);
+   
         }
 
         /// <summary>
@@ -2333,27 +2329,40 @@ namespace Monovera
             issueDtoDict.Clear();
 
             int totalProjects = projectList.Count;
-            int currentProject = 0;
 
             var allIssues = new List<JiraIssue>();
+            var projectTasks = new List<Task<List<JiraIssueDto>>>();
 
             foreach (var project in projectList)
             {
-                currentProject++;
                 var projectConfig = config.Projects.FirstOrDefault(p => p.Project == project);
                 string sortingField = projectConfig?.SortingField ?? "summary";
                 string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
-                lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project}...";
-
                 var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
-                var issues = await jiraService.GetAllIssuesForProject(project, fieldsList, sortingField, linkTypeName, forceSync, (completed, total, percent) =>
-                {
-                    pbProgress.Value = (int)Math.Round(percent);
-                    lblProgress.Text = $"Loading project ({currentProject}/{totalProjects}) - {project} : {completed}/{total} ({percent:0.0}%)...";
-                });
 
+                projectTasks.Add(
+                    jiraService.GetAllIssuesForProject(
+                        project,
+                        fieldsList,
+                        sortingField,
+                        linkTypeName,
+                        forceSync,
+                        (completed, total, percent) =>
+                        {
+                            this.Invoke(() =>
+                            {
+                                pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
+                                lblProgress.Text = $"Loading project ({project}) : {completed}/{total} ({percent:0.0}%)...";
+                            });
+                        }
+                    )
+                );
+            }
 
+            var allResults = await Task.WhenAll(projectTasks);
 
+            foreach (var issues in allResults)
+            {
                 foreach (var myIssue in issues)
                 {
                     var issue = new JiraIssue
@@ -2365,7 +2374,9 @@ namespace Monovera
                         RelatedIssueKeys = new List<string>()
                     };
 
-                    // Use the correct LinkTypeName for this project
+                    var projectConfig = config.Projects.FirstOrDefault(p => myIssue.Key.StartsWith(p.Root.Split("-")[0]));
+                    string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
+
                     if (myIssue.IssueLinks != null)
                     {
                         foreach (var link in myIssue.IssueLinks)
@@ -2378,38 +2389,65 @@ namespace Monovera
                     }
 
                     allIssues.Add(issue);
-
                     issueDtoDict[myIssue.Key] = myIssue;
                 }
             }
 
-            // Build parent-child relationships using all issues
             BuildDictionaries(allIssues);
 
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
-            // Populate the tree view with root issues and their children
+            // Build tree nodes in memory (not on UI thread)
+            var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
+            var treeNodes = new List<TreeNode>();
+
+            foreach (var rootIssue in issueDict.Values.Where(i => i.ParentKey == null || !issueDict.ContainsKey(i.ParentKey)))
+            {
+                if (!rootKeys.Contains(rootIssue.Key)) continue;
+
+                var projectConfig = config.Projects.FirstOrDefault(p => rootIssue.Key.StartsWith(p.Root));
+                var rootNode = CreateTreeNode(rootIssue);
+                BuildTreeNodesInMemory(rootNode, rootIssue.Key, projectConfig);
+                treeNodes.Add(rootNode);
+            }
+
+            // Now update the UI in one shot
             tree.Invoke(() =>
             {
-                tree.Nodes.Clear();
                 tree.BeginUpdate();
-
-                var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
-
-                foreach (var rootIssue in issueDict.Values.Where(i => i.ParentKey == null || !issueDict.ContainsKey(i.ParentKey)))
+                tree.Nodes.Clear();
+                foreach (var node in treeNodes)
                 {
-                    if (!rootKeys.Contains(rootIssue.Key)) continue;
-
-                    var projectConfig = config.Projects.FirstOrDefault(p => rootIssue.Key.StartsWith(p.Root));
-                    var rootNode = CreateTreeNode(rootIssue);
-                    AddChildNodesRecursively(rootNode, rootIssue.Key, projectConfig);
-                    tree.Nodes.Add(rootNode);
-                    rootNode.Expand();
+                    tree.Nodes.Add(node);
+                    node.Expand();
                 }
-
                 tree.EndUpdate();
             });
+        }
+
+        // Helper: builds all child nodes in memory, not on UI thread
+        private void BuildTreeNodesInMemory(TreeNode parentNode, string parentKey, JiraProjectConfig projectConfig)
+        {
+            if (!childrenByParent.TryGetValue(parentKey, out var children) || children.Count == 0)
+                return;
+
+            string sortingField = projectConfig?.SortingField ?? "summary";
+            var comparer = new AlphanumericComparer();
+
+            var sortedChildren = children.OrderBy(child =>
+            {
+                if (issueDtoDict.TryGetValue(child.Key, out var dto))
+                    return dto.SortingField ?? "";
+                return child.Summary ?? "";
+            }, comparer).ToList();
+
+            foreach (var child in sortedChildren)
+            {
+                var childNode = CreateTreeNode(child);
+                parentNode.Nodes.Add(childNode);
+                BuildTreeNodesInMemory(childNode, child.Key, projectConfig);
+            }
         }
 
         /// <summary>
@@ -2544,7 +2582,7 @@ namespace Monovera
             };
 
             // Delay a bit to simulate loading or let the user see loading animation
-            await Task.Delay(800); // Adjust delay as needed
+            //await Task.Delay(800); // Adjust delay as needed
 
             // Prepare image and final HTML
             string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "MonoveraBanner.png");
@@ -4231,24 +4269,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
         private void AddChildNodesRecursively(TreeNode parentNode, string parentKey, JiraProjectConfig projectConfig)
         {
-            if (childrenByParent.TryGetValue(parentKey, out var children))
-            {
-                string sortingField = projectConfig?.SortingField ?? "summary";
+            if (!childrenByParent.TryGetValue(parentKey, out var children) || children.Count == 0)
+                return;
 
-                var sortedChildren = children.OrderBy(child =>
+            string sortingField = projectConfig?.SortingField ?? "summary";
+            var comparer = new AlphanumericComparer();
+
+            // Prepare a stack for iterative traversal
+            var stack = new Stack<(TreeNode node, string key, JiraProjectConfig config)>();
+            stack.Push((parentNode, parentKey, projectConfig));
+
+            while (stack.Count > 0)
+            {
+                var (currentNode, currentKey, currentConfig) = stack.Pop();
+
+                if (!childrenByParent.TryGetValue(currentKey, out var currentChildren) || currentChildren.Count == 0)
+                    continue;
+
+                // Sort once per parent
+                var sortedChildren = currentChildren.OrderBy(child =>
                 {
                     if (issueDtoDict.TryGetValue(child.Key, out var dto))
-                    {
                         return dto.SortingField ?? "";
-                    }
                     return child.Summary ?? "";
-                }, new AlphanumericComparer()).ToList();
+                }, comparer).ToList();
 
+                // Add all child nodes in bulk
                 foreach (var child in sortedChildren)
                 {
                     var childNode = CreateTreeNode(child);
-                    AddChildNodesRecursively(childNode, child.Key, projectConfig);
-                    parentNode.Nodes.Add(childNode);
+                    currentNode.Nodes.Add(childNode);
+
+                    // Push child for further traversal
+                    stack.Push((childNode, child.Key, currentConfig));
                 }
             }
         }
