@@ -16,6 +16,7 @@ using Microsoft.Web.WebView2.Core;
 using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using static Monovera.frmMain;
+using Application = System.Windows.Forms.Application;
 
 namespace Monovera
 {
@@ -27,26 +28,12 @@ namespace Monovera
     public partial class frmSearch : Form
     {
         /// <summary>
-        /// Default constructor for designer support.
-        /// </summary>
-        public frmSearch()
-        {
-            InitializeComponent();
-        }
-
-        /// <summary>
-        /// Reference to the tree view used for selecting and focusing issues.
-        /// </summary>
-        private readonly TreeView tree;
-
-        /// <summary>
         /// Main constructor. Initializes UI, combo boxes, event handlers, and WebView2.
         /// </summary>
         /// <param name="tree">The TreeView control to use for navigation.</param>
-        public frmSearch(TreeView tree)
+        public frmSearch()
         {
             InitializeComponent();
-            this.tree = tree;
 
             // Set up type and status combo boxes for custom drawing and item height
             cmbType.DrawMode = DrawMode.OwnerDrawFixed;
@@ -174,6 +161,16 @@ namespace Monovera
             e.DrawFocusRectangle();
         }
 
+        private void SelectNodeByKey(string key)
+        {
+            // Find the main form instance
+            var mainForm = Application.OpenForms.OfType<frmMain>().FirstOrDefault();
+            if (mainForm != null)
+            {
+                mainForm.Invoke(() => mainForm.SelectAndLoadTreeNode(key));
+            }
+        }
+
         /// <summary>
         /// Handles the search button click event.
         /// Builds a JQL query from UI selections, performs the search, and displays results.
@@ -194,15 +191,7 @@ namespace Monovera
             // If the query matches a local issue key, select it in the tree and close dialog
             if (!string.IsNullOrWhiteSpace(queryKey) && issueDict.ContainsKey(queryKey))
             {
-                tree.Invoke(() =>
-                {
-                    var node = FindNodeByKey(tree.Nodes, queryKey);
-                    if (node != null)
-                    {
-                        tree.SelectedNode = node;
-                        node.EnsureVisible();
-                    }
-                });
+                SelectNodeByKey(queryKey);
                 this.Close();
                 return;
             }
@@ -257,16 +246,16 @@ namespace Monovera
         /// <param name="nodes">TreeNodeCollection to search.</param>
         /// <param name="key">Issue key to find.</param>
         /// <returns>The matching TreeNode, or null if not found.</returns>
-        private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key)
-        {
-            foreach (TreeNode node in nodes)
-            {
-                if (node.Tag?.ToString() == key) return node;
-                var child = FindNodeByKey(node.Nodes, key);
-                if (child != null) return child;
-            }
-            return null;
-        }
+        //private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key)
+        //{
+        //    foreach (TreeNode node in nodes)
+        //    {
+        //        if (node.Tag?.ToString() == key) return node;
+        //        var child = FindNodeByKey(node.Nodes, key);
+        //        if (child != null) return child;
+        //    }
+        //    return null;
+        //}
 
         /// <summary>
         /// Performs a Jira search using the provided JQL and returns a list of matching issues.
@@ -466,16 +455,7 @@ namespace Monovera
         {
             string key = e.TryGetWebMessageAsString();
             if (string.IsNullOrWhiteSpace(key)) return;
-
-            var node = FindNodeByKey(tree.Nodes, key);
-            if (node != null)
-            {
-                tree.Invoke(() =>
-                {
-                    tree.SelectedNode = node;
-                    node.EnsureVisible();
-                });
-            }
+            SelectNodeByKey(key);
         }
     }
 }

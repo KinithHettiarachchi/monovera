@@ -67,6 +67,11 @@ namespace Monovera
         public static string root_key = "";
         /// <summary>List of Jira project keys loaded from configuration.</summary>
         public static List<string> projectList = new();
+        
+        private List<TreeNode> rootNodeList = new();
+
+        private bool isNavigatingToNode = false;
+        private bool suppressTabSelection = false;
 
         /// <summary>Maps issue type names to icon filenames.</summary>
         public static Dictionary<string, string> typeIcons;
@@ -339,6 +344,7 @@ namespace Monovera
             tree.ForeColor = GetCSSColor_Tree_Foreground(cssPath);
             tree.DrawMode = TreeViewDrawMode.OwnerDrawText;
             tree.DrawNode += Tree_DrawNode;
+            tree.BeforeExpand += tree_BeforeExpand;
 
             // Tree mouse event for context menu
             if (editorMode)
@@ -1594,7 +1600,7 @@ namespace Monovera
         /// <param name="tree">The tree view to search within.</param>
         private void ShowSearchDialog(System.Windows.Forms.TreeView tree)
         {
-            using (var dlg = new frmSearch(tree))
+            using (var dlg = new frmSearch())
             {
                 dlg.ShowDialog(this);
             }
@@ -2398,32 +2404,72 @@ namespace Monovera
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
-            // Build tree nodes in memory (not on UI thread)
-            var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
-            var treeNodes = new List<TreeNode>();
-
-            foreach (var rootIssue in issueDict.Values.Where(i => i.ParentKey == null || !issueDict.ContainsKey(i.ParentKey)))
-            {
-                if (!rootKeys.Contains(rootIssue.Key)) continue;
-
-                var projectConfig = config.Projects.FirstOrDefault(p => rootIssue.Key.StartsWith(p.Root));
-                var rootNode = CreateTreeNode(rootIssue);
-                BuildTreeNodesInMemory(rootNode, rootIssue.Key, projectConfig);
-                treeNodes.Add(rootNode);
-            }
-
-            // Now update the UI in one shot
+            // Build tree nodes in memory
             tree.Invoke(() =>
             {
-                tree.BeginUpdate();
                 tree.Nodes.Clear();
-                foreach (var node in treeNodes)
+                rootNodeList.Clear();
+                var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
+
+                foreach (var rootIssue in issueDict.Values.Where(i => i.ParentKey == null || !issueDict.ContainsKey(i.ParentKey)))
                 {
-                    tree.Nodes.Add(node);
-                    node.Expand();
+                    if (!rootKeys.Contains(rootIssue.Key)) continue;
+
+                    var rootNode = CreateTreeNode(rootIssue);
+                    if (GetChildrenForNode(rootIssue.Key).Count > 0)
+                        rootNode.Nodes.Add(new TreeNode("Loading...") { Tag = "DUMMY" });
+                    tree.Nodes.Add(rootNode);
+                    rootNodeList.Add(rootNode);
                 }
-                tree.EndUpdate();
+
+                // Expand all root nodes after loading
+                foreach (var rootNode in rootNodeList)
+                {
+                    rootNode.Expand();
+                }
             });
+        }
+
+        private async Task<TreeNode?> ExpandPathToKeyAsync(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key)) return null;
+            var keyPrefix = key.Split('-')[0];
+
+            // Find the root node for this key
+            var rootNode = rootNodeList.FirstOrDefault(n => n.Tag?.ToString()?.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase) == true);
+            if (rootNode == null) return null;
+
+            // Build the path from root to key using ParentKey chain
+            var path = new Stack<string>();
+            var currentKey = key;
+            while (!string.IsNullOrEmpty(currentKey) && issueDict.TryGetValue(currentKey, out var issue))
+            {
+                path.Push(currentKey);
+                currentKey = issue.ParentKey;
+            }
+
+            // If the path doesn't start with the root node's key, abort
+            if (path.Count == 0 || path.Peek() != rootNode.Tag?.ToString())
+                return null;
+
+            TreeNode node = rootNode;
+            path.Pop(); // Remove root node key, already at root
+
+            while (path.Count > 0)
+            {
+                var nextKey = path.Pop();
+                // Expand if children not loaded
+                if (node.Nodes.Count == 1 && node.Nodes[0].Tag?.ToString() == "DUMMY")
+                {
+                    node.Expand();
+                    await Task.Delay(50); // Let UI process expand
+                }
+                var child = node.Nodes.Cast<TreeNode>().FirstOrDefault(n => n.Tag?.ToString() == nextKey);
+                if (child == null)
+                    return null;
+                node = child;
+            }
+            return node;
         }
 
         // Helper: builds all child nodes in memory, not on UI thread
@@ -2450,6 +2496,47 @@ namespace Monovera
             }
         }
 
+        private void tree_BeforeExpand(object sender, TreeViewCancelEventArgs e)
+        {
+            var node = e.Node;
+            if (node.Nodes.Count == 1 && node.Nodes[0].Tag?.ToString() == "DUMMY")
+            {
+                node.Nodes.Clear();
+                var children = GetChildrenForNode(node.Tag.ToString());
+
+                // Find the project config for this node
+                string key = node.Tag?.ToString();
+                string keyPrefix = key?.Split('-')[0];
+                var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                string sortingField = projectConfig?.SortingField ?? "summary";
+                var comparer = new AlphanumericComparer();
+
+                // Sort children using the project's sorting field
+                var sortedChildren = children.OrderBy(child =>
+                {
+                    if (issueDtoDict.TryGetValue(child.Key, out var dto))
+                        return dto.SortingField ?? "";
+                    return child.Summary ?? "";
+                }, comparer).ToList();
+
+                foreach (var child in sortedChildren)
+                {
+                    var childNode = CreateTreeNode(child);
+                    if (GetChildrenForNode(child.Key).Count > 0)
+                        childNode.Nodes.Add(new TreeNode("Loading...") { Tag = "DUMMY" });
+                    node.Nodes.Add(childNode);
+                }
+            }
+        }
+
+        private List<JiraIssue> GetChildrenForNode(string parentKey)
+        {
+            if (string.IsNullOrEmpty(parentKey))
+                return new List<JiraIssue>();
+            if (childrenByParent.TryGetValue(parentKey, out var children))
+                return children;
+            return new List<JiraIssue>();
+        }
         /// <summary>
         /// Builds the issue lookup and parent-child hierarchy dictionaries from a list of JiraIssue objects.
         /// </summary>
@@ -2930,7 +3017,34 @@ namespace Monovera
 
         private async void Tree_AfterSelect(object sender, TreeViewEventArgs e)
         {
-            await Tree_AfterSelect_Internal(sender, e, false);
+            if (suppressAfterSelect)
+                return;
+
+            // Prevent tab loading on right-click selection
+            if (lastTreeMouseButton == MouseButtons.Right)
+                return;
+
+            if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
+                return;
+
+            suppressTabSelection = true; // Prevent TabDetails_SelectedIndexChanged from firing navigation
+            try
+            {
+                await Tree_AfterSelect_Internal(sender, e, false);
+                // Programmatically select the tab for this issue
+                foreach (TabPage page in tabDetails.TabPages)
+                {
+                    if (page.Text == issueKey)
+                    {
+                        tabDetails.SelectedTab = page;
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                suppressTabSelection = false;
+            }
         }
 
         private async Task Tree_AfterSelect_Internal(object sender, TreeViewEventArgs e, bool forcedReload)
@@ -3123,9 +3237,9 @@ namespace Monovera
                 * Build links section
                 */
                 string linksHtml =
-                             BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
-                             BuildLinksTable(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
-                             BuildLinksTable(fields, "Related", "Relates", null);
+                                BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                                BuildLinksTable(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
+                                BuildLinksTable(fields, "Related", "Relates", null);
 
                 /**
                 * Build history section
@@ -3313,23 +3427,47 @@ namespace Monovera
                         {
                             var key = issueElem.GetProperty("key").GetString() ?? "";
                             var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
+                            var issueType = issueElem.GetProperty("fields").TryGetProperty("issuetype", out var typeField) && typeField.TryGetProperty("name", out var typeName)
+                                ? typeName.GetString() ?? ""
+                                : "";
 
-                            TreeNode foundNode = FindNodeByKey(tree.Nodes, key, false);
+                            // Find project config for this key
+                            var keyPrefix = key.Split('-')[0];
+                            var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
                             string iconImgInner = "";
-                            if (foundNode != null &&
-                                !string.IsNullOrEmpty(foundNode.ImageKey) &&
-                                tree.ImageList != null &&
-                                tree.ImageList.Images.ContainsKey(foundNode.ImageKey))
+
+                            // Case-insensitive lookup for issueType in projectConfig.Types
+                            string fileName = null;
+                            if (projectConfig != null && !string.IsNullOrEmpty(issueType))
                             {
-                                using var ms = new MemoryStream();
-                                tree.ImageList.Images[foundNode.ImageKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                                var base64 = Convert.ToBase64String(ms.ToArray());
-                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' />";
+                                // Try direct match first
+                                if (!projectConfig.Types.TryGetValue(issueType, out fileName))
+                                {
+                                    // Fallback: case-insensitive search
+                                    var match = projectConfig.Types
+                                        .FirstOrDefault(kvp => kvp.Key.Equals(issueType, StringComparison.OrdinalIgnoreCase));
+                                    fileName = match.Value;
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(fileName))
+                            {
+                                string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                                if (File.Exists(fullPath))
+                                {
+                                    try
+                                    {
+                                        byte[] bytes = File.ReadAllBytes(fullPath);
+                                        string base64 = Convert.ToBase64String(bytes);
+                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' />";
+                                    }
+                                    catch { }
+                                }
                             }
                             else
                             {
                                 // Use green square emoji if no image
-                                iconImgInner = "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟩</span>";
+                                iconImgInner = "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
                             }
 
                             tableRows.AppendLine($@"
@@ -4108,15 +4246,30 @@ document.addEventListener('DOMContentLoaded', () => {
         /// Used for navigation from WebView2 messages and other UI actions.
         /// </summary>
         /// <param name="key">The Jira issue key to select (e.g. "REQ-123").</param>
-        private void SelectAndLoadTreeNode(string key)
+        public async void SelectAndLoadTreeNode(string key)
         {
-            var node = FindNodeByKey(tree.Nodes, key);
-            if (node != null)
+            if (isNavigatingToNode) return; // Prevent recursion
+            isNavigatingToNode = true;
+            try
             {
-                tree.SelectedNode = node;
-                node.EnsureVisible();
-                tree.Focus();                      // Return focus to tree
-                tree.SelectedNode = node;          // Restore visual highlight
+                var node = await ExpandPathToKeyAsync(key);
+                if (node != null)
+                {
+                    tree.SelectedNode = node;
+                    node.EnsureVisible();
+                    tree.Focus();
+                }
+                else
+                {
+                    if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to"))
+                    {
+                        ShowTrayNotification(key);
+                    }
+                }
+            }
+            finally
+            {
+                isNavigatingToNode = false;
             }
         }
 
@@ -4125,11 +4278,25 @@ document.addEventListener('DOMContentLoaded', () => {
             foreach (TreeNode node in nodes)
             {
                 if (node.Tag?.ToString() == key)
+                {
+                    // Expand all parents up the chain
+                    TreeNode parent = node.Parent;
+                    while (parent != null)
+                    {
+                        parent.Expand();
+                        parent = parent.Parent;
+                    }
+                    node.EnsureVisible();
+                    tree.SelectedNode = node;
                     return node;
+                }
 
                 var child = FindNodeByKey(node.Nodes, key, false);
                 if (child != null)
+                {
+                    node.Expand(); // Expand this node since the child is found below
                     return child;
+                }
             }
 
             if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && showMessage)
@@ -4204,13 +4371,14 @@ document.addEventListener('DOMContentLoaded', () => {
         /// <param name="e">Event arguments.</param>
         private void TabDetails_SelectedIndexChanged(object sender, EventArgs e)
         {
+            if (suppressTabSelection) return; // Only handle user-initiated tab changes
+
             var selectedTab = tabDetails.SelectedTab;
             if (selectedTab == null) return;
 
             string issueKey = selectedTab.Text;
             if (string.IsNullOrEmpty(issueKey)) return;
             SelectAndLoadTreeNode(issueKey);
-            //SelectTreeNodeByKey(issueKey);
         }
 
         /// <summary>
@@ -4264,45 +4432,6 @@ document.addEventListener('DOMContentLoaded', () => {
             {
                 configForm.StartPosition = FormStartPosition.CenterParent;
                 configForm.ShowDialog(this);
-            }
-        }
-
-        private void AddChildNodesRecursively(TreeNode parentNode, string parentKey, JiraProjectConfig projectConfig)
-        {
-            if (!childrenByParent.TryGetValue(parentKey, out var children) || children.Count == 0)
-                return;
-
-            string sortingField = projectConfig?.SortingField ?? "summary";
-            var comparer = new AlphanumericComparer();
-
-            // Prepare a stack for iterative traversal
-            var stack = new Stack<(TreeNode node, string key, JiraProjectConfig config)>();
-            stack.Push((parentNode, parentKey, projectConfig));
-
-            while (stack.Count > 0)
-            {
-                var (currentNode, currentKey, currentConfig) = stack.Pop();
-
-                if (!childrenByParent.TryGetValue(currentKey, out var currentChildren) || currentChildren.Count == 0)
-                    continue;
-
-                // Sort once per parent
-                var sortedChildren = currentChildren.OrderBy(child =>
-                {
-                    if (issueDtoDict.TryGetValue(child.Key, out var dto))
-                        return dto.SortingField ?? "";
-                    return child.Summary ?? "";
-                }, comparer).ToList();
-
-                // Add all child nodes in bulk
-                foreach (var child in sortedChildren)
-                {
-                    var childNode = CreateTreeNode(child);
-                    currentNode.Nodes.Add(childNode);
-
-                    // Push child for further traversal
-                    stack.Push((childNode, child.Key, currentConfig));
-                }
             }
         }
 
