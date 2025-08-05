@@ -1,9 +1,10 @@
-﻿using System.Net.Http.Headers;
-using System.Text.RegularExpressions;
-using System.Text.Json;
+﻿using Monovera;
 using System.Diagnostics;
-using System.Windows.Forms;
 using System.Drawing;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
 using static Monovera.frmMain;
 
 /// <summary>
@@ -53,10 +54,8 @@ public class JiraHtmlReportGenerator
         progress?.Report("Collecting issues...");
         var flatList = new List<(JiraIssue issue, string html, int level)>();
 
-        // Find the root node in the tree
-        var rootNode = FindTreeNode(tree.Nodes, rootKey);
-        if (rootNode != null)
-            await CollectIssuesFromTree(rootNode, 0, flatList, progress);
+        // Use in-memory hierarchy, not tree nodes
+        await CollectIssuesRecursively(rootKey, 0, flatList, progress);
 
         var numbered = GenerateOutlineNumbers(flatList);
 
@@ -64,22 +63,41 @@ public class JiraHtmlReportGenerator
         return await CreateHtmlReport(numbered);
     }
 
-    private async Task CollectIssuesFromTree(TreeNode node, int level, List<(JiraIssue, string, int)> result, IProgress<string>? progress)
+    private async Task CollectIssuesRecursively(string key, int level, List<(JiraIssue, string, int)> result, IProgress<string>? progress)
     {
-        if (node.Tag is string key && issueDict.TryGetValue(key, out var issue))
+        if (!issueDict.TryGetValue(key, out var issue)) return;
+
+        // Fetch description HTML, attachments, and related issue keys
+        var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
+        html = ReplaceAttachmentImageUrls(html, attachments);
+        html = await EmbedImagesInHtmlAsync(html);
+
+        // Assign related keys to the issue for later rendering
+        issue.RelatedIssueKeys = relatedKeys;
+
+        result.Add((issue, html, level));
+        progress?.Report($"Report generation in progress : Added {issue.Key}...");
+
+        // Find project config for this issue
+        var keyPrefix = key.Split('-')[0];
+        var projectConfig = frmMain.config.Projects.FirstOrDefault(
+            p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase)
+        );
+        string sortingField = projectConfig?.SortingField ?? "summary";
+
+        // Sort children using sortingField
+        if (childrenByParent.TryGetValue(key, out var children) && children.Count > 0)
         {
-            var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
-            html = ReplaceAttachmentImageUrls(html, attachments);
-            html = await EmbedImagesInHtmlAsync(html);
-
-            issue.RelatedIssueKeys = relatedKeys;
-            result.Add((issue, html, level));
-            progress?.Report($"Report generation in progress : Added {issue.Key}...");
-
-            foreach (TreeNode child in node.Nodes)
+            var comparer = new frmMain.AlphanumericComparer();
+            var sortedChildren = children.OrderBy(child =>
             {
-                await CollectIssuesFromTree(child, level + 1, result, progress);
-            }
+                if (frmMain.issueDtoDict != null && frmMain.issueDtoDict.TryGetValue(child.Key, out var dto))
+                    return dto.SortingField ?? "";
+                return child.Summary ?? "";
+            }, comparer).ToList();
+
+            foreach (var child in sortedChildren)
+                await CollectIssuesRecursively(child.Key, level + 1, result, progress);
         }
     }
 
@@ -102,37 +120,6 @@ public class JiraHtmlReportGenerator
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Recursively collects issues and their HTML descriptions, starting from the given key.
-    /// Adds each issue to the result list with its hierarchy level.
-    /// </summary>
-    /// <param name="key">Issue key to start from.</param>
-    /// <param name="level">Hierarchy level (depth).</param>
-    /// <param name="result">List to accumulate results.</param>
-    /// <param name="progress">Optional progress reporter.</param>
-    private async Task CollectIssuesRecursively(string key, int level, List<(JiraIssue, string, int)> result, IProgress<string>? progress)
-    {
-        if (!issueDict.TryGetValue(key, out var issue)) return;
-
-        // Fetch description HTML, attachments, and related issue keys
-        var (html, attachments, relatedKeys) = await FetchDescriptionAndAttachmentsAsync(key);
-        html = ReplaceAttachmentImageUrls(html, attachments);
-        html = RewriteImageUrls(html);
-
-        // Assign related keys to the issue for later rendering
-        issue.RelatedIssueKeys = relatedKeys;
-
-        result.Add((issue, html, level));
-        progress?.Report($"Report generation in progress : Added {issue.Key}...");
-
-        // Recursively collect child issues
-        if (childrenByParent.TryGetValue(key, out var children))
-        {
-            foreach (var child in children)
-                await CollectIssuesRecursively(child.Key, level + 1, result, progress);
-        }
     }
 
     /// <summary>

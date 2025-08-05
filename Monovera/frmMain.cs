@@ -224,7 +224,7 @@ namespace Monovera
         /// <summary>
         /// Alphanumeric comparer for natural sorting (e.g. 1,2,10,11).
         /// </summary>
-        private class AlphanumericComparer : IComparer<object>
+        public class AlphanumericComparer : IComparer<object>
         {
             public int Compare(object x, object y)
             {
@@ -685,7 +685,7 @@ namespace Monovera
         /// </summary>
         private ToolStripMenuItem reportMenuItem;
         // Add this field to frmMain
-        private static Dictionary<string, JiraIssueDto> issueDtoDict = new();
+        public static Dictionary<string, JiraIssueDto> issueDtoDict = new();
         // Add these fields to frmMain
         private ContextMenuStrip tabContextMenu;
         private TabPage rightClickedTab;
@@ -4117,6 +4117,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Replace closing {color} with </span>
             htmlDesc = Regex.Replace(htmlDesc, @"\{color\}", "</span>", RegexOptions.IgnoreCase);
+
+            // Remove jira-issue-macro spans and their contents
+            htmlDesc = Regex.Replace(
+                htmlDesc,
+                @"<span\s+class=[""']jira-issue-macro[""'][^>]*>.*?</span>",
+                "",
+                RegexOptions.IgnoreCase | RegexOptions.Singleline
+            );
 
             // Replace Jira <a href=".../browse/REQ-####"...>...</a> links
             htmlDesc = Regex.Replace(htmlDesc, @"<a\s+[^>]*href\s*=\s*[""'](https?://[^""']+/browse/(\w+-\d+))[""'][^>]*>.*?</a>", match =>
