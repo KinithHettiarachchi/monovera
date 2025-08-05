@@ -2907,18 +2907,87 @@ namespace Monovera
 
             foreach (var group in grouped)
             {
+                // Collect all change types for this group
+                var allChangeTypes = group
+                    .SelectMany(issue =>
+                        (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
+                            ? tagsList
+                            : new List<string>())
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToList();
+
+                // Collect all issue types for this group
+                var allIssueTypes = group
+                    .Select(issue => issue.Type ?? "")
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Distinct()
+                    .OrderBy(x => x)
+                    .ToList();
+
+                // Filter bar for change types and issue types
                 sb.AppendLine($@"
 <details open>
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <div class='subsection'>
-      <div style='display: flex; flex-direction: column; gap: 18px; width: 100%;'>");
+      <div class='filter-bar' style='margin-bottom:10px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;'>
+        <div>
+          <strong>Issue Type:</strong>
+          <select class='issue-type-dropdown' style='margin-left:8px;padding:4px 8px;'>
+            <option value=''>All</option>
+            {string.Join("", allIssueTypes.Select(t => $"<option value='{HttpUtility.HtmlEncode(t)}'>{HttpUtility.HtmlEncode(t)}</option>"))}
+          </select>
+        </div>
+        <div>
+          <strong>Changes:</strong>
+          <label style='margin-right:10px;'>
+  <input type='checkbox' class='change-type-checkbox-all' checked> All
+</label>
+{string.Join(" ", allChangeTypes.Select(t =>
+    $"<label style='margin-right:10px;'><input type='checkbox' class='change-type-checkbox' value='{HttpUtility.HtmlEncode(t)}' checked> {HttpUtility.HtmlEncode(t)}</label>"))}
+        </div>
+      </div>
+      <table class='recent-updates-table' style='width:100%;border-collapse:collapse;'>
+        <thead>
+          <tr>
+            <th style='width:36px;'>Type</th>
+            <th>Key</th>
+            <th>Summary</th>
+            <th>Updated</th>
+            <th>Changes</th>
+          </tr>
+        </thead>
+        <tbody>");
 
                 foreach (var issue in group)
                 {
                     string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                     string key = issue.Key;
-                    string iconPath = "";
+                    string type = HttpUtility.HtmlEncode(issue.Type ?? "");
+                    string updated = issue.Updated?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "";
+                    string updatedBy = "";
+                    if (issue.CustomFields.TryGetValue("Changelog", out var changelogObj) && changelogObj is JsonElement changelogElem)
+                    {
+                        if (changelogElem.TryGetProperty("histories", out var histories))
+                        {
+                            foreach (var history in histories.EnumerateArray())
+                            {
+                                if (history.TryGetProperty("created", out var createdDateOfHistory) &&
+                                    DateTime.TryParse(createdDateOfHistory.GetString(), out var changeDate) &&
+                                    changeDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm") == updated)
+                                {
+                                    if (history.TryGetProperty("author", out var authorElem) &&
+                                        authorElem.TryGetProperty("displayName", out var displayNameElem))
+                                    {
+                                        updatedBy = displayNameElem.GetString();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    //string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
 
                     // Render all change tags for this issue
                     List<string> changeTags = new();
@@ -2927,18 +2996,19 @@ namespace Monovera
                         foreach (var tag in tagsList)
                         {
                             if (!string.IsNullOrWhiteSpace(tag))
-                                changeTags.Add($"<span class='recent-update-tag'>{HttpUtility.HtmlEncode(tag)}</span>");
+                                changeTags.Add($"<span class='recent-update-tag' data-changetype='{HttpUtility.HtmlEncode(tag)}'>{HttpUtility.HtmlEncode(tag)}</span>");
                         }
                     }
                     else if (issue.CustomFields.TryGetValue("ChangeTypeTag", out var tagObj) && tagObj is string tagStr && !string.IsNullOrWhiteSpace(tagStr))
                     {
-                        changeTags.Add($"<span class='recent-update-tag'>{HttpUtility.HtmlEncode(tagStr)}</span>");
+                        changeTags.Add($"<span class='recent-update-tag' data-changetype='{HttpUtility.HtmlEncode(tagStr)}'>{HttpUtility.HtmlEncode(tagStr)}</span>");
                     }
                     string changeTagsHtml = changeTags.Count > 0
                         ? $"<div class='recent-update-tags'>{string.Join(" ", changeTags)}</div>"
                         : "";
 
                     string typeIconKey = frmMain.GetIconForType(issue.Type);
+                    string iconPath = "";
                     if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                     {
                         string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
@@ -2948,28 +3018,96 @@ namespace Monovera
                             {
                                 byte[] bytes = File.ReadAllBytes(fullPath);
                                 string base64 = Convert.ToBase64String(bytes);
-                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:28px;width:28px;vertical-align:middle;margin-right:12px;border-radius:6px;background:#e8f5e9;' />";
+                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;border-radius:6px;background:#e8f5e9;' title='{type}' />";
                             }
                             catch { }
                         }
                     }
 
+                    // Add a data attribute for change types and issue type to the row for filtering
+                    var changeTypeList = changeTags
+                        .Select(tag => Regex.Match(tag, @"data-changetype='([^']+)'").Groups[1].Value)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .ToList();
+                    string changeTypeAttr = changeTypeList.Count > 0
+                        ? $"data-changetypes='{string.Join(",", changeTypeList.Select(HttpUtility.HtmlEncode))}'"
+                        : "";
+                    string issueTypeAttr = $"data-issuetype='{type}'";
+
                     sb.AppendLine($@"
-<div class='recent-update-card'>
-  <div class='recent-update-header'>
-    {iconPath}
-    <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
-  </div>
-  {changeTagsHtml}
-</div>");
+<tr {changeTypeAttr} {issueTypeAttr}>
+  <td>{iconPath}</td>
+  <td>{key}</td>
+  <td>
+    <a href='#' data-key='{key}' class='recent-update-summary'>{summary}</a>
+  </td>
+  <td>
+  {updated}
+  {(string.IsNullOrWhiteSpace(updatedBy) ? "" : $"<div style='font-size:0.85em;color:#888;'>{HttpUtility.HtmlEncode(updatedBy)}</div>")}
+</td>
+  <td>{changeTagsHtml}</td>
+</tr>");
                 }
 
                 sb.AppendLine(@"
-      </div>
+        </tbody>
+      </table>
     </div>
   </section>
 </details>");
             }
+
+            // Add JS for filtering by change type and issue type
+            sb.AppendLine(@"
+<script>
+document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
+    var allCheckbox = filterBar.querySelector('.change-type-checkbox-all');
+    var checkboxes = filterBar.querySelectorAll('.change-type-checkbox');
+    var dropdown = filterBar.querySelector('.issue-type-dropdown');
+    var table = filterBar.parentElement.querySelector('table.recent-updates-table');
+    var rows = table.querySelectorAll('tbody tr');
+
+    function applyFilter() {
+        var checkedTypes = Array.from(checkboxes)
+            .filter(x => x.checked)
+            .map(x => x.value);
+        var selectedType = dropdown.value;
+        rows.forEach(function(row) {
+            var types = (row.getAttribute('data-changetypes') || '').split(',');
+            var issueType = row.getAttribute('data-issuetype') || '';
+            var show = true;
+            if (checkedTypes.length > 0 && !types.some(t => checkedTypes.includes(t))) {
+                show = false;
+            }
+            if (selectedType && issueType !== selectedType) {
+                show = false;
+            }
+            row.style.display = show ? '' : 'none';
+        });
+    }
+
+    if (allCheckbox) {
+        allCheckbox.addEventListener('change', function() {
+            checkboxes.forEach(function(cb) {
+                cb.checked = allCheckbox.checked;
+            });
+            applyFilter();
+        });
+    }
+
+    checkboxes.forEach(function(cb) {
+        cb.addEventListener('change', function() {
+            var allChecked = Array.from(checkboxes).every(x => x.checked);
+            allCheckbox.checked = allChecked;
+            applyFilter();
+        });
+    });
+
+    dropdown.addEventListener('change', applyFilter);
+});
+</script>
+");
+
 
             // Update the script to handle summary clicks
             string html = $@"
@@ -3572,12 +3710,12 @@ namespace Monovera
         <input type='date' id='filterDate' style='padding:6px 12px;min-width:120px;margin-left:8px;'/>
     </label>
     <label style='font-weight:500;color:#1565c0;'>User:
-        <select id='filterUser' class='download-btn' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
+        <select id='filterUser' class='issue-type-dropdown' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
             <option value=''>-- All Users --</option>
         </select>
     </label>
     <label style='font-weight:500;color:#1565c0;'>Type:
-        <select id='filterField' class='download-btn' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
+        <select id='filterField' class='issue-type-dropdown' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
             <option value=''>-- All Types --</option>
         </select>
     </label>

@@ -1081,3 +1081,117 @@ section,
 	box-shadow: 0 1px 2px rgba(33,150,243,0.04);
 	border: 1px solid #90caf9;
 }
+
+.issue-type-dropdown {
+	background: linear-gradient(90deg, #e1f0ff 60%, #bbdefb 100%);
+	color: #1565c0;
+	border: 2px solid #90caf9;
+	border-radius: 8px;
+	padding: 6px 14px;
+	font-size: 1em;
+	font-family: 'IBM Plex Sans', sans-serif;
+	font-weight: 500;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.08);
+	outline: none;
+	transition: border 0.2s, box-shadow 0.2s, background 0.2s;
+	min-width: 120px;
+}
+
+	.issue-type-dropdown:focus, .issue-type-dropdown:hover {
+		border-color: #1565c0;
+		background: linear-gradient(90deg, #bbdefb 60%, #e1f0ff 100%);
+		box-shadow: 0 4px 16px rgba(33,150,243,0.18);
+		color: #0d47a1;
+	}
+
+
+.compare-check {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #1565c0;
+  border-radius: 4px;
+  background-color: white;
+  position: relative;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  vertical-align: middle;
+}
+
+.compare-check:checked {
+  background-color: #1565c0;
+  border-color: #0d47a1;
+}
+
+	.compare-check:checked::after {
+		content: '';
+		position: absolute;
+		left: 4px;
+		top: 0px;
+		width: 4px;
+		height: 8px;
+		border: solid white;
+		border-width: 0 2px 2px 0;
+		transform: rotate(45deg);
+	}
+
+ .change-type-checkbox-all {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #1565c0;
+  border-radius: 4px;
+  background-color: white;
+  position: relative;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  vertical-align: middle;
+}
+
+	.change-type-checkbox-all:checked {
+		background-color: #1565c0;
+		border-color: #0d47a1;
+	}
+
+		.change-type-checkbox-all:checked::after {
+			content: '';
+			position: absolute;
+			left: 4px;
+			top: 0px;
+			width: 4px;
+			height: 8px;
+			border: solid white;
+			border-width: 0 2px 2px 0;
+			transform: rotate(45deg);
+		}
+
+
+.change-type-checkbox {
+	appearance: none;
+	width: 16px;
+	height: 16px;
+	border: 2px solid #1565c0;
+	border-radius: 4px;
+	background-color: white;
+	position: relative;
+	cursor: pointer;
+	transition: background-color 0.2s ease, border-color 0.2s ease;
+	vertical-align: middle;
+}
+
+	.change-type-checkbox:checked {
+		background-color: #1565c0;
+		border-color: #0d47a1;
+	}
+
+		.change-type-checkbox:checked::after {
+			content: '';
+			position: absolute;
+			left: 4px;
+			top: 0px;
+			width: 4px;
+			height: 8px;
+			border: solid white;
+			border-width: 0 2px 2px 0;
+			transform: rotate(45deg);
+		}
