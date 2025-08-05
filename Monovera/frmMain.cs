@@ -3214,6 +3214,11 @@ namespace Monovera
                    : "";
 
                 /**
+                 * Build attachments section
+                 */
+
+                string attachmentsHtml = BuildAttachmentsHtml(fields, issueKey);
+                /**
                 * Build description sections
                 */
                 string descriptinHTML = "";
@@ -3223,16 +3228,13 @@ namespace Monovera
                 {
                     descriptinHTML = descProp.GetString() ?? "";
                 }
-                string resolvedDescriptionHTML = ReplaceJiraLinksAndSVNFeatures(descriptinHTML);
+                string resolvedDescriptionHTML = HandleLinksOfDescriptionSection(descriptinHTML, issueKey);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
                 string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
                 string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
 
-                /**
-                * Build attachments section
-                */
-                string attachmentsHtml = BuildAttachmentsHtml(fields, issueKey);
+             
 
                 /**
                 * Build links section
@@ -4096,12 +4098,14 @@ document.addEventListener('DOMContentLoaded', () => {
         /// <returns>
         /// HTML string with Jira links, SVN features, and color macros replaced for display.
         /// </returns>
-        private string ReplaceJiraLinksAndSVNFeatures(string htmlDesc)
+        private string HandleLinksOfDescriptionSection(string htmlDesc, string key)
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
 
             var doc = new HtmlAgilityPack.HtmlDocument();
             doc.LoadHtml(htmlDesc);
+
+            //InlineAttachmentImages(doc, key);
 
             ReplaceColorMacros(doc);
             ReplaceJiraIssueMacros(doc);
@@ -4113,6 +4117,82 @@ document.addEventListener('DOMContentLoaded', () => {
             return doc.DocumentNode.InnerHtml;
         }
 
+        private void InlineAttachmentImages(HtmlAgilityPack.HtmlDocument doc, string issueKey)
+        {
+            if (!issueDtoDict.TryGetValue(issueKey, out var issueDto) || issueDto == null)
+                return;
+
+            // Find all text nodes that look like image file names
+            var imageRegex = new Regex(@"\b([\w\-\.]+)\.(png|jpg|jpeg|gif|bmp|webp|svg)\b", RegexOptions.IgnoreCase);
+
+            // Collect all attachment images for this issue
+            var imageAttachments = new Dictionary<string, Dictionary<string, object>>();
+            if (issueDto.CustomFields.TryGetValue("attachments", out var attachmentsObj) && attachmentsObj is List<Dictionary<string, object>> attachmentsList)
+            {
+                foreach (var att in attachmentsList)
+                {
+                    if (att.TryGetValue("filename", out var fnObj) && fnObj is string filename &&
+                        att.TryGetValue("mimeType", out var mtObj) && mtObj is string mimeType &&
+                        mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) &&
+                        att.TryGetValue("content", out var contentObj) && contentObj is string contentUrl)
+                    {
+                        imageAttachments[filename] = att;
+                    }
+                }
+            }
+
+            // Scan all text nodes for image file names
+            var textNodes = doc.DocumentNode.SelectNodes("//text()");
+            if (textNodes == null) return;
+
+            foreach (var textNode in textNodes.ToList())
+            {
+                var matches = imageRegex.Matches(textNode.InnerText);
+                if (matches.Count == 0) continue;
+
+                var parent = textNode.ParentNode;
+                var originalText = textNode.InnerText;
+                var replacedHtml = originalText;
+
+                foreach (Match match in matches)
+                {
+                    string filename = match.Value;
+                    if (imageAttachments.TryGetValue(filename, out var att))
+                    {
+                        string mimeType = att["mimeType"].ToString();
+                        string contentUrl = att["content"].ToString();
+
+                        // Download and encode image as base64
+                        try
+                        {
+                            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                            using var client = new HttpClient();
+                            client.BaseAddress = new Uri(jiraBaseUrl);
+                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                            using var response = client.GetAsync(contentUrl).Result;
+                            response.EnsureSuccessStatusCode();
+                            var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
+                            string base64 = Convert.ToBase64String(imageBytes);
+
+                            string imgTag = $"<img src=\"data:{mimeType};base64,{base64}\" alt=\"{HttpUtility.HtmlEncode(filename)}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />";
+                            replacedHtml = replacedHtml.Replace(filename, imgTag);
+                        }
+                        catch
+                        {
+                            // If image fetch fails, leave the filename as is
+                        }
+                    }
+                }
+
+                if (replacedHtml != originalText)
+                {
+                    var fragment = HtmlNode.CreateNode($"<span>{replacedHtml}</span>");
+                    parent.InsertBefore(fragment, textNode);
+                    parent.RemoveChild(textNode);
+                }
+            }
+        }
 
         private void ReplaceSvnFeatures(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
@@ -4254,15 +4334,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Step 2: Handle wiki-style links and smart-link anchors
-            var allParagraphs = doc.DocumentNode.SelectNodes("//p") ?? Enumerable.Empty<HtmlNode>();
-
             var fontWrappedRegex = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
             var anchorWrappedRegex = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            var smartLinkPlaceholderRegex = new Regex(@"<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>\s*smart-link\s*\[\1\]\s*</a>", RegexOptions.IgnoreCase);
+            var smartLinkPlaceholderRegex = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>\s*smart-link\s*\[\k<key>\]\s*</a>",RegexOptions.IgnoreCase);
 
-            foreach (var p in allParagraphs)
+            var targetNodes = doc.DocumentNode
+                                            .SelectNodes("//*")
+                                            ?.Where(n => !new[] { "script", "style" }.Contains(n.Name.ToLower()))
+                                            ?? Enumerable.Empty<HtmlNode>();
+
+
+            foreach (var node in targetNodes)
             {
-                var html = p.InnerHtml;
+                var html = node.InnerHtml;
 
                 // === 1. Handle font-wrapped wiki links ===
                 foreach (Match match in fontWrappedRegex.Matches(html))
@@ -4292,18 +4376,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 foreach (Match match in smartLinkPlaceholderRegex.Matches(html))
                 {
                     string fullMatch = match.Value;
-                    string key = match.Groups[1].Value.Trim();
+                    string key = match.Groups["key"].Value.Trim();
 
-                    // Here you can customize the actual title if you have a mapping/dictionary for the key
-                    // For now, default to showing just [KEY]
                     string title = issueDict.TryGetValue(key, out var issue) ? issue.Summary : "Summary Not Found!";
                     string displayTitle = $"{title} [{key}]";
+
                     string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(displayTitle)}</a>";
                     html = html.Replace(fullMatch, replacement);
                 }
 
-                p.InnerHtml = html;
+                node.InnerHtml = html;
             }
+
 
 
         }
