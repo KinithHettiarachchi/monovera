@@ -23,6 +23,7 @@ using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using Font = System.Drawing.Font;
+using HtmlAgilityPack;
 
 namespace Monovera
 {
@@ -4099,128 +4100,229 @@ document.addEventListener('DOMContentLoaded', () => {
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
 
-            htmlDesc = htmlDesc.Replace("ffffff", "000000");
+            var doc = new HtmlAgilityPack.HtmlDocument();
+            doc.LoadHtml(htmlDesc);
 
-            // Remove {color:#xxxxxx} and {color}
-            // Replace opening {color:#xxxxxx} with a span tag
-            htmlDesc = Regex.Replace(
-                htmlDesc,
-                @"\{color:(#[0-9a-fA-F]{6})\}",
-                match =>
-                {
-                    var hex = match.Groups[1].Value.ToLower();
-                    if (hex == "#ffffff") hex = "#000000"; // swap black to white for dark mode
-                    return $"<span style=\"color:{hex}\">";
-                },
-                RegexOptions.IgnoreCase
-            );
+            ReplaceColorMacros(doc);
+            ReplaceJiraIssueMacros(doc);
+            ReplaceJiraAnchorLinks(doc, issueDict);
+            ReplaceWikiStyleLinks(doc, issueDict);
+            ReplaceJiraAttachments(doc);
+            ReplaceSvnFeatures(doc, issueDict);
 
-            // Replace closing {color} with </span>
-            htmlDesc = Regex.Replace(htmlDesc, @"\{color\}", "</span>", RegexOptions.IgnoreCase);
+            return doc.DocumentNode.InnerHtml;
+        }
 
-            // Remove jira-issue-macro spans and their contents
-            htmlDesc = Regex.Replace(
-                htmlDesc,
-                @"<span\s+class=[""']jira-issue-macro[""'][^>]*>.*?</span>",
-                "",
-                RegexOptions.IgnoreCase | RegexOptions.Singleline
-            );
 
-            // Replace Jira <a href=".../browse/REQ-####"...>...</a> links
-            htmlDesc = Regex.Replace(htmlDesc, @"<a\s+[^>]*href\s*=\s*[""'](https?://[^""']+/browse/(\w+-\d+))[""'][^>]*>.*?</a>", match =>
+        private void ReplaceSvnFeatures(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        {
+            var textNodes = doc.DocumentNode.SelectNodes("//text()[contains(., '&#91;svn://')]");
+            if (textNodes == null) return;
+
+            foreach (var textNode in textNodes.ToList())
             {
-                string url = match.Groups[1].Value;
-                string key = match.Groups[2].Value;
+                var parent = textNode.ParentNode;
+                var originalText = textNode.InnerHtml;
 
-                if (issueDict.TryGetValue(key, out var issue))
+                var replacedHtml = Regex.Replace(originalText, @"&#91;(svn://[^\|\]]+\.feature)(?:\|svn://[^\]]+\.feature)?&#93;", match =>
                 {
-                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+                    string svnUrl = match.Groups[1].Value;
+
+                    try
+                    {
+                        using var client = new SharpSvn.SvnClient();
+                        using var ms = new MemoryStream();
+                        client.LoadConfigurationDefault();
+                        client.Authentication.DefaultCredentials = CredentialCache.DefaultNetworkCredentials;
+                        client.Write(new SvnUriTarget(svnUrl), ms);
+                        ms.Position = 0;
+
+                        using var reader = new StreamReader(ms);
+                        string content = reader.ReadToEnd();
+                        string encoded = HttpUtility.HtmlEncode(content);
+
+                        return $@"<pre><code class=""language-gherkin"">{encoded}</code></pre>";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"<div style='color:red;'>⚠ Failed to load: {HttpUtility.HtmlEncode(svnUrl)}<br><strong>{ex.GetType().Name}:</strong> {HttpUtility.HtmlEncode(ex.Message)}</div>";
+                    }
+                });
+
+                if (replacedHtml != originalText)
+                {
+                    var fragment = HtmlNode.CreateNode($"<div>{replacedHtml}</div>");
+                    foreach (var node in fragment.ChildNodes.ToList())
+                        parent.InsertBefore(node, textNode);
+
+                    parent.RemoveChild(textNode);
                 }
+            }
+        }
 
-                return $"<a href=\"#\">[{key}]</a>";
-            }, RegexOptions.IgnoreCase);
+        private void ReplaceJiraIssueMacros(HtmlAgilityPack.HtmlDocument doc)
+        {
+            var nodes = doc.DocumentNode.SelectNodes("//span[contains(@class, 'jira-issue-macro')]");
+            if (nodes == null) return;
 
-            // Replace wiki-style links like [Label|https://.../browse/REQ-xxxx]
-            htmlDesc = Regex.Replace(htmlDesc, @"\[(.*?)\|((https?://[^\|\]]+/browse/(\w+-\d+))(\|.*)?)\]", match =>
+            foreach (var span in nodes.ToList()) // clone to avoid collection modification
             {
-                string label = match.Groups[1].Value;
-                string fullUrlPart = match.Groups[2].Value;
-                string firstUrl = fullUrlPart.Split('|')[0];
+                var key = span.GetAttributeValue("data-jira-key", null);
+                var summary = span.Descendants("a").FirstOrDefault()?.GetAttributeValue("title", null);
 
-                var keyMatch = Regex.Match(firstUrl, @"browse/(\w+-\d+)");
-                string key = keyMatch.Success ? keyMatch.Groups[1].Value : null;
+                if (string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issue))
+                    summary = issue.Summary;
 
-                if (!string.IsNullOrEmpty(key) && issueDict.TryGetValue(key, out var issue))
-                {
-                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
-                }
+                if (string.IsNullOrWhiteSpace(summary)) summary = key ?? "Unknown";
 
-                return HttpUtility.HtmlEncode(label);
+                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
+                span.ParentNode.ReplaceChild(newLink, span);
+            }
+        }
+
+        private void ReplaceColorMacros(HtmlAgilityPack.HtmlDocument doc)
+        {
+            var html = doc.DocumentNode.InnerHtml;
+
+            html = Regex.Replace(html, @"\{color:(#[0-9a-fA-F]{6})\}", match =>
+            {
+                var hex = match.Groups[1].Value.ToLower();
+                if (hex == "#ffffff") hex = "#000000";
+                return $"<span style=\"color:{hex}\">";
             });
 
-            // Handle complex nested Jira macro links
-            htmlDesc = Regex.Replace(htmlDesc, @"
-    <a[^>]*href\s*=\s*[""']https?://[^""']+/browse/(\w+-\d+)[""'][^>]*>      # outer <a> with href to issue
-    (?:.*?<title=[""']([^""']+)[""'])?                                       # optional title attribute with summary
-    .*?</a>                                                                 # closing outer </a>
-", match =>
-            {
-                string key = match.Groups[1].Value;
-                string title = match.Groups[2].Success ? match.Groups[2].Value.Trim() : "";
+            html = Regex.Replace(html, @"\{color\}", "</span>", RegexOptions.IgnoreCase);
 
+            doc.LoadHtml(html); // reload after text replacement
+        }
+
+        private void ReplaceJiraAnchorLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        {
+            var nodes = doc.DocumentNode.SelectNodes("//a[contains(@href, '/browse/')]");
+            if (nodes == null) return;
+
+            foreach (var node in nodes.ToList())
+            {
+                var href = node.GetAttributeValue("href", "");
+                var keyMatch = Regex.Match(href, @"/browse/(\w+-\d+)");
+                if (!keyMatch.Success) continue;
+
+                var key = keyMatch.Groups[1].Value;
+
+                string title = node.GetAttributeValue("title", null);
                 if (string.IsNullOrWhiteSpace(title) && issueDict.TryGetValue(key, out var issue))
                     title = issue.Summary;
-
                 if (string.IsNullOrWhiteSpace(title))
-                    title = "Issue";
+                    title = key;
 
-                return $"<a href=\"#\">{HttpUtility.HtmlEncode(title)} [{key}]</a>";
-            }, RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace | RegexOptions.Singleline);
+                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>");
+                node.ParentNode.ReplaceChild(newLink, node);
+            }
+        }
 
-            // Replace raw URLs like https://.../browse/REQ-xxxx
-            htmlDesc = Regex.Replace(htmlDesc, @"https?://[^\s""<>]+/browse/(\w+-\d+)", match =>
+        private void ReplaceWikiStyleLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        {
+            // Step 1: Replace real <a> external Jira links
+            var linkNodes = doc.DocumentNode.SelectNodes("//a[contains(@class, 'external-link') and (@data-key or contains(@href, '/browse/'))]");
+            if (linkNodes != null)
             {
-                string key = match.Groups[1].Value;
-
-                if (issueDict.TryGetValue(key, out var issue))
+                foreach (var node in linkNodes.ToList())
                 {
-                    return $"<a href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(issue.Summary)} [{key}]</a>";
+                    string key = null;
+
+                    // Try to get key from data-key attribute
+                    if (node.Attributes["data-key"] != null)
+                    {
+                        key = node.Attributes["data-key"].Value;
+                    }
+                    else
+                    {
+                        var href = node.GetAttributeValue("href", "");
+                        var match = Regex.Match(href, @"/browse/([A-Z]+-\d+)");
+                        if (match.Success)
+                            key = match.Groups[1].Value;
+                    }
+
+                    if (string.IsNullOrEmpty(key))
+                        continue;
+
+                    string title = issueDict.TryGetValue(key, out var issue) ? issue.Summary : node.InnerText.Trim();
+
+                    var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>");
+                    node.ParentNode.ReplaceChild(newLink, node);
+                }
+            }
+
+            // Step 2: Handle wiki-style links and smart-link anchors
+            var allParagraphs = doc.DocumentNode.SelectNodes("//p") ?? Enumerable.Empty<HtmlNode>();
+
+            var fontWrappedRegex = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var anchorWrappedRegex = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var smartLinkPlaceholderRegex = new Regex(@"<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>\s*smart-link\s*\[\1\]\s*</a>", RegexOptions.IgnoreCase);
+
+            foreach (var p in allParagraphs)
+            {
+                var html = p.InnerHtml;
+
+                // === 1. Handle font-wrapped wiki links ===
+                foreach (Match match in fontWrappedRegex.Matches(html))
+                {
+                    string fullMatch = match.Value;
+                    string title = match.Groups[1].Value.Trim();
+                    string key = match.Groups[2].Value.Trim();
+                    title = title.Replace($"[{key}]", "").Trim();
+
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>";
+                    html = html.Replace(fullMatch, replacement);
                 }
 
-                return $"<a href=\"#\">[{key}]</a>";
-            });
-
-            // Replace [svn://...feature|...] style SVN links
-            htmlDesc = Regex.Replace(htmlDesc, @"&#91;(svn://[^\|\]]+\.feature)(?:\|svn://[^\]]+\.feature)?&#93;", match =>
-            {
-                string svnUrl = match.Groups[1].Value;
-
-                try
+                // === 2. Handle anchor-wrapped wiki links ===
+                foreach (Match match in anchorWrappedRegex.Matches(html))
                 {
-                    using var client = new SharpSvn.SvnClient();
-                    using var ms = new MemoryStream();
-                    client.LoadConfigurationDefault();
-                    client.Authentication.DefaultCredentials = CredentialCache.DefaultNetworkCredentials;
-                    client.Write(new SvnUriTarget(svnUrl), ms);
-                    ms.Position = 0;
+                    string fullMatch = match.Value;
+                    string titleBeforeAnchor = match.Groups[1].Value.Trim();
+                    string key = match.Groups[2].Value.Trim();
 
-                    using var reader = new StreamReader(ms);
-                    string content = reader.ReadToEnd();
-                    string encoded = HttpUtility.HtmlEncode(content);
-
-                    return $@"<pre><code class=""language-gherkin"">{encoded}</code></pre>";
+                    string displayTitle = $"{titleBeforeAnchor} [{key}]";
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                    html = html.Replace(fullMatch, replacement);
                 }
-                catch (Exception ex)
+
+                // === 3. Handle hardcoded smart-link anchors ===
+                foreach (Match match in smartLinkPlaceholderRegex.Matches(html))
                 {
-                    return $"<div style='color:red;'>⚠ Failed to load: {HttpUtility.HtmlEncode(svnUrl)}<br><strong>{ex.GetType().Name}:</strong> {HttpUtility.HtmlEncode(ex.Message)}</div>";
-                }
-            });
+                    string fullMatch = match.Value;
+                    string key = match.Groups[1].Value.Trim();
 
-            // Replace inline Jira attachment images with embedded base64 images
-            htmlDesc = Regex.Replace(htmlDesc, @"<img\s+[^>]*src\s*=\s*[""'](/rest/api/3/attachment/content/(\d+))[""'][^>]*>", match =>
+                    // Here you can customize the actual title if you have a mapping/dictionary for the key
+                    // For now, default to showing just [KEY]
+                    string title = issueDict.TryGetValue(key, out var issue) ? issue.Summary : "Summary Not Found!";
+                    string displayTitle = $"{title} [{key}]";
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                    html = html.Replace(fullMatch, replacement);
+                }
+
+                p.InnerHtml = html;
+            }
+
+
+        }
+
+
+        private void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc)
+        {
+            var nodes = doc.DocumentNode.SelectNodes("//img[contains(@src, '/rest/api/3/attachment/content/')]");
+            if (nodes == null) return;
+
+            foreach (var node in nodes.ToList())
             {
-                string relativeUrl = match.Groups[1].Value;
-                string attachmentId = match.Groups[2].Value;
+                var src = node.GetAttributeValue("src", null);
+                if (string.IsNullOrEmpty(src)) continue;
+
+                var match = Regex.Match(src, @"/attachment/content/(\d+)");
+                if (!match.Success) continue;
+
+                string attachmentId = match.Groups[1].Value;
 
                 try
                 {
@@ -4229,24 +4331,28 @@ document.addEventListener('DOMContentLoaded', () => {
                     client.BaseAddress = new Uri(jiraBaseUrl);
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
-                    // Jira requires redirect following for attachment download
-                    using var response = client.GetAsync(relativeUrl).Result;
+                    var response = client.GetAsync(src).Result;
                     response.EnsureSuccessStatusCode();
                     var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
 
                     string base64 = Convert.ToBase64String(imageBytes);
                     string contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
 
-                    return $"<img src=\"data:{contentType};base64,{base64}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />";
+                    var newNode = HtmlNode.CreateNode(
+                        $"<img src=\"data:{contentType};base64,{base64}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />");
+
+                    node.ParentNode.ReplaceChild(newNode, node);
                 }
                 catch (Exception ex)
                 {
-                    return $"<div style='color:red;'>⚠ Failed to load attachment ID {attachmentId}: {ex.Message}</div>";
+                    var errorNode = HtmlNode.CreateNode(
+                        $"<div style='color:red;'>⚠ Failed to load attachment ID {attachmentId}: {HttpUtility.HtmlEncode(ex.Message)}</div>");
+                    node.ParentNode.ReplaceChild(errorNode, node);
                 }
-            });
-
-            return htmlDesc;
+            }
         }
+
+
 
         /// <summary>
         /// Selects and loads a tree node by its Jira issue key.
