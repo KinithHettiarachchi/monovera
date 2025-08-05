@@ -2952,10 +2952,9 @@ namespace Monovera
         <thead>
           <tr>
             <th style='width:36px;'>Type</th>
-            <th>Key</th>
             <th>Summary</th>
-            <th>Updated</th>
             <th>Changes</th>
+            <th style='width:100px;'>Updated</th>
           </tr>
         </thead>
         <tbody>");
@@ -2966,28 +2965,7 @@ namespace Monovera
                     string key = issue.Key;
                     string type = HttpUtility.HtmlEncode(issue.Type ?? "");
                     string updated = issue.Updated?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "";
-                    string updatedBy = "";
-                    if (issue.CustomFields.TryGetValue("Changelog", out var changelogObj) && changelogObj is JsonElement changelogElem)
-                    {
-                        if (changelogElem.TryGetProperty("histories", out var histories))
-                        {
-                            foreach (var history in histories.EnumerateArray())
-                            {
-                                if (history.TryGetProperty("created", out var createdDateOfHistory) &&
-                                    DateTime.TryParse(createdDateOfHistory.GetString(), out var changeDate) &&
-                                    changeDate.ToLocalTime().ToString("yyyy-MM-dd HH:mm") == updated)
-                                {
-                                    if (history.TryGetProperty("author", out var authorElem) &&
-                                        authorElem.TryGetProperty("displayName", out var displayNameElem))
-                                    {
-                                        updatedBy = displayNameElem.GetString();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    //string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
+                    string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
 
                     // Render all change tags for this issue
                     List<string> changeTags = new();
@@ -3037,15 +3015,11 @@ namespace Monovera
                     sb.AppendLine($@"
 <tr {changeTypeAttr} {issueTypeAttr}>
   <td>{iconPath}</td>
-  <td>{key}</td>
   <td>
-    <a href='#' data-key='{key}' class='recent-update-summary'>{summary}</a>
+    <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
   </td>
-  <td>
-  {updated}
-  {(string.IsNullOrWhiteSpace(updatedBy) ? "" : $"<div style='font-size:0.85em;color:#888;'>{HttpUtility.HtmlEncode(updatedBy)}</div>")}
-</td>
   <td>{changeTagsHtml}</td>
+  <td>{updated}</td>
 </tr>");
                 }
 
