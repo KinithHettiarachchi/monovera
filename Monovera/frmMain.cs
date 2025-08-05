@@ -3133,18 +3133,19 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             if (suppressAfterSelect)
                 return;
 
-            // Prevent tab loading on right-click selection
             if (lastTreeMouseButton == MouseButtons.Right)
                 return;
 
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
 
-            suppressTabSelection = true; // Prevent TabDetails_SelectedIndexChanged from firing navigation
+            suppressTabSelection = true;
             try
             {
+                // Call Tree_AfterSelect_Internal directly on UI thread
                 await Tree_AfterSelect_Internal(sender, e, false);
-                // Programmatically select the tab for this issue
+
+                // UI update: select the tab for this issue
                 foreach (TabPage page in tabDetails.TabPages)
                 {
                     if (page.Text == issueKey)
@@ -4850,6 +4851,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
+            else if (e.Button == MouseButtons.Middle)
+            {
+                for (int i = 0; i < tabDetails.TabCount; i++)
+                {
+                    Rectangle r = tabDetails.GetTabRect(i);
+                    if (r.Contains(e.Location))
+                    {
+                        var tabToClose = tabDetails.TabPages[i];
+                        tabDetails.TabPages.Remove(tabToClose);
+
+                        // Select the tab to the left, if any; otherwise, select the first tab if any remain
+                        if (tabDetails.TabPages.Count > 0)
+                        {
+                            int newIdx = Math.Max(0, i - 1);
+                            tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
+                        }
+                        break;
+                    }
+                }
+            }
         }
 
         private System.Drawing.Image CreateIconFromUnicode(string unicodeChar, int size = 24)
@@ -4923,6 +4944,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         private void TabDetails_MouseDown(object sender, MouseEventArgs e)
         {
+            dragTabIndex = -1;
             for (int i = 0; i < tabDetails.TabCount; i++)
             {
                 if (tabDetails.GetTabRect(i).Contains(e.Location))
@@ -4935,8 +4957,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         private void TabDetails_MouseMove(object sender, MouseEventArgs e)
         {
-            // Prevent drag if dragTabIndex is out of bounds (can happen after tab close)
-            if (e.Button == MouseButtons.Left && dragTabIndex != -1 && dragTabIndex < tabDetails.TabPages.Count)
+            // Only start drag if index is valid, tab exists, and more than 2 tabs
+            if (e.Button == MouseButtons.Left && dragTabIndex != -1 && dragTabIndex < tabDetails.TabPages.Count && tabDetails.TabCount > 2)
             {
                 tabDetails.DoDragDrop(tabDetails.TabPages[dragTabIndex], DragDropEffects.Move);
             }
@@ -4949,18 +4971,48 @@ document.addEventListener('DOMContentLoaded', () => {
 
         private void TabDetails_DragDrop(object sender, DragEventArgs e)
         {
-            TabPage draggedTab = (TabPage)e.Data.GetData(typeof(TabPage));
+            // Only allow drop if more than 2 tabs
+            if (tabDetails.TabCount <= 2)
+                return;
+
+            TabPage draggedTab = e.Data.GetData(typeof(TabPage)) as TabPage;
+            if (draggedTab == null || !tabDetails.TabPages.Contains(draggedTab))
+                return;
+
             Point pt = tabDetails.PointToClient(new Point(e.X, e.Y));
+            int targetIndex = -1;
             for (int i = 0; i < tabDetails.TabCount; i++)
             {
                 if (tabDetails.GetTabRect(i).Contains(pt))
                 {
-                    tabDetails.TabPages.Remove(draggedTab);
-                    tabDetails.TabPages.Insert(i, draggedTab);
-                    tabDetails.SelectedTab = draggedTab;
+                    targetIndex = i;
                     break;
                 }
             }
+
+            if (targetIndex == -1 || draggedTab == null)
+                return;
+
+            int oldIndex = tabDetails.TabPages.IndexOf(draggedTab);
+
+            // If dropping onto itself, do nothing
+            if (oldIndex == targetIndex)
+                return;
+
+            tabDetails.TabPages.Remove(draggedTab);
+
+            // Clamp targetIndex to valid range after removal
+            if (targetIndex > tabDetails.TabPages.Count)
+                targetIndex = tabDetails.TabPages.Count;
+            if (targetIndex < 0)
+                targetIndex = 0;
+
+            // If moving forward, decrement targetIndex to account for removal
+            if (targetIndex > oldIndex)
+                targetIndex--;
+
+            tabDetails.TabPages.Insert(targetIndex, draggedTab);
+            tabDetails.SelectedTab = draggedTab;
             dragTabIndex = -1;
         }
 
