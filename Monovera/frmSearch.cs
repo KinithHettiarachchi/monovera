@@ -35,6 +35,9 @@ namespace Monovera
         {
             InitializeComponent();
 
+            // Only use Hide, never Close
+            btnClose.Click += (s, e) => this.Hide();
+
             // Set up type and status combo boxes for custom drawing and item height
             cmbType.DrawMode = DrawMode.OwnerDrawFixed;
             cmbType.ItemHeight = 28;
@@ -60,8 +63,7 @@ namespace Monovera
             // Attach search box and button handlers
             txtSearch.KeyDown += TxtSearch_KeyDown;
             btnSearch.Click += BtnSearch_Click;
-            btnClose.Click += (s, e) => Close();
-
+            
             // Initialize WebView2 and attach message handler
             webViewResults.EnsureCoreWebView2Async().ContinueWith(_ =>
             {
@@ -69,7 +71,22 @@ namespace Monovera
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
             // Focus search box when dialog is shown
-            this.Shown += (s, e) => txtSearch.Focus();
+            this.VisibleChanged += (s, e) =>
+            {
+                if (this.Visible)
+                    txtSearch.Focus();
+            };
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // Only hide if user is closing the search dialog directly
+            if (e.CloseReason == CloseReason.UserClosing && Application.OpenForms.OfType<frmMain>().Any(f => f.Visible))
+            {
+                e.Cancel = true;
+                this.Hide();
+            }
+            // Otherwise (app is exiting), allow close
         }
 
         /// <summary>
@@ -177,8 +194,8 @@ namespace Monovera
         /// </summary>
         private async void BtnSearch_Click(object sender, EventArgs e)
         {
-            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-            File.WriteAllText(htmlFilePath, frmMain.LoadingHtml);
+            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+            File.WriteAllText(htmlFilePath, frmMain.HTML_LOADINGPAGE);
             webViewResults.CoreWebView2.Navigate(htmlFilePath);
 
             string query = txtSearch.Text.Trim();
@@ -192,7 +209,7 @@ namespace Monovera
             if (!string.IsNullOrWhiteSpace(queryKey) && issueDict.ContainsKey(queryKey))
             {
                 SelectNodeByKey(queryKey);
-                this.Close();
+                this.Hide();
                 return;
             }
 
@@ -240,30 +257,6 @@ namespace Monovera
             ShowResults(matches, query);
         }
 
-        /// <summary>
-        /// Recursively searches a TreeNodeCollection for a node with the specified key.
-        /// </summary>
-        /// <param name="nodes">TreeNodeCollection to search.</param>
-        /// <param name="key">Issue key to find.</param>
-        /// <returns>The matching TreeNode, or null if not found.</returns>
-        //private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key)
-        //{
-        //    foreach (TreeNode node in nodes)
-        //    {
-        //        if (node.Tag?.ToString() == key) return node;
-        //        var child = FindNodeByKey(node.Nodes, key);
-        //        if (child != null) return child;
-        //    }
-        //    return null;
-        //}
-
-        /// <summary>
-        /// Performs a Jira search using the provided JQL and returns a list of matching issues.
-        /// Handles paging and progress reporting.
-        /// </summary>
-        /// <param name="jql">Jira Query Language string.</param>
-        /// <param name="progress">Optional progress reporter for UI updates.</param>
-        /// <returns>List of JiraIssueDto objects matching the query.</returns>
         public static async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
         {
             var list = new List<JiraIssueDto>();

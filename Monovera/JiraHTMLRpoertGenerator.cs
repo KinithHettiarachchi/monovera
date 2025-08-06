@@ -72,6 +72,9 @@ public class JiraHtmlReportGenerator
         html = ReplaceAttachmentImageUrls(html, attachments);
         html = await EmbedImagesInHtmlAsync(html);
 
+        // Use frmMain.HandleLinksOfDescriptionSection to process description
+        html = frmMain.HandleLinksOfDescriptionSection(html, key);
+
         // Assign related keys to the issue for later rendering
         issue.RelatedIssueKeys = relatedKeys;
 
@@ -305,13 +308,19 @@ public class JiraHtmlReportGenerator
         string timestamp = DateTime.Now.ToString("yyyyMMddHHmmss");
         string filename = Path.Combine(reportsDir, $"Report_{issueKey}_{timestamp}.html");
 
-        // Use monovera.css from the app directory
+        // Read monovera.css content
         string cssPath = Path.Combine(appDir, "monovera.css");
-        string cssHref = new Uri(cssPath).AbsoluteUri;
+        string cssContent = "";
+        if (File.Exists(cssPath))
+        {
+            cssContent = await File.ReadAllTextAsync(cssPath);
+        }
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report [{issues[0].issue.Key}]</title>");
-        sb.AppendLine($"<link rel='stylesheet' href='{cssHref}' />");
+        sb.AppendLine("<style>");
+        sb.AppendLine(cssContent);
+        sb.AppendLine("</style>");
         sb.AppendLine("</head><body>");
 
         // Generate table of contents (TOC) with outline numbers
@@ -324,6 +333,8 @@ public class JiraHtmlReportGenerator
             int level = number.Count(c => c == '.');
             string anchor = $"issue-{issue.Key}";
             string title = System.Web.HttpUtility.HtmlEncode(issue.Summary);
+            string iconBase64 = GetIconBase64(issue.Key);
+            string iconImg = string.IsNullOrEmpty(iconBase64)? "" : $"<img class='icon' title='{issue.Type}' src=\"data:image/png;base64,{iconBase64}\" style='height:18px;width:18px;vertical-align:middle;margin-right:6px;'>";
 
             if (level > previousLevel)
             {
@@ -336,7 +347,7 @@ public class JiraHtmlReportGenerator
                     sb.AppendLine("</ul>");
             }
 
-            sb.AppendLine($"<li><a href='#{anchor}'>{number} {title} [{issue.Key}]</a></li>");
+            sb.AppendLine($"<li><a href='#{anchor}'>{number} {iconImg} {title} [{issue.Key}] ({issue.Type})</a></li>");
             previousLevel = level;
         }
         for (int i = 0; i < previousLevel; i++)
@@ -351,7 +362,7 @@ public class JiraHtmlReportGenerator
             string key = issue.Key;
             string anchor = $"issue-{key}";
             string iconBase64 = GetIconBase64(key);
-            string iconImg = string.IsNullOrEmpty(iconBase64) ? "" : $"<img class='icon' src=\"data:image/png;base64,{iconBase64}\" style='vertical-align:middle;margin-right:6px;'>";
+            string iconImg = string.IsNullOrEmpty(iconBase64)? "" : $"<img class='icon' title='{issue.Type}' src=\"data:image/png;base64,{iconBase64}\" style='height:36px;width:36px;vertical-align:middle;margin-right:6px;'>";
 
             sb.AppendLine($"""
 <details open style="margin-left:{level * 2}em;" id="{anchor}" class="issue">
@@ -399,57 +410,48 @@ public class JiraHtmlReportGenerator
     /// <returns>Base64 string of the icon image, or empty if not found.</returns>
     private string GetIconBase64(string key)
     {
-        var node = FindTreeNode(tree.Nodes, key);
-        if (node?.ImageKey is string imgKey && tree.ImageList?.Images.ContainsKey(imgKey) == true)
+        // Get issue type
+        if (!issueDict.TryGetValue(key, out var issue) || string.IsNullOrEmpty(issue.Type))
+            return "";
+
+        // Find project config by key prefix
+        var keyPrefix = key.Split('-')[0];
+        var projectConfig = frmMain.config?.Projects?.FirstOrDefault(
+            p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase)
+        );
+        if (projectConfig == null || projectConfig.Types == null)
+            return "";
+
+        // Find icon filename for issue type
+        string iconFileName = null;
+        if (projectConfig.Types.TryGetValue(issue.Type, out iconFileName))
         {
-            using var ms = new MemoryStream();
-            tree.ImageList.Images[imgKey].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-            return Convert.ToBase64String(ms.ToArray());
+            // Direct match
         }
-        return "";
-    }
-
-    /// <summary>
-    /// Recursively searches the tree for a node with the given issue key.
-    /// </summary>
-    /// <param name="nodes">TreeNodeCollection to search.</param>
-    /// <param name="key">Issue key to find.</param>
-    /// <returns>The matching TreeNode, or null if not found.</returns>
-    private TreeNode? FindTreeNode(TreeNodeCollection nodes, string key)
-    {
-        foreach (TreeNode node in nodes)
+        else
         {
-            if (node.Tag is string tag && tag == key)
-                return node;
-            var found = FindTreeNode(node.Nodes, key);
-            if (found != null) return found;
+            // Fallback: case-insensitive search
+            var match = projectConfig.Types
+                .FirstOrDefault(kvp => kvp.Key.Equals(issue.Type, StringComparison.OrdinalIgnoreCase));
+            iconFileName = match.Value;
         }
-        return null;
-    }
 
-    /// <summary>
-    /// Rewrites relative image URLs in the HTML to absolute URLs using the Jira base URL.
-    /// </summary>
-    /// <param name="html">HTML string to process.</param>
-    /// <returns>HTML with image src attributes rewritten to absolute URLs.</returns>
-    private string RewriteImageUrls(string html)
-    {
-        if (string.IsNullOrWhiteSpace(html))
-            return "<i>No description</i>";
+        if (string.IsNullOrEmpty(iconFileName))
+            return "";
 
-        // Use Regex to find <img src="..."> and rewrite relative URLs
-        var pattern = "<img\\s+[^>]*src=[\"']([^\"']+)[\"'][^>]*>";
-        var replaced = Regex.Replace(html, pattern, match =>
+        // Load image from images folder
+        string imagePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", iconFileName);
+        if (!File.Exists(imagePath))
+            return "";
+
+        try
         {
-            var src = match.Groups[1].Value;
-            if (src.StartsWith("/"))
-            {
-                var absoluteUrl = jiraBaseUrl.TrimEnd('/') + src;
-                return match.Value.Replace(src, absoluteUrl);
-            }
-            return match.Value;
-        }, RegexOptions.IgnoreCase);
-
-        return replaced;
+            byte[] bytes = File.ReadAllBytes(imagePath);
+            return Convert.ToBase64String(bytes);
+        }
+        catch
+        {
+            return "";
+        }
     }
 }

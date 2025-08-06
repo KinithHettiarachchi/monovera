@@ -93,7 +93,86 @@ namespace Monovera
 
         public static string cssPath = "";
         public static string cssHref = "";
-        public static string LoadingHtml = "";
+        public static string HTML_LOADINGPAGE = "";
+
+        private frmSearch frmSearchInstance;
+
+        string focustToTreeJS = @"
+<script>
+(function() {
+    let lastSelectionState = false;
+
+    function hasTextSelection() {
+        const sel = window.getSelection();
+        return sel && sel.toString().length > 0;
+    }
+
+    function checkSelection() {
+        const hasSelection = hasTextSelection();
+        if (hasSelection && !lastSelectionState) {
+            // Selection started, keep focus in WebView2
+            if (window.chrome && window.chrome.webview)
+                window.chrome.webview.postMessage('__keep_webview_focus__');
+        } else if (!hasSelection && lastSelectionState) {
+            // Selection cleared, restore focus to tree
+            if (window.chrome && window.chrome.webview)
+                window.chrome.webview.postMessage('__tree_focus__');
+        }
+        lastSelectionState = hasSelection;
+    }
+
+    document.addEventListener('selectionchange', checkSelection);
+
+    // List of interactive tags
+    const interactiveTags = ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON', 'OPTION', 'LABEL'];
+    // List of interactive classes (customize as needed)
+    const interactiveClasses = ['datepicker', 'dropdown', 'combo', 'calendar'];
+
+    document.addEventListener('mouseup', function(e) {
+        if (hasTextSelection()) return; // Do not restore focus if text is selected
+        if (interactiveTags.includes(e.target.tagName)) return;
+        if (e.target.isContentEditable) return;
+        if (e.target.closest('.' + interactiveClasses.join(', .'))) return;
+        if (window.chrome && window.chrome.webview)
+            window.chrome.webview.postMessage('__tree_focus__');
+    });
+
+    // Restore focus after selection or closing of interactive elements
+    function restoreTreeFocus() {
+        if (hasTextSelection()) return; // Do not restore focus if text is selected
+        if (window.chrome && window.chrome.webview)
+            window.chrome.webview.postMessage('__tree_focus__');
+    }
+
+    // Listen for change and blur events on interactive elements
+    interactiveTags.forEach(function(tag) {
+        document.querySelectorAll(tag).forEach(function(el) {
+            el.addEventListener('change', restoreTreeFocus);
+            el.addEventListener('blur', restoreTreeFocus);
+        });
+    });
+
+    // Listen for custom calendar/date picker close events if available
+    interactiveClasses.forEach(function(cls) {
+        document.querySelectorAll('.' + cls).forEach(function(el) {
+            el.addEventListener('change', restoreTreeFocus);
+            el.addEventListener('blur', restoreTreeFocus);
+        });
+    });
+
+    // For dynamically added elements, use event delegation
+    document.body.addEventListener('change', function(e) {
+        if (interactiveTags.includes(e.target.tagName) || interactiveClasses.some(cls => e.target.classList.contains(cls))) {
+            restoreTreeFocus();
+        }
+    });
+    document.body.addEventListener('blur', function(e) {
+        if (interactiveTags.includes(e.target.tagName) || interactiveClasses.some(cls => e.target.classList.contains(cls))) {
+            restoreTreeFocus();
+        }
+    }, true);
+})();
+</script>";
 
         /// <summary>
         /// Root configuration for Jira integration.
@@ -156,6 +235,8 @@ namespace Monovera
             public string ParentKey { get; set; }
             /// <summary>List of related issue keys (issue links).</summary>
             public List<string> RelatedIssueKeys { get; set; } = new List<string>();
+
+            public string SortingField { get; set; }
         }
 
         /// <summary>
@@ -214,12 +295,6 @@ namespace Monovera
             string message = $"{key} was not found in the tree. If this belongs to one of loaded projects, please update the hierarchy to view it.";
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            notifyIcon?.Dispose();
-            base.OnFormClosing(e);
         }
 
         /// <summary>
@@ -627,7 +702,7 @@ namespace Monovera
             if (e.Control && e.KeyCode == Keys.Q)
             {
                 e.SuppressKeyPress = true;
-                ShowSearchDialog(this.tree);
+                ShowSearchDialog();
             }
             else if (e.Control && e.KeyCode == Keys.P)
             {
@@ -748,6 +823,8 @@ namespace Monovera
                     }
                 }
             };
+
+            treeContextMenu.Closed += treeContextMenu_Closed;
         }
 
 
@@ -769,7 +846,7 @@ namespace Monovera
             };
 
             // Attach event handlers for menu item clicks
-            searchMenuItem.Click += (s, e) => ShowSearchDialog(tree);
+            searchMenuItem.Click += (s, e) => ShowSearchDialog();
 
             // Add menu items to the context menu
             treeContextMenu.Items.Add(searchMenuItem);
@@ -841,7 +918,7 @@ namespace Monovera
             }
             CollectKeys(tree.Nodes);
 
-            var dlg = new Form
+            var DialogLinkRelatedIssues = new Form
             {
                 Text = $"Link related issues to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -854,6 +931,12 @@ namespace Monovera
                 ShowInTaskbar = false,
                 Font = new Font("Segoe UI", 10)
             };
+
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+            if (File.Exists(iconPath))
+            {
+                DialogLinkRelatedIssues.Icon = new Icon(iconPath);
+            }
 
             var layout = new TableLayoutPanel
             {
@@ -1060,14 +1143,14 @@ namespace Monovera
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 0, 3);
 
-            dlg.Controls.Add(layout);
-            //dlg.AcceptButton = btnLink;
-            dlg.CancelButton = btnCancel;
+            DialogLinkRelatedIssues.Controls.Add(layout);
+            //frmSearchInstance.AcceptButton = btnLink;
+            DialogLinkRelatedIssues.CancelButton = btnCancel;
 
-            btnLink.Enter += (s, e) => dlg.AcceptButton = btnLink;
-            txtInput.Enter += (s, e) => dlg.AcceptButton = null;
+            btnLink.Enter += (s, e) => DialogLinkRelatedIssues.AcceptButton = btnLink;
+            txtInput.Enter += (s, e) => DialogLinkRelatedIssues.AcceptButton = null;
 
-            if (dlg.ShowDialog(tree) == DialogResult.OK)
+            if (DialogLinkRelatedIssues.ShowDialog(tree) == DialogResult.OK)
             {
                 var keysToLink = grid.Rows.Cast<DataGridViewRow>()
                     .Select(r => r.Cells[0].Value?.ToString())
@@ -1123,18 +1206,24 @@ namespace Monovera
                 // Get mouse position for dialog
                 Point menuLocation = tree.PointToClient(treeContextMenu.Bounds.Location);
 
-                using (var dlg = new Form())
+                using (var DialogChangeParentMenu = new Form())
                 {
-                    dlg.Text = $"Change Parent of {childKey}";
-                    dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                    dlg.StartPosition = FormStartPosition.CenterScreen;
-                    dlg.Width = 420;
-                    dlg.Height = 210;
-                    dlg.BackColor = GetCSSColor_Tree_Background(cssPath);
-                    dlg.MaximizeBox = false;
-                    dlg.MinimizeBox = false;
-                    dlg.ShowInTaskbar = false;
-                    dlg.Font = new Font("Segoe UI", 10);
+                    DialogChangeParentMenu.Text = $"Change Parent of {childKey}";
+                    DialogChangeParentMenu.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    DialogChangeParentMenu.StartPosition = FormStartPosition.CenterScreen;
+                    DialogChangeParentMenu.Width = 420;
+                    DialogChangeParentMenu.Height = 210;
+                    DialogChangeParentMenu.BackColor = GetCSSColor_Tree_Background(cssPath);
+                    DialogChangeParentMenu.MaximizeBox = false;
+                    DialogChangeParentMenu.MinimizeBox = false;
+                    DialogChangeParentMenu.ShowInTaskbar = false;
+                    DialogChangeParentMenu.Font = new Font("Segoe UI", 10);
+
+                    string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                    if (File.Exists(iconPath))
+                    {
+                        DialogChangeParentMenu.Icon = new Icon(iconPath);
+                    }
 
                     var layout = new TableLayoutPanel
                     {
@@ -1214,11 +1303,11 @@ namespace Monovera
                     buttonPanel.Controls.Add(btnCancel);
                     layout.Controls.Add(buttonPanel, 1, 2);
 
-                    dlg.Controls.Add(layout);
-                    dlg.AcceptButton = btnOk;
-                    dlg.CancelButton = btnCancel;
+                    DialogChangeParentMenu.Controls.Add(layout);
+                    DialogChangeParentMenu.AcceptButton = btnOk;
+                    DialogChangeParentMenu.CancelButton = btnCancel;
 
-                    if (dlg.ShowDialog(tree) == DialogResult.OK)
+                    if (DialogChangeParentMenu.ShowDialog(tree) == DialogResult.OK)
                     {
                         string newParentKey = cmbInput.Text.Trim();
                         if (string.IsNullOrWhiteSpace(newParentKey))
@@ -1365,7 +1454,7 @@ namespace Monovera
             var issueTypes = projectConfig.Types.Keys.ToList();
 
             // Create dialog
-            var dlg = new Form
+            var DialogCreateIssue = new Form
             {
                 Text = $"Add {mode.ToLower()} node to {baseKey}",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -1378,6 +1467,12 @@ namespace Monovera
                 ShowInTaskbar = false,
                 Font = new Font("Segoe UI", 10)
             };
+
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+            if (File.Exists(iconPath))
+            {
+                DialogCreateIssue.Icon = new Icon(iconPath);
+            }
 
             var layout = new TableLayoutPanel
             {
@@ -1490,11 +1585,11 @@ namespace Monovera
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 1, 4);
 
-            dlg.Controls.Add(layout);
-            dlg.AcceptButton = btnCreate;
-            dlg.CancelButton = btnCancel;
+            DialogCreateIssue.Controls.Add(layout);
+            DialogCreateIssue.AcceptButton = btnCreate;
+            DialogCreateIssue.CancelButton = btnCancel;
 
-            if (dlg.ShowDialog(tree) == DialogResult.OK)
+            if (DialogCreateIssue.ShowDialog(tree) == DialogResult.OK)
             {
                 string linkMode = cmbMode.SelectedItem.ToString();
                 string issueType = cmbType.SelectedItem.ToString();
@@ -1532,36 +1627,36 @@ namespace Monovera
 
             string url = $"{jiraBaseUrl}/browse/{issueKey}";
 
-            using (var dlg = new Form())
+            using (var DialogEditIssue = new Form())
             {
-                dlg.Text = $"Edit : {issueSummary} [{issueKey}]";
-                dlg.Width = 1200;
-                dlg.Height = 800;
-                dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dlg.MinimizeBox = false;
-                dlg.MaximizeBox = true;
+                DialogEditIssue.Text = $"Edit : {issueSummary} [{issueKey}]";
+                DialogEditIssue.Width = 1200;
+                DialogEditIssue.Height = 800;
+                DialogEditIssue.StartPosition = FormStartPosition.CenterParent;
+                DialogEditIssue.FormBorderStyle = FormBorderStyle.FixedDialog;
+                DialogEditIssue.MinimizeBox = false;
+                DialogEditIssue.MaximizeBox = true;
 
-                // Set dialog icon from Monovera.ico in images folder
                 string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
                 if (File.Exists(iconPath))
                 {
-                    dlg.Icon = new Icon(iconPath);
+                    DialogEditIssue.Icon = new Icon(iconPath);
                 }
 
                 var webView = new Microsoft.Web.WebView2.WinForms.WebView2
                 {
                     Dock = DockStyle.Fill
                 };
-                dlg.Controls.Add(webView);
 
-                dlg.Shown += async (s, e) =>
+                DialogEditIssue.Controls.Add(webView);
+
+                DialogEditIssue.Shown += async (s, e) =>
                 {
                     await webView.EnsureCoreWebView2Async();
                     webView.CoreWebView2.Navigate(url);
                 };
 
-                dlg.FormClosed += async (s, e) =>
+                DialogEditIssue.FormClosed += async (s, e) =>
                 {
                     var node = FindNodeByKey(tree.Nodes, issueKey, false);
                     if (node != null)
@@ -1569,13 +1664,12 @@ namespace Monovera
                         lastTreeMouseButton = MouseButtons.Left;
                         await Tree_AfterSelect_Internal(tree, new TreeViewEventArgs(node), true);
                     }
+                    tree.Focus(); // <-- Always focus tree after dialog closes
                 };
 
-                dlg.ShowDialog(this);
+                DialogEditIssue.ShowDialog(this);
             }
         }
-
-
 
 
         /// <summary>
@@ -1599,12 +1693,15 @@ namespace Monovera
         /// Displays the search dialog for the tree view, allowing users to search for issues.
         /// </summary>
         /// <param name="tree">The tree view to search within.</param>
-        private void ShowSearchDialog(System.Windows.Forms.TreeView tree)
+        private void ShowSearchDialog()
         {
-            using (var dlg = new frmSearch())
-            {
-                dlg.ShowDialog(this);
-            }
+            if (frmSearchInstance == null || frmSearchInstance.IsDisposed)
+                frmSearchInstance = new frmSearch();
+
+            frmSearchInstance.Show(this); // Use Show, not ShowDialog, to allow hiding
+            frmSearchInstance.BringToFront();
+            frmSearchInstance.Focus();
+            //tree.Focus();
         }
 
         /// <summary>
@@ -2276,7 +2373,7 @@ namespace Monovera
             splitContainer1.BackColor = GetCSSColor_Tree_Background(cssPath);
 
 
-            LoadingHtml = $@"
+            HTML_LOADINGPAGE = $@"
 <!DOCTYPE html>
 <html>
 <head>
@@ -2378,7 +2475,8 @@ namespace Monovera
                         Summary = myIssue.Summary,
                         Type = myIssue.Type,
                         ParentKey = null,
-                        RelatedIssueKeys = new List<string>()
+                        RelatedIssueKeys = new List<string>(),
+                        SortingField = myIssue.SortingField
                     };
 
                     var projectConfig = config.Projects.FirstOrDefault(p => myIssue.Key.StartsWith(p.Root.Split("-")[0]));
@@ -2658,8 +2756,8 @@ namespace Monovera
             await webView.EnsureCoreWebView2Async();
 
             // Show loading page after WebView is ready and attached to UI
-            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-            File.WriteAllText(htmlFilePath, LoadingHtml);
+            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+            File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
             webView.CoreWebView2.Navigate(htmlFilePath);
 
             // Handle script dialogs
@@ -2732,7 +2830,7 @@ namespace Monovera
             // --- Step 1: Prepare WebView2 control and TabPage first ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
             webView.BackColor = GetCSSColor_Tree_Background(cssPath);
-
+            
             // Create the tab page immediately
             var updatePage = new TabPage("Recent Updates!")
             {
@@ -2771,8 +2869,8 @@ namespace Monovera
             // --- Step 2: Initialize WebView2 and show Loading ---
             await webView.EnsureCoreWebView2Async();
 
-            string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-            File.WriteAllText(htmlFilePath, LoadingHtml);
+            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+            File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
             webView.CoreWebView2.Navigate(htmlFilePath);
 
             // Handle dialogs and messages
@@ -3202,9 +3300,10 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             {
                 // Tab does not exist, create and load it
                 webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                
                 await webView.EnsureCoreWebView2Async();
-                string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-                File.WriteAllText(htmlFilePath, LoadingHtml);
+                string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+                File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
                 webView.CoreWebView2.Navigate(htmlFilePath);
 
                 if (tabDetails.ImageList == null)
@@ -3251,12 +3350,13 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                     if (webView == null)
                     {
                         webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
+                        
                         await webView.EnsureCoreWebView2Async();
                         pageTab.Controls.Clear();
                         pageTab.Controls.Add(webView);
                     }
-                    string htmlFilePath = Path.Combine(tempFolder, $"LoadingHtml.html");
-                    File.WriteAllText(htmlFilePath, LoadingHtml);
+                    string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+                    File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
                     webView.CoreWebView2.Navigate(htmlFilePath);
                 }
                 else
@@ -3514,13 +3614,12 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
         {
             var sb = new StringBuilder();
             int matchCount = 0;
+            var issues = new List<(string key, string summary, string issueType, JsonElement issueElem)>();
 
             sb.AppendLine($"<div class='subsection'><h4>{HttpUtility.HtmlEncode(title)}</h4>");
 
             if (fields.TryGetProperty("issuelinks", out var links))
             {
-                var tableRows = new StringBuilder();
-
                 foreach (var link in links.EnumerateArray())
                 {
                     if (link.TryGetProperty("type", out var typeProp) &&
@@ -3547,59 +3646,80 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                                 ? typeName.GetString() ?? ""
                                 : "";
 
-                            // Find project config for this key
-                            var keyPrefix = key.Split('-')[0];
-                            var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
-                            string iconImgInner = "";
+                            issues.Add((key, sum, issueType, issueElem));
+                        }
+                    }
+                }
 
-                            // Case-insensitive lookup for issueType in projectConfig.Types
-                            string fileName = null;
-                            if (projectConfig != null && !string.IsNullOrEmpty(issueType))
-                            {
-                                // Try direct match first
-                                if (!projectConfig.Types.TryGetValue(issueType, out fileName))
-                                {
-                                    // Fallback: case-insensitive search
-                                    var match = projectConfig.Types
-                                        .FirstOrDefault(kvp => kvp.Key.Equals(issueType, StringComparison.OrdinalIgnoreCase));
-                                    fileName = match.Value;
-                                }
-                            }
+                // Sort issues by sorting field
+                if (issues.Count > 0)
+                {
+                    // Use the first issue's key to get the sorting field for the project
+                    string sortingField = GetSortingFieldForKey(issues[0].key);
+                    var comparer = new AlphanumericComparer();
 
-                            // ... inside BuildLinksTable ...
-                            if (!string.IsNullOrEmpty(fileName))
-                            {
-                                string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                                if (File.Exists(fullPath))
-                                {
-                                    try
-                                    {
-                                        byte[] bytes = File.ReadAllBytes(fullPath);
-                                        string base64 = Convert.ToBase64String(bytes);
-                                        // Add title attribute for tooltip
-                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
-                                    }
-                                    catch { }
-                                }
-                            }
-                            else
-                            {
-                                // Use green square emoji if no image, with tooltip
-                                iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(issueType)}'>🟥</span>";
-                            }
+                    issues = issues.OrderBy(i =>
+                    {
+                        if (i.issueElem.TryGetProperty("fields", out var fieldsElem) &&
+                            fieldsElem.TryGetProperty(sortingField, out var sortVal))
+                        {
+                            return sortVal.ToString() ?? "";
+                        }
+                        return i.summary ?? "";
+                    }, comparer).ToList();
+                }
 
-                            tableRows.AppendLine($@"
+                var tableRows = new StringBuilder();
+                foreach (var i in issues)
+                {
+                    // Find project config for this key
+                    var keyPrefix = i.key.Split('-')[0];
+                    var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                    string iconImgInner = "";
+
+                    // Case-insensitive lookup for issueType in projectConfig.Types
+                    string fileName = null;
+                    if (projectConfig != null && !string.IsNullOrEmpty(i.issueType))
+                    {
+                        // Try direct match first
+                        if (!projectConfig.Types.TryGetValue(i.issueType, out fileName))
+                        {
+                            // Fallback: case-insensitive search
+                            var match = projectConfig.Types
+                                .FirstOrDefault(kvp => kvp.Key.Equals(i.issueType, StringComparison.OrdinalIgnoreCase));
+                            fileName = match.Value;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(fileName))
+                    {
+                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                        if (File.Exists(fullPath))
+                        {
+                            try
+                            {
+                                byte[] bytes = File.ReadAllBytes(fullPath);
+                                string base64 = Convert.ToBase64String(bytes);
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(i.issueType)}' />";
+                            }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(i.issueType)}'>🟥</span>";
+                    }
+
+                    tableRows.AppendLine($@"
 <tr>
     <td style='width:36px;'>{iconImgInner}</td>
     <td>
-        <a href='#' data-key='{HttpUtility.HtmlEncode(key)}'>
-            {HttpUtility.HtmlEncode(sum)} [{HttpUtility.HtmlEncode(key)}]
+        <a href='#' data-key='{HttpUtility.HtmlEncode(i.key)}'>
+            {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}]
         </a>
     </td>
 </tr>");
-                            matchCount++;
-                        }
-                    }
+                    matchCount++;
                 }
 
                 if (matchCount > 0)
@@ -4029,6 +4149,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }}
     }}
   </script>
+{focustToTreeJS}
 </body>
 </html>";
         }
@@ -4213,7 +4334,7 @@ document.addEventListener('DOMContentLoaded', () => {
         /// <returns>
         /// HTML string with Jira links, SVN features, and color macros replaced for display.
         /// </returns>
-        private string HandleLinksOfDescriptionSection(string htmlDesc, string key)
+        public static string HandleLinksOfDescriptionSection(string htmlDesc, string key)
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
 
@@ -4232,7 +4353,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return doc.DocumentNode.InnerHtml;
         }
 
-        private void InlineAttachmentImages(HtmlAgilityPack.HtmlDocument doc, string issueKey)
+        private static void InlineAttachmentImages(HtmlAgilityPack.HtmlDocument doc, string issueKey)
         {
             if (!issueDtoDict.TryGetValue(issueKey, out var issueDto) || issueDto == null)
                 return;
@@ -4309,7 +4430,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private void ReplaceSvnFeatures(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        private static void ReplaceSvnFeatures(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
             var textNodes = doc.DocumentNode.SelectNodes("//text()[contains(., '&#91;svn://')]");
             if (textNodes == null) return;
@@ -4355,7 +4476,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private void ReplaceJiraIssueMacros(HtmlAgilityPack.HtmlDocument doc)
+        private static void ReplaceJiraIssueMacros(HtmlAgilityPack.HtmlDocument doc)
         {
             var nodes = doc.DocumentNode.SelectNodes("//span[contains(@class, 'jira-issue-macro')]");
             if (nodes == null) return;
@@ -4375,7 +4496,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private void ReplaceColorMacros(HtmlAgilityPack.HtmlDocument doc)
+        private static void ReplaceColorMacros(HtmlAgilityPack.HtmlDocument doc)
         {
             var html = doc.DocumentNode.InnerHtml;
 
@@ -4391,7 +4512,7 @@ document.addEventListener('DOMContentLoaded', () => {
             doc.LoadHtml(html); // reload after text replacement
         }
 
-        private void ReplaceJiraAnchorLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        private static void ReplaceJiraAnchorLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
             var nodes = doc.DocumentNode.SelectNodes("//a[contains(@href, '/browse/')]");
             if (nodes == null) return;
@@ -4415,7 +4536,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private void ReplaceWikiStyleLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
+        private static void ReplaceWikiStyleLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
             // Step 1: Replace real <a> external Jira links
             var linkNodes = doc.DocumentNode.SelectNodes("//a[contains(@class, 'external-link') and (@data-key or contains(@href, '/browse/'))]");
@@ -4508,7 +4629,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
 
-        private void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc)
+        private static void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc)
         {
             var nodes = doc.DocumentNode.SelectNodes("//img[contains(@src, '/rest/api/3/attachment/content/')]");
             if (nodes == null) return;
@@ -4570,11 +4691,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 {
                     tree.SelectedNode = node;
                     node.EnsureVisible();
-                    tree.Focus();
+                    tree.Focus(); // <-- Always focus tree
                 }
                 else
                 {
-                    if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to"))
+                    if (!key.ToLower().StartsWith("recent updates") 
+                        && !key.ToLower().StartsWith("welcome to") 
+                        && !key.ToLower().ToLower().StartsWith("__tree_focus__")
+                        && !key.ToLower().ToLower().StartsWith("__keep_webview_focus__"))
                     {
                         ShowTrayNotification(key);
                     }
@@ -4583,6 +4707,7 @@ document.addEventListener('DOMContentLoaded', () => {
             finally
             {
                 isNavigatingToNode = false;
+                tree.Focus(); // <-- Always focus tree after any navigation
             }
         }
 
@@ -4612,7 +4737,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && showMessage)
+            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && !key.ToLower().ToLower().StartsWith("__tree_focus__") && showMessage)
             {
                 ShowTrayNotification(key);
             }
@@ -4690,8 +4815,19 @@ document.addEventListener('DOMContentLoaded', () => {
             if (selectedTab == null) return;
 
             string issueKey = selectedTab.Text;
-            if (string.IsNullOrEmpty(issueKey)) return;
-            SelectAndLoadTreeNode(issueKey);
+            // Only select and focus if tab text is a valid Jira issue key (e.g., "PROJ-123")
+            if (!string.IsNullOrEmpty(issueKey) && System.Text.RegularExpressions.Regex.IsMatch(issueKey, @"^[A-Z]+-\d+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                SelectAndLoadTreeNode(issueKey);
+                tree.Focus();
+            }
+            // Otherwise, do nothing (do not select or focus tree)
+        }
+
+        //After context menu actions, always focus tree
+        private void treeContextMenu_Closed(object sender, ToolStripDropDownClosedEventArgs e)
+        {
+            tree.Focus(); // <-- Always focus tree after context menu closes
         }
 
         /// <summary>
@@ -4771,7 +4907,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         }
 
-        private async void EditCurrentIssue(bool loadedFromTreeContextMenu = false)
+        private void EditCurrentIssue(bool loadedFromTreeContextMenu = false)
         {
             string issueKey = null;
             string issueSummaryAndKey = null;
@@ -4795,36 +4931,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
             string url = $"{jiraBaseUrl}/browse/{issueKey}";
 
-            using (var dlg = new Form())
+            using (var DialogEditIssue = new Form())
             {
-                dlg.Text = $"Edit : {issueSummaryAndKey}";
-                dlg.Width = 1200;
-                dlg.Height = 800;
-                dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dlg.MinimizeBox = false;
-                dlg.MaximizeBox = true;
+                DialogEditIssue.Text = $"Edit : {issueSummaryAndKey}";
+                DialogEditIssue.Width = 1200;
+                DialogEditIssue.Height = 800;
+                DialogEditIssue.StartPosition = FormStartPosition.CenterParent;
+                DialogEditIssue.FormBorderStyle = FormBorderStyle.FixedDialog;
+                DialogEditIssue.MinimizeBox = false;
+                DialogEditIssue.MaximizeBox = true;
 
                 // Set dialog icon from Monovera.ico in images folder
                 string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
                 if (File.Exists(iconPath))
                 {
-                    dlg.Icon = new Icon(iconPath);
+                    DialogEditIssue.Icon = new Icon(iconPath);
                 }
 
                 var webView = new Microsoft.Web.WebView2.WinForms.WebView2
                 {
                     Dock = DockStyle.Fill
                 };
-                dlg.Controls.Add(webView);
 
-                dlg.Shown += async (s, e) =>
+                DialogEditIssue.Controls.Add(webView);
+
+                DialogEditIssue.Shown += async (s, e) =>
                 {
                     await webView.EnsureCoreWebView2Async();
                     webView.CoreWebView2.Navigate(url);
                 };
 
-                dlg.FormClosed += async (s, e) =>
+                DialogEditIssue.FormClosed += async (s, e) =>
                 {
                     var node = FindNodeByKey(tree.Nodes, issueKey, false);
                     if (node != null)
@@ -4834,7 +4971,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 };
 
-                dlg.ShowDialog(this);
+                DialogEditIssue.ShowDialog(this);
             }
         }
 
@@ -5025,7 +5162,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         private void mnuSearch_Click(object sender, EventArgs e)
         {
-            ShowSearchDialog(tree);
+            ShowSearchDialog();
         }
 
         private void menuRead_Click(object sender, EventArgs e)
@@ -5089,5 +5226,147 @@ document.addEventListener('DOMContentLoaded', () => {
                 await ShowRecentlyUpdatedIssuesAsync(tabDetails, days);
             }
         }
+
+     
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            // Only prompt if user is closing (not shutting down app programmatically)
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                // Create a custom dialog
+                var DialogClosingConfirmation = new Form
+                {
+                    Text = "Confirm Exit",
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    StartPosition = FormStartPosition.CenterParent,
+                    Width = 400,
+                    Height = 200,
+                    MaximizeBox = false,
+                    MinimizeBox = false,
+                    ShowInTaskbar = false,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = GetCSSColor_Tree_Background(cssPath),
+                    Padding = new Padding(20), // Adds internal padding around all content,                    
+                };
+
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                if (File.Exists(iconPath))
+                {
+                    DialogClosingConfirmation.Icon = new Icon(iconPath);
+                }
+
+                // Message label
+                var lbl = new Label
+                {
+                    Text = "Are you sure you want to exit?",
+                    Dock = DockStyle.Top,
+                    Height = 60,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                    Padding = new Padding(0, 10, 0, 10)
+                };
+
+                // Button definitions
+                var btnExit = new System.Windows.Forms.Button
+                {
+                    Text = "Exit",
+                    DialogResult = DialogResult.Yes,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                    BackColor = Color.White
+                };
+
+                var btnMinimize = new System.Windows.Forms.Button
+                {
+                    Text = "Minimize",
+                    DialogResult = DialogResult.Ignore,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = Color.White
+                };
+
+                var btnCancel = new System.Windows.Forms.Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = Color.White
+                };
+
+                // Button panel for horizontal layout
+                var buttonPanel = new FlowLayoutPanel
+                {
+                    FlowDirection = FlowDirection.RightToLeft,
+                    Dock = DockStyle.Bottom,
+                    Padding = new Padding(0, 10, 0, 0),
+                    Height = 60,
+                    AutoSize = true
+                };
+
+                // Add spacing between buttons
+                btnExit.Margin = new Padding(10, 0, 0, 0);
+                btnMinimize.Margin = new Padding(10, 0, 0, 0);
+                btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+                // Add buttons to panel
+                buttonPanel.Controls.Add(btnExit);
+                buttonPanel.Controls.Add(btnMinimize);
+                buttonPanel.Controls.Add(btnCancel);
+
+                // Add controls to dialog
+                DialogClosingConfirmation.Controls.Add(lbl);
+                DialogClosingConfirmation.Controls.Add(buttonPanel);
+
+                // Assign default buttons
+                DialogClosingConfirmation.AcceptButton = btnExit;
+                DialogClosingConfirmation.CancelButton = btnCancel;
+
+
+                var result = DialogClosingConfirmation.ShowDialog(this);
+
+                if (result == DialogResult.Yes)
+                {
+                    // Proceed with exit
+                    notifyIcon?.Dispose();
+                    base.OnFormClosing(e);
+                }
+                else if (result == DialogResult.Ignore)
+                {
+                    // Minimize instead of exit
+                    e.Cancel = true;
+                    this.WindowState = FormWindowState.Minimized;
+                }
+                else
+                {
+                    // Cancel exit
+                    e.Cancel = true;
+                }
+            }
+            else
+            {
+                // Not user closing, allow normal close
+                notifyIcon?.Dispose();
+                base.OnFormClosing(e);
+            }
+        }
+
+        #region Configuration.js Processing
+        private string GetSortingFieldForKey(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key) || config?.Projects == null)
+                return "summary"; // Default fallback
+
+            var keyPrefix = key.Split('-')[0];
+            var projectConfig = config.Projects
+                .FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+            return projectConfig?.SortingField ?? "summary";
+        }
+
+        #endregion
     }
+
 }
