@@ -1754,6 +1754,7 @@ namespace Monovera
                 DialogEditIssue.Shown += async (s, e) =>
                 {
                     await webView.EnsureCoreWebView2Async();
+                    webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                     webView.CoreWebView2.Navigate(url);
                 };
 
@@ -2855,6 +2856,7 @@ namespace Monovera
 
             // Start initializing WebView2
             await webView.EnsureCoreWebView2Async();
+            webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
             // Show loading page after WebView is ready and attached to UI
             string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
@@ -2969,6 +2971,7 @@ namespace Monovera
 
             // --- Step 2: Initialize WebView2 and show Loading ---
             await webView.EnsureCoreWebView2Async();
+            webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
             string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
             File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
@@ -3373,6 +3376,10 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             if (e.Node?.Tag is not string issueKey || string.IsNullOrWhiteSpace(issueKey))
                 return;
 
+            // --- IMMEDIATE SELECTION AND FOCUS ---
+            tree.SelectedNode = e.Node;
+            e.Node.EnsureVisible();
+            tree.Focus();
 
             bool isCtrlPressed = (Control.ModifierKeys & Keys.Control) == Keys.Control;
             bool isLeftClick = lastTreeMouseButton == MouseButtons.Left;
@@ -3402,8 +3409,11 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             {
                 // Tab does not exist, create and load it
                 webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-                
                 await webView.EnsureCoreWebView2Async();
+                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived; // <-- Add this line
+
+
+                // Show loading page immediately
                 string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
                 File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
                 webView.CoreWebView2.Navigate(htmlFilePath);
@@ -3440,6 +3450,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 };
                 pageTab.Controls.Add(webView);
                 tabDetails.TabPages.Add(pageTab);
+                tabDetails.SelectedTab = pageTab;
             }
             else
             {
@@ -3447,13 +3458,13 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 // Always reload if Ctrl+LeftClick, even if tab is already focused
                 if ((isLeftClick && isCtrlPressed) || forcedReload)
                 {
-                    // Always reload, even if tab is already focused
                     webView = pageTab.Controls.OfType<Microsoft.Web.WebView2.WinForms.WebView2>().FirstOrDefault();
                     if (webView == null)
                     {
                         webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
-                        
+
                         await webView.EnsureCoreWebView2Async();
+                        webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                         pageTab.Controls.Clear();
                         pageTab.Controls.Add(webView);
                     }
@@ -3468,148 +3479,119 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 }
             }
 
-            tabDetails.SelectedTab = pageTab;
-
-            try
+            // Load content asynchronously, do not block UI
+            _ = Task.Run(async () =>
             {
-                var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                using var client = new HttpClient();
-                client.BaseAddress = new Uri(jiraBaseUrl);
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields,changelog");
-                response.EnsureSuccessStatusCode();
-                var json = await response.Content.ReadAsStringAsync();
-
-                using var doc = JsonDocument.Parse(json);
-                var root = doc.RootElement;
-
-                if (!root.TryGetProperty("fields", out var fields))
-                    throw new Exception("Missing 'fields' in response.");
-
-                /**
-                 * Build summary and issue information section
-                 */
-                string summary = "";
-                if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
-                    summary = summaryProp.GetString();
-
-                string status = fields.TryGetProperty("status", out var statusProp) &&
-                statusProp.TryGetProperty("name", out var statusName)
-                ? statusName.GetString() ?? ""
-                : "";
-
-                string lastUpdated = fields.TryGetProperty("updated", out var updatedProp)
-                                ? DateTime.TryParse(updatedProp.GetString(), out var dt)
-                                    ? dt.ToString("yyyy-MM-dd HH:mm")
-                                    : updatedProp.GetString()
-                                : "N/A";
-
-                string createdDate = fields.TryGetProperty("created", out var issueCreatedProp)
-                                ? DateTime.TryParse(issueCreatedProp.GetString(), out var IssueCreatedDt)
-                                    ? IssueCreatedDt.ToString("yyyy-MM-dd HH:mm")
-                                    : issueCreatedProp.GetString()
-                                : "N/A";
-
-                string statusIcon = "";
-                string iconKeyStatus = GetIconForStatus(status);
-                if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                try
                 {
-                    using var ms = new MemoryStream();
-                    tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                    string base64 = Convert.ToBase64String(ms.ToArray());
-                    statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
+                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    using var client = new HttpClient();
+                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                    var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields,changelog");
+                    response.EnsureSuccessStatusCode();
+                    var json = await response.Content.ReadAsStringAsync();
+
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    if (!root.TryGetProperty("fields", out var fields))
+                        throw new Exception("Missing 'fields' in response.");
+
+                    string summary = "";
+                    if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                        summary = summaryProp.GetString();
+
+                    string status = fields.TryGetProperty("status", out var statusProp) &&
+                    statusProp.TryGetProperty("name", out var statusName)
+                    ? statusName.GetString() ?? ""
+                    : "";
+
+                    string lastUpdated = fields.TryGetProperty("updated", out var updatedProp)
+                                    ? DateTime.TryParse(updatedProp.GetString(), out var dt)
+                                        ? dt.ToString("yyyy-MM-dd HH:mm")
+                                        : updatedProp.GetString()
+                                    : "N/A";
+
+                    string createdDate = fields.TryGetProperty("created", out var issueCreatedProp)
+                                    ? DateTime.TryParse(issueCreatedProp.GetString(), out var IssueCreatedDt)
+                                        ? IssueCreatedDt.ToString("yyyy-MM-dd HH:mm")
+                                        : issueCreatedProp.GetString()
+                                    : "N/A";
+
+                    string statusIcon = "";
+                    string iconKeyStatus = GetIconForStatus(status);
+                    if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                    {
+                        using var ms = new MemoryStream();
+                        tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                        string base64 = Convert.ToBase64String(ms.ToArray());
+                        statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
+                    }
+
+                    string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
+
+                    string issueType = fields.TryGetProperty("issuetype", out var typeProp) &&
+                       typeProp.TryGetProperty("name", out var typeName)
+                       ? typeName.GetString() ?? ""
+                       : "";
+
+                    string encodedSummary = WebUtility.HtmlEncode(summary);
+                    string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                    string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
+
+                    string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
+
+                    string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
+                    if (root.TryGetProperty("renderedFields", out var renderedFields) &&
+                        renderedFields.TryGetProperty("description", out var descProp) &&
+                        descProp.ValueKind == JsonValueKind.String)
+                    {
+                        HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
+                    }
+                    var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
+
+                    string HTML_SECTION_LINKS =
+                                    BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
+                                    BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                                    BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
+
+                    string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(root);
+
+                    string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
+
+                    string tempFolderPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp");
+                    string htmlFilePath2 = Path.Combine(tempFolderPath, $"{issueKey}.html");
+                    Directory.CreateDirectory(tempFolderPath);
+
+                    string html = BuildIssueDetailFullPageHtml(
+                        headerLine, issueType, statusIcon, status,
+                        createdDate, lastUpdated, issueUrl,
+                        HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS,
+                        HTML_SECTION_LINKS, HTML_SECTION_HISTORY, responseHTML
+                    );
+
+                    // Ensure focustToTreeJS is present in the HTML
+                    if (!html.Contains(focustToTreeJS))
+                        html = html.Replace("</body>", $"{focustToTreeJS}</body>");
+
+                    File.WriteAllText(htmlFilePath2, html);
+
+                    // Update WebView2 on UI thread
+                    webView.Invoke(() =>
+                    {
+                        webView.Source = new Uri(htmlFilePath2);
+                    });
                 }
-
-                string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
-
-                string issueType = fields.TryGetProperty("issuetype", out var typeProp) &&
-                   typeProp.TryGetProperty("name", out var typeName)
-                   ? typeName.GetString() ?? ""
-                   : "";
-
-                //Build page header section
-                string encodedSummary = WebUtility.HtmlEncode(summary);
-                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
-                string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
-
-                /**
-                 * Build attachments section
-                 */
-
-                string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
-                
-                /**
-                * Build description sections
-                */
-                string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
-                if (root.TryGetProperty("renderedFields", out var renderedFields) &&
-                    renderedFields.TryGetProperty("description", out var descProp) &&
-                    descProp.ValueKind == JsonValueKind.String)
+                catch (Exception ex)
                 {
-                    HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
+                    webView.Invoke(() =>
+                    {
+                        MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    });
                 }
-                var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
-
-
-                /**
-                * Build links section
-                */
-                string HTML_SECTION_LINKS =
-                                BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
-                                BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
-                                BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
-
-                /**
-                * Build history section
-                */
-                string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(root);
-
-                /**
-                * Build JSON response section
-                */
-                string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
-
-                /**
-                * Combine all sections in to one HTML detail page
-                 */
-                string tempFolder = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp"); // or use Path.GetTempPath() if preferred
-                string htmlFilePath = Path.Combine(tempFolder, $"{issueKey}.html");
-
-                // Ensure the temp folder exists
-                Directory.CreateDirectory(tempFolder);
-
-                // Build the full HTML
-                string html = BuildIssueDetailFullPageHtml(
-                    headerLine, issueType, statusIcon, status,
-                    createdDate, lastUpdated, issueUrl,
-                    HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS,
-                    HTML_SECTION_LINKS, HTML_SECTION_HISTORY, responseHTML
-                );
-
-                // Write to file (overwrite if exists)
-                File.WriteAllText(htmlFilePath, html);
-
-                // Load into WebView2
-                webView.Source = new Uri(htmlFilePath);
-
-                webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
-                {
-                    var deferral = args.GetDeferral();
-                    try { args.Accept(); } finally { deferral.Complete(); }
-                };
-
-                webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
-                webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-
-                tree.SelectedNode = e.Node;
-                e.Node.EnsureVisible();
-                tree.Focus();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            });
         }
 
         private string BuildHTMLSection_ATTACHMENTS(JsonElement fields, string issueKey)
@@ -4271,6 +4253,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 catch { message = e.WebMessageAsJson; }
                 if (string.IsNullOrWhiteSpace(message)) return;
                 message = message.Trim();
+
+                if (message == "__tree_focus__")
+                {
+                    tree.Focus();
+                    return;
+                }
 
                 if (message.StartsWith("{"))
                 {
@@ -5146,6 +5134,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 DialogEditIssue.Shown += async (s, e) =>
                 {
                     await webView.EnsureCoreWebView2Async();
+                    webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                     webView.CoreWebView2.Navigate(url);
                 };
 
