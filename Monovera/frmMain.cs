@@ -3430,18 +3430,18 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                  * Build attachments section
                  */
 
-                string attachmentsHtml = BuildAttachmentsHtml(fields, issueKey);
+                string HTML_SECTION_ATTACHMENTS = BuildAttachmentsHtml(fields, issueKey);
                 /**
                 * Build description sections
                 */
-                string descriptinHTML = "";
+                string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
                 if (root.TryGetProperty("renderedFields", out var renderedFields) &&
                     renderedFields.TryGetProperty("description", out var descProp) &&
                     descProp.ValueKind == JsonValueKind.String)
                 {
-                    descriptinHTML = descProp.GetString() ?? "";
+                    HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
                 }
-                string resolvedDescriptionHTML = HandleLinksOfDescriptionSection(descriptinHTML, issueKey);
+                var HTML_SECTION_DESCRIPTION = HandleLinksOfDescriptionSection(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
 
                 string encodedSummary = WebUtility.HtmlEncode(summary);
                 string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
@@ -3452,15 +3452,15 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 /**
                 * Build links section
                 */
-                string linksHtml =
-                                BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                string HTML_SECTION_LINKS =
                                 BuildLinksTable(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
+                                BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
                                 BuildLinksTable(fields, "Related", "Relates", null);
 
                 /**
                 * Build history section
                 */
-                string historyHtml = BuildHistoryHtml(root);
+                string HTML_SECTION_HISTORY = BuildHistoryHtml(root);
 
                 /**
                 * Build JSON response section
@@ -3480,8 +3480,8 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 string html = BuildIssueDetailFullPageHtml(
                     headerLine, issueType, statusIcon, status,
                     createdDate, lastUpdated, issueUrl,
-                    resolvedDescriptionHTML, attachmentsHtml,
-                    linksHtml, historyHtml, responseHTML
+                    HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS,
+                    HTML_SECTION_LINKS, HTML_SECTION_HISTORY, responseHTML
                 );
 
                 // Write to file (overwrite if exists)
@@ -3614,7 +3614,8 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
         {
             var sb = new StringBuilder();
             int matchCount = 0;
-            var issues = new List<(string key, string summary, string issueType, JsonElement issueElem)>();
+            // Now include sortingField in the tuple
+            var issues = new List<(string key, string summary, string issueType, string sortingValue, JsonElement issueElem)>();
 
             sb.AppendLine($"<div class='subsection'><h4>{HttpUtility.HtmlEncode(title)}</h4>");
 
@@ -3646,27 +3647,23 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                                 ? typeName.GetString() ?? ""
                                 : "";
 
-                            issues.Add((key, sum, issueType, issueElem));
+                            // Get sorting field value for this key from issueDtoDict
+                            string sortingValue = "";
+                            if (issueDtoDict.TryGetValue(key, out var dto))
+                            {
+                                sortingValue = dto.SortingField ?? "";
+                            }
+
+                            issues.Add((key, sum, issueType, sortingValue, issueElem));
                         }
                     }
                 }
 
-                // Sort issues by sorting field
+                // Sort issues by sortingValue (from issueDtoDict)
                 if (issues.Count > 0)
                 {
-                    // Use the first issue's key to get the sorting field for the project
-                    string sortingField = GetSortingFieldForKey(issues[0].key);
                     var comparer = new AlphanumericComparer();
-
-                    issues = issues.OrderBy(i =>
-                    {
-                        if (i.issueElem.TryGetProperty("fields", out var fieldsElem) &&
-                            fieldsElem.TryGetProperty(sortingField, out var sortVal))
-                        {
-                            return sortVal.ToString() ?? "";
-                        }
-                        return i.summary ?? "";
-                    }, comparer).ToList();
+                    issues = issues.OrderBy(i => i.sortingValue ?? i.summary ?? "", comparer).ToList();
                 }
 
                 var tableRows = new StringBuilder();
