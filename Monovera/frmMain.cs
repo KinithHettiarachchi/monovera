@@ -3426,11 +3426,17 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                    ? typeName.GetString() ?? ""
                    : "";
 
+                //Build page header section
+                string encodedSummary = WebUtility.HtmlEncode(summary);
+                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
+
                 /**
                  * Build attachments section
                  */
 
-                string HTML_SECTION_ATTACHMENTS = BuildAttachmentsHtml(fields, issueKey);
+                string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
+                
                 /**
                 * Build description sections
                 */
@@ -3441,26 +3447,21 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 {
                     HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
                 }
-                var HTML_SECTION_DESCRIPTION = HandleLinksOfDescriptionSection(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
+                var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
 
-                string encodedSummary = WebUtility.HtmlEncode(summary);
-                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
-                string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
-
-             
 
                 /**
                 * Build links section
                 */
                 string HTML_SECTION_LINKS =
-                                BuildLinksTable(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
-                                BuildLinksTable(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
-                                BuildLinksTable(fields, "Related", "Relates", null);
+                                BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
+                                BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
+                                BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
 
                 /**
                 * Build history section
                 */
-                string HTML_SECTION_HISTORY = BuildHistoryHtml(root);
+                string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(root);
 
                 /**
                 * Build JSON response section
@@ -3509,7 +3510,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             }
         }
 
-        private string BuildAttachmentsHtml(JsonElement fields, string issueKey)
+        private string BuildHTMLSection_ATTACHMENTS(JsonElement fields, string issueKey)
         {
             if (!fields.TryGetProperty("attachment", out var attachments) || attachments.ValueKind != JsonValueKind.Array || attachments.GetArrayLength() == 0)
                 return "<div class='no-attachments'>No attachments found.</div>";
@@ -3610,7 +3611,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             return sb.ToString();
         }
 
-        private string BuildLinksTable(JsonElement fields, string title, string linkType, string prop)
+        private string BuildHTMLSection_LINKS(JsonElement fields, string title, string linkType, string prop)
         {
             var sb = new StringBuilder();
             int matchCount = 0;
@@ -3741,7 +3742,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             return sb.ToString();
         }
 
-        public static string BuildHistoryHtml(JsonElement root)
+        public static string BuildHTMLSection_HISTORY(JsonElement root)
         {
             if (!root.TryGetProperty("changelog", out var changelog) ||
                 !changelog.TryGetProperty("histories", out var histories))
@@ -4331,7 +4332,7 @@ document.addEventListener('DOMContentLoaded', () => {
         /// <returns>
         /// HTML string with Jira links, SVN features, and color macros replaced for display.
         /// </returns>
-        public static string HandleLinksOfDescriptionSection(string htmlDesc, string key)
+        public static string BuildHTMLSection_DESCRIPTION(string htmlDesc, string key)
         {
             if (string.IsNullOrEmpty(htmlDesc)) return htmlDesc;
 
@@ -4473,6 +4474,26 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        private static string GetIssueTypeIconHtml(string issueType)
+        {
+            if (!string.IsNullOrEmpty(issueType) && frmMain.typeIcons.TryGetValue(issueType, out var fileName))
+            {
+                string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                if (File.Exists(fullPath))
+                {
+                    try
+                    {
+                        byte[] bytes = File.ReadAllBytes(fullPath);
+                        string base64 = Convert.ToBase64String(bytes);
+                        return $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                    }
+                    catch { }
+                }
+            }
+            return "";
+        }
+
+
         private static void ReplaceJiraIssueMacros(HtmlAgilityPack.HtmlDocument doc)
         {
             var nodes = doc.DocumentNode.SelectNodes("//span[contains(@class, 'jira-issue-macro')]");
@@ -4482,13 +4503,43 @@ document.addEventListener('DOMContentLoaded', () => {
             {
                 var key = span.GetAttributeValue("data-jira-key", null);
                 var summary = span.Descendants("a").FirstOrDefault()?.GetAttributeValue("title", null);
+                var issueType = "";
+                var icon = null as string;
 
                 if (string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issue))
+                {
                     summary = issue.Summary;
+                    issueType = issue.Type;
+                    icon = GetIconForType(issueType); // returns image URL or base64 string
+                }else if (!string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issueRertry))
+                {
+                    summary = issueRertry.Summary;
+                    issueType = issueRertry.Type;
+                    icon = GetIconForType(issueType); // returns image URL or base64 string
+                }
 
-                if (string.IsNullOrWhiteSpace(summary)) summary = key ?? "Unknown";
+                if (string.IsNullOrWhiteSpace(summary)) summary = "Summary not found!";
 
-                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
+                string iconHtml = "";
+
+                // Get icon HTML
+                if (!string.IsNullOrEmpty(issueType) && frmMain.typeIcons.TryGetValue(issueType, out var fileName))
+                {
+                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                    if (File.Exists(fullPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(fullPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                        }
+                        catch { }
+                    }
+                }
+
+                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
+
                 span.ParentNode.ReplaceChild(newLink, span);
             }
         }
@@ -4521,14 +4572,44 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!keyMatch.Success) continue;
 
                 var key = keyMatch.Groups[1].Value;
+                var issueType = "";
+                var icon = null as string;
 
                 string title = node.GetAttributeValue("title", null);
                 if (string.IsNullOrWhiteSpace(title) && issueDict.TryGetValue(key, out var issue))
+                {
                     title = issue.Summary;
-                if (string.IsNullOrWhiteSpace(title))
-                    title = key;
+                    issueType = issue.Type;
+                    icon = GetIconForType(issueType); // returns image URL or base64 string
+                }
+                else if (!string.IsNullOrWhiteSpace(title) && issueDict.TryGetValue(key, out var issueRertry))
+                {
+                    issueType = issueRertry.Type;
+                    icon = GetIconForType(issueType); // returns image URL or base64 string
+                }
 
-                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>");
+                if (string.IsNullOrWhiteSpace(title))
+                    title = "Summary not found!";
+
+                string iconHtml = "";
+
+                // Get icon HTML
+                if (!string.IsNullOrEmpty(issueType) && frmMain.typeIcons.TryGetValue(issueType, out var fileName))
+                {
+                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                    if (File.Exists(fullPath))
+                    {
+                        try
+                        {
+                            byte[] bytes = File.ReadAllBytes(fullPath);
+                            string base64 = Convert.ToBase64String(bytes);
+                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                        }
+                        catch { }
+                    }
+                }
+
+                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(title)} [{key}]</a>");
                 node.ParentNode.ReplaceChild(newLink, node);
             }
         }
@@ -4559,70 +4640,78 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (string.IsNullOrEmpty(key))
                         continue;
 
-                    string title = issueDict.TryGetValue(key, out var issue) ? issue.Summary : node.InnerText.Trim();
+                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : node.InnerText.Trim();
+                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    string iconHtml = GetIssueTypeIconHtml(issueType);
 
-                    var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>");
+                    var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
                     node.ParentNode.ReplaceChild(newLink, node);
                 }
             }
 
             // Step 2: Handle wiki-style links and smart-link anchors
-            var fontWrappedRegex = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            var anchorWrappedRegex = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            var smartLinkPlaceholderRegex = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>\s*smart-link\s*\[\k<key>\]\s*</a>",RegexOptions.IgnoreCase);
+            var REGEX_FONT_WRAPPED_LINK = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var REGEX_ANCHOR_WRAPPED_LINK = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var REGEX_SMART_LINK = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>.*?smart-link\s*\[\k<key>\]\s*</a>",RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
             var targetNodes = doc.DocumentNode
                                             .SelectNodes("//*")
                                             ?.Where(n => !new[] { "script", "style" }.Contains(n.Name.ToLower()))
                                             ?? Enumerable.Empty<HtmlNode>();
 
-
             foreach (var node in targetNodes)
             {
                 var html = node.InnerHtml;
 
                 // === 1. Handle font-wrapped wiki links ===
-                foreach (Match match in fontWrappedRegex.Matches(html))
+                foreach (Match match in REGEX_FONT_WRAPPED_LINK.Matches(html))
                 {
                     string fullMatch = match.Value;
                     string title = match.Groups[1].Value.Trim();
                     string key = match.Groups[2].Value.Trim();
                     title = title.Replace($"[{key}]", "").Trim();
 
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(title)} [{key}]</a>";
+                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : title;
+                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    string iconHtml = GetIssueTypeIconHtml(issueType);
+
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>";
                     html = html.Replace(fullMatch, replacement);
                 }
 
                 // === 2. Handle anchor-wrapped wiki links ===
-                foreach (Match match in anchorWrappedRegex.Matches(html))
+                foreach (Match match in REGEX_ANCHOR_WRAPPED_LINK.Matches(html))
                 {
                     string fullMatch = match.Value;
                     string titleBeforeAnchor = match.Groups[1].Value.Trim();
                     string key = match.Groups[2].Value.Trim();
 
-                    string displayTitle = $"{titleBeforeAnchor} [{key}]";
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : titleBeforeAnchor;
+                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    string iconHtml = GetIssueTypeIconHtml(issueType);
+
+                    string displayTitle = $"{summary} [{key}]";
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
                     html = html.Replace(fullMatch, replacement);
                 }
 
                 // === 3. Handle hardcoded smart-link anchors ===
-                foreach (Match match in smartLinkPlaceholderRegex.Matches(html))
+                foreach (Match match in REGEX_SMART_LINK.Matches(html))
                 {
                     string fullMatch = match.Value;
                     string key = match.Groups["key"].Value.Trim();
 
-                    string title = issueDict.TryGetValue(key, out var issue) ? issue.Summary : "Summary Not Found!";
-                    string displayTitle = $"{title} [{key}]";
+                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : "Summary Not Found!";
+                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    string iconHtml = GetIssueTypeIconHtml(issueType);
 
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                    string displayTitle = $"{summary} [{key}]";
+                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
                     html = html.Replace(fullMatch, replacement);
                 }
 
                 node.InnerHtml = html;
             }
-
-
-
         }
 
 

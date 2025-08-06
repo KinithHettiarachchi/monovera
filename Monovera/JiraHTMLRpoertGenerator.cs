@@ -72,8 +72,8 @@ public class JiraHtmlReportGenerator
         html = ReplaceAttachmentImageUrls(html, attachments);
         html = await EmbedImagesInHtmlAsync(html);
 
-        // Use frmMain.HandleLinksOfDescriptionSection to process description
-        html = frmMain.HandleLinksOfDescriptionSection(html, key);
+        // Use frmMain.BuildHTMLSection_DESCRIPTION to process description
+        html = frmMain.BuildHTMLSection_DESCRIPTION(html, key);
 
         // Assign related keys to the issue for later rendering
         issue.RelatedIssueKeys = relatedKeys;
