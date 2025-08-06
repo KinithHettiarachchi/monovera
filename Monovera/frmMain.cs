@@ -1,7 +1,9 @@
-﻿using Microsoft.VisualBasic;
+﻿using HtmlAgilityPack;
+using Microsoft.VisualBasic;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using SharpSvn;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing;
@@ -23,7 +25,6 @@ using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using Font = System.Drawing.Font;
-using HtmlAgilityPack;
 
 namespace Monovera
 {
@@ -618,6 +619,11 @@ namespace Monovera
             }
         }
 
+        // Add these fields to frmMain
+        private readonly ConcurrentQueue<(string key, int sequence)> sequenceUpdateQueue = new();
+        private readonly CancellationTokenSource sequenceUpdateCts = new();
+        private Task sequenceUpdateWorker;
+
         private async void MoveNodeInTree(TreeNode node, int direction)
         {
             if (node == null) return;
@@ -625,41 +631,136 @@ namespace Monovera
             int index = siblings.IndexOf(node);
             int newIndex = index + direction;
 
-            // Only move if within bounds
             if (newIndex < 0 || newIndex >= siblings.Count)
                 return;
 
-            // Remove and insert at new position
+            // Show confirmation dialog before moving
+            using (var DialogMoveConfirmation = new Form
+            {
+                Text = direction < 0 ? "Confirm Move Up" : "Confirm Move Down",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                Width = 400,
+                Height = 200,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
+                Padding = new Padding(20),
+            })
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                if (File.Exists(iconPath))
+                {
+                    DialogMoveConfirmation.Icon = new Icon(iconPath);
+                }
+
+                var lbl = new Label
+                {
+                    Text = $"Are you sure you want to move '{node.Text}' {(direction < 0 ? "up" : "down")}?",
+                    Dock = DockStyle.Top,
+                    Height = 60,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                    Padding = new Padding(0, 10, 0, 10)
+                };
+
+                var btnMove = new System.Windows.Forms.Button
+                {
+                    Text = direction < 0 ? "Move Up" : "Move Down",
+                    DialogResult = DialogResult.Yes,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                    BackColor = Color.White
+                };
+
+                var btnCancel = new System.Windows.Forms.Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = Color.White
+                };
+
+                var buttonPanel = new FlowLayoutPanel
+                {
+                    FlowDirection = FlowDirection.RightToLeft,
+                    Dock = DockStyle.Bottom,
+                    Padding = new Padding(0, 10, 0, 0),
+                    Height = 60,
+                    AutoSize = true
+                };
+
+                btnMove.Margin = new Padding(10, 0, 0, 0);
+                btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+                buttonPanel.Controls.Add(btnMove);
+                buttonPanel.Controls.Add(btnCancel);
+
+                DialogMoveConfirmation.Controls.Add(lbl);
+                DialogMoveConfirmation.Controls.Add(buttonPanel);
+
+                DialogMoveConfirmation.AcceptButton = btnMove;
+                DialogMoveConfirmation.CancelButton = btnCancel;
+
+                var result = DialogMoveConfirmation.ShowDialog(this);
+
+                if (result != DialogResult.Yes)
+                    return;
+            }
+
             siblings.RemoveAt(index);
             siblings.Insert(newIndex, node);
 
             tree.Enabled = false;
 
-            // Update sequence for all siblings
+            // Enqueue sequence updates for all siblings
             for (int i = 0; i < siblings.Count; i++)
             {
                 string siblingKey = siblings[i].Tag as string;
                 int sequence = i + 1;
-                try
-                {
-                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                    // Remove and insert at new position
-                    tree.Enabled = true;
-                    tree.SelectedNode = node;
-                    node.EnsureVisible();
-                    return;
-                }
+                sequenceUpdateQueue.Enqueue((siblingKey, sequence));
             }
+            StartSequenceUpdateWorker();
 
             // Reselect the moved node
             tree.SelectedNode = node;
             tree.Enabled = true;
             node.EnsureVisible();
+        }
+
+        private void StartSequenceUpdateWorker()
+        {
+            if (sequenceUpdateWorker != null && !sequenceUpdateWorker.IsCompleted)
+                return;
+
+            sequenceUpdateWorker = Task.Run(async () =>
+            {
+                while (!sequenceUpdateCts.Token.IsCancellationRequested)
+                {
+                    if (sequenceUpdateQueue.TryDequeue(out var item))
+                    {
+                        try
+                        {
+                            await jiraService.UpdateSequenceFieldAsync(item.key, item.sequence);
+                        }
+                        catch (Exception ex)
+                        {
+                            // Optionally log or show error
+                            this.Invoke(() =>
+                                MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error));
+                        }
+                    }
+                    else
+                    {
+                        await Task.Delay(50, sequenceUpdateCts.Token); // Wait before checking again
+                    }
+                }
+            }, sequenceUpdateCts.Token);
         }
 
         private System.Windows.Forms.Timer marqueeTimer;
@@ -3249,6 +3350,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                     if (page.Text == issueKey)
                     {
                         tabDetails.SelectedTab = page;
+                        tree.Focus();
                         break;
                     }
                 }
@@ -5313,128 +5415,215 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-     
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             // Only prompt if user is closing (not shutting down app programmatically)
             if (e.CloseReason == CloseReason.UserClosing)
             {
-                // Create a custom dialog
-                var DialogClosingConfirmation = new Form
+                // Check if Jira sequence updates are still in progress
+                bool isSequenceWorkerActive = sequenceUpdateWorker != null && !sequenceUpdateWorker.IsCompleted && !sequenceUpdateQueue.IsEmpty;
+
+                if (isSequenceWorkerActive)
                 {
-                    Text = "Confirm Exit",
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    StartPosition = FormStartPosition.CenterParent,
-                    Width = 400,
-                    Height = 200,
-                    MaximizeBox = false,
-                    MinimizeBox = false,
-                    ShowInTaskbar = false,
-                    Font = new Font("Segoe UI", 10),
-                    BackColor = GetCSSColor_Tree_Background(cssPath),
-                    Padding = new Padding(20), // Adds internal padding around all content,                    
-                };
+                    // Custom dialog for sequence update confirmation
+                    var DialogSequenceCancel = new Form
+                    {
+                        Text = "Jira Sequence Updates In Progress",
+                        FormBorderStyle = FormBorderStyle.FixedDialog,
+                        StartPosition = FormStartPosition.CenterParent,
+                        Width = 420,
+                        Height = 200,
+                        MaximizeBox = false,
+                        MinimizeBox = false,
+                        ShowInTaskbar = false,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = GetCSSColor_Tree_Background(cssPath),
+                        Padding = new Padding(20),
+                    };
 
-                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
-                if (File.Exists(iconPath))
-                {
-                    DialogClosingConfirmation.Icon = new Icon(iconPath);
-                }
+                    string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                    if (File.Exists(iconPath))
+                    {
+                        DialogSequenceCancel.Icon = new Icon(iconPath);
+                    }
 
-                // Message label
-                var lbl = new Label
-                {
-                    Text = "Are you sure you want to exit?",
-                    Dock = DockStyle.Top,
-                    Height = 60,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                    Padding = new Padding(0, 10, 0, 10)
-                };
+                    var lbl = new Label
+                    {
+                        Text = "Jira sequence updates are in progress.\nAre you sure you want to cancel them and exit?",
+                        Dock = DockStyle.Top,
+                        Height = 60,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                        Padding = new Padding(0, 10, 0, 10)
+                    };
 
-                // Button definitions
-                var btnExit = new System.Windows.Forms.Button
-                {
-                    Text = "Exit",
-                    DialogResult = DialogResult.Yes,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                    BackColor = Color.White
-                };
+                    var btnYes = new System.Windows.Forms.Button
+                    {
+                        Text = "Yes",
+                        DialogResult = DialogResult.Yes,
+                        Width = 140,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                        BackColor = Color.White
+                    };
 
-                var btnMinimize = new System.Windows.Forms.Button
-                {
-                    Text = "Minimize",
-                    DialogResult = DialogResult.Ignore,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10),
-                    BackColor = Color.White
-                };
+                    var btnWait = new System.Windows.Forms.Button
+                    {
+                        Text = "Wait",
+                        DialogResult = DialogResult.No,
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = Color.White
+                    };
 
-                var btnCancel = new System.Windows.Forms.Button
-                {
-                    Text = "Cancel",
-                    DialogResult = DialogResult.Cancel,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10),
-                    BackColor = Color.White
-                };
+                    var buttonPanel = new FlowLayoutPanel
+                    {
+                        FlowDirection = FlowDirection.RightToLeft,
+                        Dock = DockStyle.Bottom,
+                        Padding = new Padding(0, 10, 0, 0),
+                        Height = 60,
+                        AutoSize = true
+                    };
 
-                // Button panel for horizontal layout
-                var buttonPanel = new FlowLayoutPanel
-                {
-                    FlowDirection = FlowDirection.RightToLeft,
-                    Dock = DockStyle.Bottom,
-                    Padding = new Padding(0, 10, 0, 0),
-                    Height = 60,
-                    AutoSize = true
-                };
+                    btnYes.Margin = new Padding(10, 0, 0, 0);
+                    btnWait.Margin = new Padding(10, 0, 0, 0);
 
-                // Add spacing between buttons
-                btnExit.Margin = new Padding(10, 0, 0, 0);
-                btnMinimize.Margin = new Padding(10, 0, 0, 0);
-                btnCancel.Margin = new Padding(10, 0, 0, 0);
+                    buttonPanel.Controls.Add(btnYes);
+                    buttonPanel.Controls.Add(btnWait);
 
-                // Add buttons to panel
-                buttonPanel.Controls.Add(btnExit);
-                buttonPanel.Controls.Add(btnMinimize);
-                buttonPanel.Controls.Add(btnCancel);
+                    DialogSequenceCancel.Controls.Add(lbl);
+                    DialogSequenceCancel.Controls.Add(buttonPanel);
 
-                // Add controls to dialog
-                DialogClosingConfirmation.Controls.Add(lbl);
-                DialogClosingConfirmation.Controls.Add(buttonPanel);
+                    DialogSequenceCancel.AcceptButton = btnYes;
+                    DialogSequenceCancel.CancelButton = btnWait;
 
-                // Assign default buttons
-                DialogClosingConfirmation.AcceptButton = btnExit;
-                DialogClosingConfirmation.CancelButton = btnCancel;
+                    var result = DialogSequenceCancel.ShowDialog(this);
 
-
-                var result = DialogClosingConfirmation.ShowDialog(this);
-
-                if (result == DialogResult.Yes)
-                {
-                    // Proceed with exit
-                    notifyIcon?.Dispose();
-                    base.OnFormClosing(e);
-                }
-                else if (result == DialogResult.Ignore)
-                {
-                    // Minimize instead of exit
-                    e.Cancel = true;
-                    this.WindowState = FormWindowState.Minimized;
+                    if (result == DialogResult.Yes)
+                    {
+                        // Cancel the sequence update worker and proceed with exit
+                        sequenceUpdateCts.Cancel();
+                        notifyIcon?.Dispose();
+                        base.OnFormClosing(e);
+                    }
+                    else
+                    {
+                        // Wait: cancel closing
+                        e.Cancel = true;
+                        return;
+                    }
                 }
                 else
                 {
-                    // Cancel exit
-                    e.Cancel = true;
+                    // Normal exit confirmation dialog (existing code)
+                    var DialogClosingConfirmation = new Form
+                    {
+                        Text = "Confirm Exit",
+                        FormBorderStyle = FormBorderStyle.FixedDialog,
+                        StartPosition = FormStartPosition.CenterParent,
+                        Width = 400,
+                        Height = 200,
+                        MaximizeBox = false,
+                        MinimizeBox = false,
+                        ShowInTaskbar = false,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = GetCSSColor_Tree_Background(cssPath),
+                        Padding = new Padding(20),
+                    };
+
+                    string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                    if (File.Exists(iconPath))
+                    {
+                        DialogClosingConfirmation.Icon = new Icon(iconPath);
+                    }
+
+                    var lbl = new Label
+                    {
+                        Text = "Are you sure you want to exit?",
+                        Dock = DockStyle.Top,
+                        Height = 60,
+                        TextAlign = ContentAlignment.MiddleCenter,
+                        Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                        Padding = new Padding(0, 10, 0, 10)
+                    };
+
+                    var btnExit = new System.Windows.Forms.Button
+                    {
+                        Text = "Exit",
+                        DialogResult = DialogResult.Yes,
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                        BackColor = Color.White
+                    };
+
+                    var btnMinimize = new System.Windows.Forms.Button
+                    {
+                        Text = "Minimize",
+                        DialogResult = DialogResult.Ignore,
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = Color.White
+                    };
+
+                    var btnCancel = new System.Windows.Forms.Button
+                    {
+                        Text = "Cancel",
+                        DialogResult = DialogResult.Cancel,
+                        Width = 100,
+                        Height = 36,
+                        Font = new Font("Segoe UI", 10),
+                        BackColor = Color.White
+                    };
+
+                    var buttonPanel = new FlowLayoutPanel
+                    {
+                        FlowDirection = FlowDirection.RightToLeft,
+                        Dock = DockStyle.Bottom,
+                        Padding = new Padding(0, 10, 0, 0),
+                        Height = 60,
+                        AutoSize = true
+                    };
+
+                    btnExit.Margin = new Padding(10, 0, 0, 0);
+                    btnMinimize.Margin = new Padding(10, 0, 0, 0);
+                    btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+                    buttonPanel.Controls.Add(btnExit);
+                    buttonPanel.Controls.Add(btnMinimize);
+                    buttonPanel.Controls.Add(btnCancel);
+
+                    DialogClosingConfirmation.Controls.Add(lbl);
+                    DialogClosingConfirmation.Controls.Add(buttonPanel);
+
+                    DialogClosingConfirmation.AcceptButton = btnExit;
+                    DialogClosingConfirmation.CancelButton = btnCancel;
+
+                    var result = DialogClosingConfirmation.ShowDialog(this);
+
+                    if (result == DialogResult.Yes)
+                    {
+                        notifyIcon?.Dispose();
+                        base.OnFormClosing(e);
+                    }
+                    else if (result == DialogResult.Ignore)
+                    {
+                        e.Cancel = true;
+                        this.WindowState = FormWindowState.Minimized;
+                    }
+                    else
+                    {
+                        e.Cancel = true;
+                    }
                 }
             }
             else
             {
                 // Not user closing, allow normal close
+                sequenceUpdateCts.Cancel();
                 notifyIcon?.Dispose();
                 base.OnFormClosing(e);
             }
