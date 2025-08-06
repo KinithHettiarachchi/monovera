@@ -83,6 +83,8 @@
             tree.Size = new Size(670, 1001);
             tree.TabIndex = 0;
             tree.AfterSelect += Tree_AfterSelect;
+            tree.NodeMouseClick += tree_NodeMouseClick;
+
             // 
             // panelTabs
             // 

@@ -3330,6 +3330,14 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
             };
         }
 
+        private void tree_NodeMouseClick(object sender, TreeNodeMouseClickEventArgs e)
+        {
+            if (tree.SelectedNode == e.Node)
+            {
+                Tree_AfterSelect(sender, new TreeViewEventArgs(e.Node));
+            }
+        }
+
         private async void Tree_AfterSelect(object sender, TreeViewEventArgs e)
         {
             if (suppressAfterSelect)
@@ -3393,15 +3401,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                 iconUrl = $"data:image/png;base64,{base64}";
             }
 
-            TabPage pageTab = null;
-            foreach (TabPage page in tabDetails.TabPages)
-            {
-                if (page.Text == issueKey)
-                {
-                    pageTab = page;
-                    break;
-                }
-            }
+            TabPage pageTab = tabDetails.TabPages.Cast<TabPage>().FirstOrDefault(p => p.Text == issueKey);
 
             Microsoft.Web.WebView2.WinForms.WebView2 webView = null;
 
