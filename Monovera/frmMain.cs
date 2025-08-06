@@ -1813,11 +1813,95 @@ namespace Monovera
         {
             if (tree.SelectedNode?.Tag is string rootKey)
             {
-                var result = MessageBox.Show(
-                    "This will generate a hierarchical HTML report including all the child issues recursively.\n\nAre you sure you want to continue?",
-                    "Generate Report",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
+                // Custom confirmation dialog (similar to OnFormClosing)
+                var DialogReportConfirmation = new Form
+                {
+                    Text = $"Generate Report for {rootKey}",
+                    FormBorderStyle = FormBorderStyle.FixedDialog,
+                    StartPosition = FormStartPosition.CenterParent,
+                    Width = 460,
+                    Height = 220,
+                    MaximizeBox = false,
+                    MinimizeBox = false,
+                    ShowInTaskbar = false,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = GetCSSColor_Tree_Background(cssPath),
+                    Padding = new Padding(20),
+                };
+
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+                if (File.Exists(iconPath))
+                {
+                    DialogReportConfirmation.Icon = new Icon(iconPath);
+                }
+
+                // Use a TableLayoutPanel for flexible layout
+                var layout = new TableLayoutPanel
+                {
+                    Dock = DockStyle.Fill,
+                    ColumnCount = 1,
+                    RowCount = 2,
+                    Padding = new Padding(0),
+                    BackColor = GetCSSColor_Tree_Background(cssPath),
+                };
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent, 60));
+                layout.RowStyles.Add(new RowStyle(SizeType.Percent, 40));
+
+                var lbl = new Label
+                {
+                    Text = $"This will generate a hierarchical HTML report including all the child issues of {rootKey} recursively. Are you sure you want to continue?",
+                    Dock = DockStyle.Fill,
+                    AutoSize = true,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                    Padding = new Padding(10),
+                    MaximumSize = new Size(400, 0), // Wrap text if needed
+                };
+
+                var btnGenerate = new System.Windows.Forms.Button
+                {
+                    Text = "Generate",
+                    DialogResult = DialogResult.Yes,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                    BackColor = Color.White
+                };
+
+                var btnCancel = new System.Windows.Forms.Button
+                {
+                    Text = "Cancel",
+                    DialogResult = DialogResult.Cancel,
+                    Width = 100,
+                    Height = 36,
+                    Font = new Font("Segoe UI", 10),
+                    BackColor = Color.White
+                };
+
+                var buttonPanel = new FlowLayoutPanel
+                {
+                    FlowDirection = FlowDirection.RightToLeft,
+                    Dock = DockStyle.Fill,
+                    Padding = new Padding(0, 10, 0, 0),
+                    Height = 100,
+                    AutoSize = true
+                };
+
+                btnGenerate.Margin = new Padding(10, 0, 0, 0);
+                btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+                buttonPanel.Controls.Add(btnGenerate);
+                buttonPanel.Controls.Add(btnCancel);
+
+                layout.Controls.Add(lbl, 0, 0);
+                layout.Controls.Add(buttonPanel, 0, 1);
+
+                DialogReportConfirmation.Controls.Add(layout);
+
+                DialogReportConfirmation.AcceptButton = btnGenerate;
+                DialogReportConfirmation.CancelButton = btnCancel;
+
+                var result = DialogReportConfirmation.ShowDialog(this);
 
                 if (result != DialogResult.Yes)
                     return;
@@ -2514,7 +2598,7 @@ namespace Monovera
             ShowRecentlyUpdatedIssuesAsync(tabDetails);
 
             // Load all Jira projects and their issues into the tree view
-            await LoadAllProjectsToTreeAsync();
+            await LoadAllProjectsToTreeAsync(false);
 
    
         }
@@ -2524,7 +2608,7 @@ namespace Monovera
         /// Optionally forces a fresh sync from the server, bypassing cache.
         /// </summary>
         /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
-        private async Task LoadAllProjectsToTreeAsync(bool forceSync = false)
+        private async Task LoadAllProjectsToTreeAsync(bool forceSync, string? project = null)
         {
             pbProgress.Visible = true;
             pbProgress.Value = 0;
@@ -2536,21 +2620,22 @@ namespace Monovera
             childrenByParent.Clear();
             issueDtoDict.Clear();
 
-            int totalProjects = projectList.Count;
+            var projectsToLoad = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
+            int totalProjects = projectsToLoad.Count;
 
             var allIssues = new List<JiraIssue>();
             var projectTasks = new List<Task<List<JiraIssueDto>>>();
 
-            foreach (var project in projectList)
+            foreach (var proj in projectsToLoad)
             {
-                var projectConfig = config.Projects.FirstOrDefault(p => p.Project == project);
+                var projectConfig = config.Projects.FirstOrDefault(p => p.Project == proj);
                 string sortingField = projectConfig?.SortingField ?? "summary";
                 string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
                 var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
 
                 projectTasks.Add(
                     jiraService.GetAllIssuesForProject(
-                        project,
+                        proj,
                         fieldsList,
                         sortingField,
                         linkTypeName,
@@ -2560,7 +2645,7 @@ namespace Monovera
                             this.Invoke(() =>
                             {
                                 pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
-                                lblProgress.Text = $"Loading project ({project}) : {completed}/{total} ({percent:0.0}%)...";
+                                lblProgress.Text = $"Loading project ({proj}) : {completed}/{total} ({percent:0.0}%)...";
                             });
                         }
                     )
@@ -3599,7 +3684,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
         private string BuildHTMLSection_ATTACHMENTS(JsonElement fields, string issueKey)
         {
             if (!fields.TryGetProperty("attachment", out var attachments) || attachments.ValueKind != JsonValueKind.Array || attachments.GetArrayLength() == 0)
-                return "<div class='no-attachments'>No attachments found.</div>";
+                return "<details open>\r\n  <summary>Attachments</summary>\r\n  <section><div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
 
             var sb = new StringBuilder();
             sb.AppendLine(@"
@@ -5016,16 +5101,124 @@ document.addEventListener('DOMContentLoaded', () => {
         /// <param name="e">Event arguments.</param>
         private void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            var result = MessageBox.Show(
-                "Are you sure you want to update the hierarchy?\nThis will take some time depending on your network bandwidth.\n\nAre you sure you want to continue?",
-                "Update Hierarchy",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Warning
-            );
+            var DialogUpdateHierarchy = new Form
+            {
+                Text = "Update Hierarchy",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                Width = 420,
+                Height = 240,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
+                Padding = new Padding(20),
+            };
+
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+            if (File.Exists(iconPath))
+            {
+                DialogUpdateHierarchy.Icon = new Icon(iconPath);
+            }
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(0),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
+                AutoSize = false
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+
+            var lbl = new Label
+            {
+                Text = "This will update the hierarchy from Jira.\nSelect a project to update, or choose All Projects.",
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Padding = new Padding(10),
+                MaximumSize = new Size(400, 0),
+                Height = 60
+            };
+
+            var cmbProjects = new System.Windows.Forms.ComboBox
+            {
+                Dock = DockStyle.Top,
+                Font = new Font("Segoe UI", 10),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 300,
+                DropDownWidth = 300,
+                MaximumSize = new Size(300, 32),
+                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
+            };
+            cmbProjects.Items.Add("All Projects");
+            foreach (var proj in projectList)
+                cmbProjects.Items.Add(proj);
+            cmbProjects.SelectedIndex = 0;
+
+            var buttonPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Fill,
+                Padding = new Padding(0, 10, 0, 0),
+                Height = 48,
+                AutoSize = false
+            };
+
+            var btnUpdate = new System.Windows.Forms.Button
+            {
+                Text = "Update",
+                DialogResult = DialogResult.Yes,
+                Width = 100,
+                Height = 36,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                BackColor = Color.White
+            };
+
+            var btnCancel = new System.Windows.Forms.Button
+            {
+                Text = "Cancel",
+                DialogResult = DialogResult.Cancel,
+                Width = 100,
+                Height = 36,
+                Font = new Font("Segoe UI", 10),
+                BackColor = Color.White
+            };
+
+            btnUpdate.Margin = new Padding(10, 0, 0, 0);
+            btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+            buttonPanel.Controls.Add(btnUpdate);
+            buttonPanel.Controls.Add(btnCancel);
+
+            layout.Controls.Add(lbl, 0, 0);
+            layout.Controls.Add(cmbProjects, 0, 1);
+            layout.Controls.Add(buttonPanel, 0, 2);
+
+            DialogUpdateHierarchy.Controls.Add(layout);
+
+            DialogUpdateHierarchy.AcceptButton = btnUpdate;
+            DialogUpdateHierarchy.CancelButton = btnCancel;
+
+            var result = DialogUpdateHierarchy.ShowDialog(this);
 
             if (result == DialogResult.Yes)
             {
-                SyncHierarchy();
+                string selectedProject = cmbProjects.SelectedItem?.ToString();
+                if (selectedProject == "All Projects")
+                {
+                    _ = LoadAllProjectsToTreeAsync(true);
+                }
+                else
+                {
+                    _ = LoadAllProjectsToTreeAsync(true, selectedProject);
+                }
             }
         }
 
