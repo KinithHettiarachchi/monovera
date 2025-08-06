@@ -1949,15 +1949,17 @@ namespace Monovera
                 var tab = tabDetails.TabPages[i];
                 if (tab.Tag is Rectangle closeRect && closeRect.Contains(e.Location))
                 {
-                    // Select the tab to the left after closing
                     int idx = i;
-                    tabDetails.TabPages.Remove(tab);
-
-                    if (tabDetails.TabPages.Count > 0)
+                    // If the tab to be closed is currently selected, select the tab to the left (or right if first)
+                    if (tabDetails.SelectedTab == tab)
                     {
-                        int newIdx = Math.Max(0, idx - 1);
-                        tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
+                        if (tabDetails.TabPages.Count > 1)
+                        {
+                            int newIdx = idx == 0 ? 0 : idx - 1;
+                            tabDetails.SelectedTab = tabDetails.TabPages[newIdx == idx ? 1 : newIdx];
+                        }
                     }
+                    tabDetails.TabPages.Remove(tab);
                     break;
                 }
             }
@@ -5175,14 +5177,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (r.Contains(e.Location))
                     {
                         var tabToClose = tabDetails.TabPages[i];
-                        tabDetails.TabPages.Remove(tabToClose);
 
                         // Select the tab to the left, if any; otherwise, select the first tab if any remain
-                        if (tabDetails.TabPages.Count > 0)
+                        if (tabDetails.TabPages.Count > 1)
                         {
                             int newIdx = Math.Max(0, i - 1);
                             tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
                         }
+                        tabDetails.TabPages.Remove(tabToClose);
                         break;
                     }
                 }
@@ -5213,14 +5215,14 @@ document.addEventListener('DOMContentLoaded', () => {
         {
             if (tab == null) return;
             int idx = tabDetails.TabPages.IndexOf(tab);
-            tabDetails.TabPages.Remove(tab);
 
             // Select the tab to the left, if any; otherwise, select the first tab if any remain
-            if (tabDetails.TabPages.Count > 0)
+            if (tabDetails.TabPages.Count > 1)
             {
                 int newIdx = Math.Max(0, idx - 1);
                 tabDetails.SelectedTab = tabDetails.TabPages[newIdx];
             }
+            tabDetails.TabPages.Remove(tab);
         }
 
         private void CloseAllOtherTabs(TabPage tab)
