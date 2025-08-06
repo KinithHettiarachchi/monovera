@@ -3566,6 +3566,7 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                                 }
                             }
 
+                            // ... inside BuildLinksTable ...
                             if (!string.IsNullOrEmpty(fileName))
                             {
                                 string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
@@ -3575,15 +3576,16 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
                                     {
                                         byte[] bytes = File.ReadAllBytes(fullPath);
                                         string base64 = Convert.ToBase64String(bytes);
-                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' />";
+                                        // Add title attribute for tooltip
+                                        iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
                                     }
                                     catch { }
                                 }
                             }
                             else
                             {
-                                // Use green square emoji if no image
-                                iconImgInner = "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
+                                // Use green square emoji if no image, with tooltip
+                                iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(issueType)}'>🟥</span>";
                             }
 
                             tableRows.AppendLine($@"
