@@ -3233,7 +3233,7 @@ namespace Monovera
                             {
                                 byte[] bytes = File.ReadAllBytes(fullPath);
                                 string base64 = Convert.ToBase64String(bytes);
-                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;border-radius:6px;background:#e8f5e9;' title='{type}' />";
+                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;' title='{type}' />";
                             }
                             catch { }
                         }
@@ -3807,7 +3807,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                             {
                                 byte[] bytes = File.ReadAllBytes(fullPath);
                                 string base64 = Convert.ToBase64String(bytes);
-                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(i.issueType)}' />";
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px;' title='{HttpUtility.HtmlEncode(i.issueType)}' />";
                             }
                             catch { }
                         }
@@ -3911,7 +3911,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
             sb.AppendLine(@"
 <div class='filter-section' style='margin-bottom:18px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;'>
     <label style='font-weight:500;color:#1565c0;'>Date:
-        <input type='date' id='filterDate' style='padding:6px 12px;min-width:120px;margin-left:8px;'/>
+        <select id='filterDate' class='issue-type-dropdown' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
+            <option value=''>-- All Dates --</option>
+        </select>
     </label>
     <label style='font-weight:500;color:#1565c0;'>User:
         <select id='filterUser' class='issue-type-dropdown' style='padding:6px 12px;min-width:120px;margin-left:8px;'>
@@ -4103,12 +4105,15 @@ function applyFilters() {
 function populateDropdowns() {
     const userSet = new Set();
     const fieldSet = new Set();
+    const dateSet = new Set();
 
     document.querySelectorAll('.confluenceTable tbody tr').forEach(row => {
         userSet.add(row.dataset.user);
         fieldSet.add(row.dataset.field);
+        dateSet.add(row.dataset.date);
     });
 
+    // Populate user dropdown
     const userSelect = document.getElementById('filterUser');
     userSet.forEach(user => {
         const opt = document.createElement('option');
@@ -4117,12 +4122,22 @@ function populateDropdowns() {
         userSelect.appendChild(opt);
     });
 
+    // Populate field dropdown
     const fieldSelect = document.getElementById('filterField');
     fieldSet.forEach(field => {
         const opt = document.createElement('option');
         opt.value = field;
         opt.textContent = field;
         fieldSelect.appendChild(opt);
+    });
+
+    // Populate date dropdown (sorted descending)
+    const dateSelect = document.getElementById('filterDate');
+    Array.from(dateSet).sort((a, b) => b.localeCompare(a)).forEach(date => {
+        const opt = document.createElement('option');
+        opt.value = date;
+        opt.textContent = date;
+        dateSelect.appendChild(opt);
     });
 }
 
@@ -4600,7 +4615,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     {
                         byte[] bytes = File.ReadAllBytes(fullPath);
                         string base64 = Convert.ToBase64String(bytes);
-                        return $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                        return $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px;' title='{HttpUtility.HtmlEncode(issueType)}' />";
                     }
                     catch { }
                 }
@@ -4647,7 +4662,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         {
                             byte[] bytes = File.ReadAllBytes(fullPath);
                             string base64 = Convert.ToBase64String(bytes);
-                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px;' title='{HttpUtility.HtmlEncode(issueType)}' />";
                         }
                         catch { }
                     }
@@ -4734,7 +4749,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         {
                             byte[] bytes = File.ReadAllBytes(fullPath);
                             string base64 = Convert.ToBase64String(bytes);
-                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px; background:#e8f5e9;' title='{HttpUtility.HtmlEncode(issueType)}' />";
+                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px;' title='{HttpUtility.HtmlEncode(issueType)}' />";
                         }
                         catch { }
                     }
@@ -5060,8 +5075,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 Text = "Update Hierarchy",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
-                Width = 420,
-                Height = 240,
+                Width = 400,
+                Height = 254,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -5076,6 +5091,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 DialogUpdateHierarchy.Icon = new Icon(iconPath);
             }
 
+            // Main layout
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -5083,65 +5099,83 @@ document.addEventListener('DOMContentLoaded', () => {
                 RowCount = 3,
                 Padding = new Padding(0),
                 BackColor = GetCSSColor_Tree_Background(cssPath),
-                AutoSize = false
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
 
+            // Label
             var lbl = new Label
             {
-                Text = "This will update the hierarchy from Jira.\nSelect a project to update, or choose All Projects.",
+                Text = "Select a project to update.",
                 Dock = DockStyle.Fill,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 Padding = new Padding(10),
                 MaximumSize = new Size(400, 0),
-                Height = 60
             };
 
+            // ComboBox
             var cmbProjects = new System.Windows.Forms.ComboBox
             {
-                Dock = DockStyle.Top,
                 Font = new Font("Segoe UI", 10),
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Width = 300,
                 DropDownWidth = 300,
-                MaximumSize = new Size(300, 32),
-                Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top
+                Anchor = AnchorStyles.None,
             };
+
             cmbProjects.Items.Add("All Projects");
             foreach (var proj in projectList)
                 cmbProjects.Items.Add(proj);
             cmbProjects.SelectedIndex = 0;
 
+            // Centering ComboBox in a Panel
+            var comboPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                Padding = new Padding(0),
+                BackColor = Color.Transparent,
+            };
+
+            cmbProjects.Location = new Point((comboPanel.Width - cmbProjects.Width) / 2, (comboPanel.Height - cmbProjects.Height) / 2);
+            cmbProjects.Anchor = AnchorStyles.None;
+
+            comboPanel.Controls.Add(cmbProjects);
+            comboPanel.Resize += (s, e) =>
+            {
+                cmbProjects.Location = new Point(
+                    (comboPanel.Width - cmbProjects.Width) / 2,
+                    (comboPanel.Height - cmbProjects.Height) / 2
+                );
+            };
+
+            // Buttons
             var buttonPanel = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
                 Dock = DockStyle.Fill,
                 Padding = new Padding(0, 10, 0, 0),
-                Height = 48,
-                AutoSize = false
             };
 
             var btnUpdate = CreateDialogButton("Update", DialogResult.Yes, true);
             var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
-
             btnUpdate.Margin = new Padding(10, 0, 0, 0);
             btnCancel.Margin = new Padding(10, 0, 0, 0);
-
             buttonPanel.Controls.Add(btnUpdate);
             buttonPanel.Controls.Add(btnCancel);
 
+            // Add controls to layout
             layout.Controls.Add(lbl, 0, 0);
-            layout.Controls.Add(cmbProjects, 0, 1);
+            layout.Controls.Add(comboPanel, 0, 1);
             layout.Controls.Add(buttonPanel, 0, 2);
 
             DialogUpdateHierarchy.Controls.Add(layout);
-
             DialogUpdateHierarchy.AcceptButton = btnUpdate;
             DialogUpdateHierarchy.CancelButton = btnCancel;
+
 
             var result = DialogUpdateHierarchy.ShowDialog(this);
 
