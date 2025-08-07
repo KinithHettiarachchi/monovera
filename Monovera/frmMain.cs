@@ -3187,13 +3187,13 @@ namespace Monovera
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <div class='subsection'>
-      <table class='recent-updates-table' style='width:100%;border-collapse:collapse;'>
+      <table class='confluenceTable' style='width:100%;border-collapse:collapse;'>
         <thead>
           <tr>
-            <th style='width:36px;'>Type</th>
-            <th>Summary</th>
-            <th>Changes</th>
-            <th style='width:100px;'>Updated</th>
+            <th class='confluenceTh' style='width:36px;'>Type</th>
+            <th class='confluenceTh'>Summary</th>
+            <th class='confluenceTh'>Changes</th>
+            <th class='confluenceTh'style='width:100px;'>Updated</th>
           </tr>
         </thead>
         <tbody>");
@@ -3257,14 +3257,14 @@ namespace Monovera
                     // --- THIS IS THE KEY CHANGE: icon is now a hyperlink, just like in link tables ---
                     sb.AppendLine($@"
 <tr {changeTypeAttr} {issueTypeAttr}>
-  <td>
+  <td class='confluenceTd'>
     <a href='#' data-key='{key}' class='recent-update-icon-link'>{iconImgInner}</a>
   </td>
-  <td>
+  <td class='confluenceTd'>
     <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
   </td>
-  <td>{changeTagsHtml}</td>
-  <td>{updated}</td>
+  <td class='confluenceTd'>{changeTagsHtml}</td>
+  <td class='confluenceTd'>{updated}</td>
 </tr>");
                 }
                 sb.AppendLine(@"
@@ -3285,7 +3285,7 @@ function applyGlobalFilter() {
         .filter(x => x.checked)
         .map(x => x.value);
 
-    document.querySelectorAll('table.recent-updates-table tbody tr').forEach(function(row) {
+    document.querySelectorAll('table.confluenceTable tbody tr').forEach(function(row) {
         var rowIssueType = row.getAttribute('data-issuetype') || '';
         var rowChangeTypes = (row.getAttribute('data-changetypes') || '').split(',');
         var show = true;
