@@ -25,6 +25,7 @@ using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using Font = System.Drawing.Font;
+using Image = System.Drawing.Image;
 
 namespace Monovera
 {
@@ -97,6 +98,7 @@ namespace Monovera
         public static string HTML_LOADINGPAGE = "";
 
         private frmSearch frmSearchInstance;
+        private Image tabDetailsBackgroundImage;
 
         string focustToTreeJS = @"
 <script>
@@ -382,6 +384,8 @@ namespace Monovera
             InitializeComponent();
             InitializeNotifyIcon();
 
+            StartJiraUpdateQueueWorker();
+
             // Initialize context menu for tree
             InitializeContextMenu();
             SetupSpinMessages();
@@ -402,7 +406,7 @@ namespace Monovera
             {
                 Dock = DockStyle.Fill,
                 Name = "tabDetails",
-                BackColor = Color.White
+                BackColor = Color.Red
             };
             tabDetails.SelectedIndexChanged += TabDetails_SelectedIndexChanged;
             tabDetails.ShowToolTips = true;
@@ -507,80 +511,182 @@ namespace Monovera
             if (rootKeys.Contains(nodeToMove.Tag?.ToString()))
                 return;
 
-            // Always drop as child
-            var result = MessageBox.Show(
-                $"Are you sure you want to move '{nodeToMove.Tag}' under '{targetNode.Tag}'?\n\n" +
-                $"🌳 {targetNode.Tag}\n" +
-                $"   └── 🌱 {nodeToMove.Tag}",
-                "Confirm Parent Change!",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
+            // Custom confirmation dialog (unchanged)
+            var DialogMoveConfirm = new Form
+            {
+                Text = "Confirm Parent Change",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                Width = 500,
+                Height = 220,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
+                Padding = new Padding(20),
+            };
+
+            string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
+            if (File.Exists(iconPath))
+            {
+                DialogMoveConfirm.Icon = new Icon(iconPath);
+            }
+
+            var lbl = new Label
+            {
+                Text = $"Are you sure you want to move '{nodeToMove.Tag}' under '{targetNode.Tag}'?\n\n" +
+                       $"🌳 {targetNode.Tag}\n" +
+                       $"   └── 🌱 {nodeToMove.Tag}",
+                Dock = DockStyle.Top,
+                Height = 80,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
+                Padding = new Padding(0, 10, 0, 10),
+                AutoSize = true
+            };
+
+            var btnMove = CreateDialogButton("Move", DialogResult.Yes, true);
+            var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
+
+            var buttonPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Bottom,
+                Padding = new Padding(0, 10, 0, 0),
+                Height = 60,
+                AutoSize = true
+            };
+
+            btnMove.Margin = new Padding(10, 0, 0, 0);
+            btnCancel.Margin = new Padding(10, 0, 0, 0);
+
+            buttonPanel.Controls.Add(btnMove);
+            buttonPanel.Controls.Add(btnCancel);
+
+            DialogMoveConfirm.Controls.Add(lbl);
+            DialogMoveConfirm.Controls.Add(buttonPanel);
+
+            DialogMoveConfirm.AcceptButton = btnMove;
+            DialogMoveConfirm.CancelButton = btnCancel;
+
+            var result = DialogMoveConfirm.ShowDialog(this);
 
             if (result != DialogResult.Yes)
                 return;
 
-            // Capture old parent key before removing
+            // --- Ensure children of targetNode are loaded before dropping ---
+            if (targetNode.Nodes.Count == 1 && targetNode.Nodes[0].Tag?.ToString() == "DUMMY")
+            {
+                // Expand and trigger loading
+                targetNode.Expand();
+                // Wait for UI to process expand and children to load
+                await Task.Delay(100); // Adjust delay as needed for your loading speed
+
+                // Optionally, force loading if still dummy
+                if (targetNode.Nodes.Count == 1 && targetNode.Nodes[0].Tag?.ToString() == "DUMMY")
+                {
+                    tree_BeforeExpand(tree, new TreeViewCancelEventArgs(targetNode, false, TreeViewAction.Expand));
+                    await Task.Delay(50);
+                }
+            }
+
+            // --- Move node in tree immediately (UI thread) ---
             string oldParentKey = nodeToMove.Parent?.Tag as string;
+            if (nodeToMove.Parent != null)
+                nodeToMove.Parent.Nodes.Remove(nodeToMove);
+            else
+                tree.Nodes.Remove(nodeToMove);
 
-            tree.Enabled = false; // Disable tree to prevent further interaction during operation
+            // Add as last child
+            targetNode.Nodes.Add(nodeToMove);
 
+            targetNode.Expand();
+            tree.SelectedNode = nodeToMove;
+
+            // --- Enqueue Jira parent link update and sequence updates ---
             string newParentKey = targetNode.Tag as string;
             string movedKey = nodeToMove.Tag as string;
             string linkTypeName = hierarchyLinkTypeName.Split(',')[0];
 
+            // Enqueue parent link update as a special tuple (key, sequence) where sequence = -1 means parent update
+            sequenceUpdateQueue.Enqueue(($"{movedKey}|{oldParentKey}|{newParentKey}|{linkTypeName}", -1));
 
-            tree.Enabled = false; // Disable tree during operation
-
-            try
-            {
-                await jiraService.UpdateParentLinkAsync(movedKey, oldParentKey, newParentKey, linkTypeName);
-                // Remove from old parent
-                if (nodeToMove.Parent != null)
-                    nodeToMove.Parent.Nodes.Remove(nodeToMove);
-                else
-                    tree.Nodes.Remove(nodeToMove);
-
-                targetNode.Nodes.Add(nodeToMove);
-                targetNode.Expand();
-                tree.Enabled = true;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    ex.Message,
-                    "Jira Link Type Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-
-                // Restore UI state
-                tree.Enabled = true;
-                return;
-            }
-
-            // Re-sequence children
-
-            tree.Enabled = false; // Disable tree during operation
-
+            // Enqueue sequence updates for all siblings under the new parent
             for (int i = 0; i < targetNode.Nodes.Count; i++)
             {
                 string siblingKey = targetNode.Nodes[i].Tag as string;
                 int sequence = i + 1;
-
-                try
-                {
-                    await jiraService.UpdateSequenceFieldAsync(siblingKey, sequence);
-                    tree.Enabled = true;
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                    tree.Enabled = true;
-                    return;
-                }
+                sequenceUpdateQueue.Enqueue((siblingKey, sequence));
             }
+        }
 
-            tree.SelectedNode = nodeToMove;
+        private void StartJiraUpdateQueueWorker()
+        {
+            if (sequenceUpdateWorker != null)
+                return; // Only start once
+
+            sequenceUpdateWorker = Task.Run(async () =>
+            {
+                while (!sequenceUpdateCts.Token.IsCancellationRequested)
+                {
+                    if (sequenceUpdateQueue.TryDequeue(out var item))
+                    {
+                        UpdateJiraUpdateStatus(true); // Show red dot and "Updating Jira..."
+                        try
+                        {
+                            if (item.sequence == -1 && item.key.Contains("|"))
+                            {
+                                // Parent link update
+                                var parts = item.key.Split('|');
+                                if (parts.Length == 4)
+                                {
+                                    string movedKey = parts[0];
+                                    string oldParentKey = parts[1];
+                                    string newParentKey = parts[2];
+                                    string linkTypeName = parts[3];
+                                    await jiraService.UpdateParentLinkAsync(movedKey, oldParentKey, newParentKey, linkTypeName);
+                                }
+                            }
+                            else
+                            {
+                                // Sequence update
+                                await jiraService.UpdateSequenceFieldAsync(item.key, item.sequence);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            this.Invoke(() =>
+                                MessageBox.Show(ex.Message, "Jira Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error));
+                        }
+                    }
+                    else
+                    {
+                        UpdateJiraUpdateStatus(false); // Show green dot and "Jira updates completed!"
+                        await Task.Delay(50, sequenceUpdateCts.Token);
+                    }
+                }
+            }, sequenceUpdateCts.Token);
+        }
+
+        private void UpdateJiraUpdateStatus(bool isProcessing)
+        {
+            // Use the form for thread marshaling
+            if (this.InvokeRequired)
+            {
+                this.Invoke(new Action(() => UpdateJiraUpdateStatus(isProcessing)));
+                return;
+            }
+            if (isProcessing)
+            {
+                lblJiraUpdateProcessing.Text = "🔴 Processing Jira updates!...";
+                lblJiraUpdateProcessing.ForeColor = Color.Red;
+            }
+            else
+            {
+                lblJiraUpdateProcessing.Text = "🟢 No pending Jira updates!";
+                lblJiraUpdateProcessing.ForeColor = Color.Green;
+            }
         }
 
         // Helper to prevent dropping a node into its own descendant
@@ -699,7 +805,12 @@ namespace Monovera
             siblings.RemoveAt(index);
             siblings.Insert(newIndex, node);
 
-            tree.Enabled = false;
+            // Reselect the moved node in its new position
+            tree.SelectedNode = null; // Clear selection first
+            tree.SelectedNode = node;
+            node.EnsureVisible();
+            tree.Focus();
+            System.Windows.Forms.Application.DoEvents(); // Optional: helps UI update in some cases
 
             // Enqueue sequence updates for all siblings
             for (int i = 0; i < siblings.Count; i++)
@@ -708,42 +819,6 @@ namespace Monovera
                 int sequence = i + 1;
                 sequenceUpdateQueue.Enqueue((siblingKey, sequence));
             }
-            StartSequenceUpdateWorker();
-
-            // Reselect the moved node
-            tree.SelectedNode = node;
-            tree.Enabled = true;
-            node.EnsureVisible();
-        }
-
-        private void StartSequenceUpdateWorker()
-        {
-            if (sequenceUpdateWorker != null && !sequenceUpdateWorker.IsCompleted)
-                return;
-
-            sequenceUpdateWorker = Task.Run(async () =>
-            {
-                while (!sequenceUpdateCts.Token.IsCancellationRequested)
-                {
-                    if (sequenceUpdateQueue.TryDequeue(out var item))
-                    {
-                        try
-                        {
-                            await jiraService.UpdateSequenceFieldAsync(item.key, item.sequence);
-                        }
-                        catch (Exception ex)
-                        {
-                            // Optionally log or show error
-                            this.Invoke(() =>
-                                MessageBox.Show(ex.Message, "Jira Field Error", MessageBoxButtons.OK, MessageBoxIcon.Error));
-                        }
-                    }
-                    else
-                    {
-                        await Task.Delay(50, sequenceUpdateCts.Token); // Wait before checking again
-                    }
-                }
-            }, sequenceUpdateCts.Token);
         }
 
         private System.Windows.Forms.Timer marqueeTimer;
@@ -985,22 +1060,12 @@ namespace Monovera
             string baseKey = tree.SelectedNode.Tag?.ToString();
             if (string.IsNullOrWhiteSpace(baseKey)) return;
 
-            // Gather all keys and summaries from the tree
-            var allKeys = new List<string>();
-            var keySummaryDict = new Dictionary<string, string>();
-            void CollectKeys(TreeNodeCollection nodes)
-            {
-                foreach (TreeNode node in nodes)
-                {
-                    if (node.Tag is string key && !string.IsNullOrWhiteSpace(key))
-                    {
-                        allKeys.Add(key);
-                        keySummaryDict[key] = node.Text;
-                    }
-                    CollectKeys(node.Nodes);
-                }
-            }
-            CollectKeys(tree.Nodes);
+            // Gather all keys and summaries from issueDtoDict instead of the tree
+            var allKeys = issueDtoDict.Keys.ToList();
+            var keySummaryDict = issueDtoDict.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value.Summary ?? ""
+            );
 
             var DialogLinkRelatedIssues = new Form
             {
@@ -1407,7 +1472,7 @@ namespace Monovera
 
                         // Move node in tree
                         TreeNode nodeToMove = tree.SelectedNode;
-                        TreeNode newParentNode = FindNodeByKey(tree.Nodes, newParentKey, false);
+                        TreeNode newParentNode = await ExpandPathToKeyAsync(newParentKey);
                         if (newParentNode == null)
                         {
                             MessageBox.Show($"New parent node '{newParentKey}' not found in tree.", "Parent Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1701,7 +1766,7 @@ namespace Monovera
 
                 DialogEditIssue.FormClosed += async (s, e) =>
                 {
-                    var node = FindNodeByKey(tree.Nodes, issueKey, false);
+                    var node = await ExpandPathToKeyAsync(issueKey); ;
                     if (node != null)
                     {
                         lastTreeMouseButton = MouseButtons.Left;
@@ -2534,6 +2599,11 @@ namespace Monovera
         /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
         private async Task LoadAllProjectsToTreeAsync(bool forceSync, string? project = null)
         {
+            // --- 1. Store the currently selected node's key (if any) ---
+            string? previouslySelectedKey = null;
+            if (forceSync && tree.SelectedNode != null && tree.SelectedNode.Tag is string tag && !string.IsNullOrWhiteSpace(tag))
+                previouslySelectedKey = tag;
+
             pbProgress.Visible = true;
             pbProgress.Value = 0;
             pbProgress.Maximum = 100;
@@ -2644,6 +2714,24 @@ namespace Monovera
                     rootNode.Expand();
                 }
             });
+
+            // --- 2. After reload, try to restore selection ---
+            if (forceSync && !string.IsNullOrWhiteSpace(previouslySelectedKey))
+            {
+                // Wait a moment to ensure UI is updated and nodes are available
+                await Task.Delay(100);
+
+                tree.Invoke(async () =>
+                {
+                    var node = await ExpandPathToKeyAsync(previouslySelectedKey);
+                    if (node != null)
+                    {
+                        tree.SelectedNode = node;
+                        node.EnsureVisible();
+                        tree.Focus();
+                    }
+                });
+            }
         }
 
         private async Task<TreeNode?> ExpandPathToKeyAsync(string key)
@@ -4952,41 +5040,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private TreeNode FindNodeByKey(TreeNodeCollection nodes, string key, bool showMessage = true)
-        {
-            foreach (TreeNode node in nodes)
-            {
-                if (node.Tag?.ToString() == key)
-                {
-                    // Expand all parents up the chain
-                    TreeNode parent = node.Parent;
-                    while (parent != null)
-                    {
-                        parent.Expand();
-                        parent = parent.Parent;
-                    }
-                    node.EnsureVisible();
-                    tree.SelectedNode = node;
-                    return node;
-                }
-
-                var child = FindNodeByKey(node.Nodes, key, false);
-                if (child != null)
-                {
-                    node.Expand(); // Expand this node since the child is found below
-                    return child;
-                }
-            }
-
-            if (!key.ToLower().StartsWith("recent updates") && !key.ToLower().StartsWith("welcome to") && !key.ToLower().ToLower().StartsWith("__tree_focus__") && showMessage)
-            {
-                ShowTrayNotification(key);
-            }
-
-            return null;
-        }
-
-
         /// <summary>
         /// Formats a raw JSON string with indentation for improved readability.
         /// If the input is not valid JSON, returns the original string.
@@ -5306,7 +5359,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 DialogEditIssue.FormClosed += async (s, e) =>
                 {
-                    var node = FindNodeByKey(tree.Nodes, issueKey, false);
+                    var node = await ExpandPathToKeyAsync(issueKey);
                     if (node != null)
                     {
                         lastTreeMouseButton = MouseButtons.Left;

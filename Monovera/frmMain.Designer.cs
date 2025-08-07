@@ -45,6 +45,7 @@
             mnuConfiguration = new ToolStripMenuItem();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
+            lblJiraUpdateProcessing = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -67,6 +68,7 @@
             // 
             // splitContainer1.Panel2
             // 
+            splitContainer1.Panel2.BackColor = Color.White;
             splitContainer1.Panel2.Controls.Add(panelTabs);
             splitContainer1.Panel2.Controls.Add(statusStrip1);
             splitContainer1.Size = new Size(1904, 1001);
@@ -84,7 +86,6 @@
             tree.TabIndex = 0;
             tree.AfterSelect += Tree_AfterSelect;
             tree.NodeMouseClick += tree_NodeMouseClick;
-
             // 
             // panelTabs
             // 
@@ -97,7 +98,7 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuSettings, pbProgress, lblProgress, lblShortcuts });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuSettings, pbProgress, lblProgress, lblJiraUpdateProcessing, lblShortcuts });
             statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
@@ -193,6 +194,12 @@
             lblProgress.Size = new Size(24, 18);
             lblProgress.Text = "    ";
             // 
+            // lblJiraUpdateProcessing
+            // 
+            lblJiraUpdateProcessing.Name = "lblJiraUpdateProcessing";
+            lblJiraUpdateProcessing.Size = new Size(136, 18);
+            lblJiraUpdateProcessing.Text = "No pending Jira Updates";
+            // 
             // lblShortcuts
             // 
             lblShortcuts.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
@@ -246,5 +253,6 @@
         private ToolStripMenuItem mnuReport;
         private ToolStripMenuItem mnuRead;
         private ToolStripMenuItem mnuRecentUpdates;
+        private ToolStripStatusLabel lblJiraUpdateProcessing;
     }
 }
