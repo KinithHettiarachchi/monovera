@@ -3197,6 +3197,8 @@ namespace Monovera
           </tr>
         </thead>
         <tbody>");
+
+
                 foreach (var issue in group)
                 {
                     string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
@@ -3223,7 +3225,7 @@ namespace Monovera
                         : "";
 
                     string typeIconKey = frmMain.GetIconForType(issue.Type);
-                    string iconPath = "";
+                    string iconImgInner = "";
                     if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                     {
                         string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
@@ -3233,10 +3235,14 @@ namespace Monovera
                             {
                                 byte[] bytes = File.ReadAllBytes(fullPath);
                                 string base64 = Convert.ToBase64String(bytes);
-                                iconPath = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;' title='{type}' />";
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px;width:24px;vertical-align:middle;margin-right:8px;border-radius:4px;' title='{type}' />";
                             }
                             catch { }
                         }
+                    }
+                    else
+                    {
+                        iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{type}'>🟥</span>";
                     }
 
                     var changeTypeList = changeTags
@@ -3248,9 +3254,12 @@ namespace Monovera
                         : "";
                     string issueTypeAttr = $"data-issuetype='{type}'";
 
+                    // --- THIS IS THE KEY CHANGE: icon is now a hyperlink, just like in link tables ---
                     sb.AppendLine($@"
 <tr {changeTypeAttr} {issueTypeAttr}>
-  <td>{iconPath}</td>
+  <td>
+    <a href='#' data-key='{key}' class='recent-update-icon-link'>{iconImgInner}</a>
+  </td>
   <td>
     <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
   </td>
