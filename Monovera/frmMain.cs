@@ -509,7 +509,7 @@ namespace Monovera
 
             // Always drop as child
             var result = MessageBox.Show(
-                $"Are you sure you want to move '{nodeToMove.Text}' under '{targetNode.Text}'?\n\n" +
+                $"Are you sure you want to move '{nodeToMove.Tag}' under '{targetNode.Tag}'?\n\n" +
                 $"🌳 {targetNode.Tag}\n" +
                 $"   └── 🌱 {nodeToMove.Tag}",
                 "Confirm Parent Change!",
@@ -640,8 +640,8 @@ namespace Monovera
                 Text = direction < 0 ? "Confirm Move Up" : "Confirm Move Down",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
-                Width = 400,
-                Height = 200,
+                Width = 500,
+                Height = 180,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
@@ -658,7 +658,7 @@ namespace Monovera
 
                 var lbl = new Label
                 {
-                    Text = $"Are you sure you want to move '{node.Text}' {(direction < 0 ? "up" : "down")}?",
+                    Text = $"Are you sure you want to move '{node.Tag}' {(direction < 0 ? "up" : "down")}?",
                     Dock = DockStyle.Top,
                     Height = 60,
                     TextAlign = ContentAlignment.MiddleCenter,
@@ -666,25 +666,8 @@ namespace Monovera
                     Padding = new Padding(0, 10, 0, 10)
                 };
 
-                var btnMove = new System.Windows.Forms.Button
-                {
-                    Text = direction < 0 ? "Move Up" : "Move Down",
-                    DialogResult = DialogResult.Yes,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                    BackColor = Color.White
-                };
-
-                var btnCancel = new System.Windows.Forms.Button
-                {
-                    Text = "Cancel",
-                    DialogResult = DialogResult.Cancel,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10),
-                    BackColor = Color.White
-                };
+                var btnMove = CreateDialogButton(direction < 0 ? "Move Up" : "Move Down", DialogResult.Yes,true);
+                var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
 
                 var buttonPanel = new FlowLayoutPanel
                 {
@@ -1222,24 +1205,10 @@ namespace Monovera
                 AutoSize = false,
                 Height = 56 // Should match or exceed button height
             };
-            var btnLink = new System.Windows.Forms.Button
-            {
-                Text = "Link",
-                DialogResult = DialogResult.OK,
-                Width = 100,
-                Height = 40, // Increased height for better visibility
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                BackColor = Color.White
-            };
-            var btnCancel = new System.Windows.Forms.Button
-            {
-                Text = "Cancel",
-                DialogResult = DialogResult.Cancel,
-                Width = 100,
-                Height = 40, // Increased height for better visibility
-                Font = new Font("Segoe UI", 10),
-                BackColor = Color.White
-            };
+
+            var btnLink = CreateDialogButton("Link", DialogResult.OK, true);
+            var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
+          
             buttonPanel.Controls.Add(btnLink);
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 0, 3);
@@ -1382,24 +1351,10 @@ namespace Monovera
                         Padding = new Padding(0, 8, 0, 0),
                         BackColor = GetCSSColor_Tree_Background(cssPath)
                     };
-                    var btnOk = new System.Windows.Forms.Button
-                    {
-                        Text = "Link",
-                        DialogResult = DialogResult.OK,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                        BackColor = Color.White
-                    };
-                    var btnCancel = new System.Windows.Forms.Button
-                    {
-                        Text = "Cancel",
-                        DialogResult = DialogResult.Cancel,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10),
-                        BackColor = Color.White
-                    };
+
+                    var btnOk = CreateDialogButton("Change", DialogResult.OK, true);
+                    var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
+
                     buttonPanel.Controls.Add(btnOk);
                     buttonPanel.Controls.Add(btnCancel);
                     layout.Controls.Add(buttonPanel, 1, 2);
@@ -1664,24 +1619,10 @@ namespace Monovera
                 Dock = DockStyle.Fill,
                 Padding = new Padding(0, 8, 0, 0)
             };
-            var btnCreate = new System.Windows.Forms.Button
-            {
-                Text = "Create",
-                DialogResult = DialogResult.OK,
-                Width = 100,
-                Height = 36,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                BackColor = Color.White
-            };
-            var btnCancel = new System.Windows.Forms.Button
-            {
-                Text = "Cancel",
-                DialogResult = DialogResult.Cancel,
-                Width = 100,
-                Height = 36,
-                Font = new Font("Segoe UI", 10),
-                BackColor = Color.White
-            };
+
+            var btnCreate = CreateDialogButton("Create", DialogResult.OK, true);
+            var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
+            
             buttonPanel.Controls.Add(btnCreate);
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 1, 4);
@@ -1858,26 +1799,9 @@ namespace Monovera
                     MaximumSize = new Size(400, 0), // Wrap text if needed
                 };
 
-                var btnGenerate = new System.Windows.Forms.Button
-                {
-                    Text = "Generate",
-                    DialogResult = DialogResult.Yes,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                    BackColor = Color.White
-                };
-
-                var btnCancel = new System.Windows.Forms.Button
-                {
-                    Text = "Cancel",
-                    DialogResult = DialogResult.Cancel,
-                    Width = 100,
-                    Height = 36,
-                    Font = new Font("Segoe UI", 10),
-                    BackColor = Color.White
-                };
-
+                var btnGenerate = CreateDialogButton("Generate", DialogResult.OK, true);
+                var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
+                
                 var buttonPanel = new FlowLayoutPanel
                 {
                     FlowDirection = FlowDirection.RightToLeft,
@@ -2620,70 +2544,74 @@ namespace Monovera
             childrenByParent.Clear();
             issueDtoDict.Clear();
 
-            var projectsToLoad = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
-            int totalProjects = projectsToLoad.Count;
-
-            var allIssues = new List<JiraIssue>();
-            var projectTasks = new List<Task<List<JiraIssueDto>>>();
-
-            foreach (var proj in projectsToLoad)
+            // 1. Sync only the requested project (if any)
+            var projectsToSync = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
+            foreach (var proj in projectsToSync)
             {
                 var projectConfig = config.Projects.FirstOrDefault(p => p.Project == proj);
                 string sortingField = projectConfig?.SortingField ?? "summary";
                 string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
                 var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
 
-                projectTasks.Add(
-                    jiraService.GetAllIssuesForProject(
-                        proj,
-                        fieldsList,
-                        sortingField,
-                        linkTypeName,
-                        forceSync,
-                        (completed, total, percent) =>
+                await jiraService.GetAllIssuesForProject(
+                    proj,
+                    fieldsList,
+                    sortingField,
+                    linkTypeName,
+                    forceSync,
+                    (completed, total, percent) =>
+                    {
+                        this.Invoke(() =>
                         {
-                            this.Invoke(() =>
-                            {
-                                pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
-                                lblProgress.Text = $"Loading project ({proj}) : {completed}/{total} ({percent:0.0}%)...";
-                            });
-                        }
-                    )
+                            pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
+                            lblProgress.Text = $"Loading project ({proj}) : {completed}/{total} ({percent:0.0}%)...";
+                        });
+                    }
                 );
             }
 
-            var allResults = await Task.WhenAll(projectTasks);
-
-            foreach (var issues in allResults)
+            // 2. Load all cached issues for all projects (not just the one synced)
+            var allIssues = new List<JiraIssue>();
+            foreach (var proj in projectList)
             {
-                foreach (var myIssue in issues)
+                string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{proj}.json");
+                if (File.Exists(cacheFile))
                 {
-                    var issue = new JiraIssue
+                    string json = await File.ReadAllTextAsync(cacheFile);
+                    var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDto>>(json, new JsonSerializerOptions
                     {
-                        Key = myIssue.Key,
-                        Summary = myIssue.Summary,
-                        Type = myIssue.Type,
-                        ParentKey = null,
-                        RelatedIssueKeys = new List<string>(),
-                        SortingField = myIssue.SortingField
-                    };
+                        PropertyNameCaseInsensitive = true
+                    }) ?? new List<JiraIssueDto>();
 
-                    var projectConfig = config.Projects.FirstOrDefault(p => myIssue.Key.StartsWith(p.Root.Split("-")[0]));
-                    string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
-
-                    if (myIssue.IssueLinks != null)
+                    foreach (var myIssue in cachedIssues)
                     {
-                        foreach (var link in myIssue.IssueLinks)
+                        var issue = new JiraIssue
                         {
-                            if (link.LinkTypeName == linkTypeName && !string.IsNullOrEmpty(link.OutwardIssueKey))
+                            Key = myIssue.Key,
+                            Summary = myIssue.Summary,
+                            Type = myIssue.Type,
+                            ParentKey = null,
+                            RelatedIssueKeys = new List<string>(),
+                            SortingField = myIssue.SortingField
+                        };
+
+                        var projectConfig = config.Projects.FirstOrDefault(p => myIssue.Key.StartsWith(p.Root.Split("-")[0]));
+                        string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
+
+                        if (myIssue.IssueLinks != null)
+                        {
+                            foreach (var link in myIssue.IssueLinks)
                             {
-                                issue.RelatedIssueKeys.Add(link.OutwardIssueKey);
+                                if (link.LinkTypeName == linkTypeName && !string.IsNullOrEmpty(link.OutwardIssueKey))
+                                {
+                                    issue.RelatedIssueKeys.Add(link.OutwardIssueKey);
+                                }
                             }
                         }
-                    }
 
-                    allIssues.Add(issue);
-                    issueDtoDict[myIssue.Key] = myIssue;
+                        allIssues.Add(issue);
+                        issueDtoDict[myIssue.Key] = myIssue;
+                    }
                 }
             }
 
@@ -2692,7 +2620,7 @@ namespace Monovera
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
-            // Build tree nodes in memory
+            // Always build the tree for all projects, not just the synced one
             tree.Invoke(() =>
             {
                 tree.Nodes.Clear();
@@ -3015,13 +2943,12 @@ namespace Monovera
         /// The tab uses a WebView2 control to render a styled HTML report, with clickable links to load issue details.
         /// </summary>
         /// <param name="tabDetails">The TabControl to which the "Recent Updates" tab will be added.</param>
-        public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails, int days=14)
+        public async Task ShowRecentlyUpdatedIssuesAsync(TabControl tabDetails, int days = 14)
         {
             // --- Step 1: Prepare WebView2 control and TabPage first ---
             var webView = new Microsoft.Web.WebView2.WinForms.WebView2 { Dock = DockStyle.Fill };
             webView.BackColor = GetCSSColor_Tree_Background(cssPath);
-            
-            // Create the tab page immediately
+
             var updatePage = new TabPage("Recent Updates!")
             {
                 ImageKey = "updates",
@@ -3030,20 +2957,14 @@ namespace Monovera
             };
             updatePage.Controls.Add(webView);
 
-            // Add to tab control first, so loading screen is visible
             tabDetails.TabPages.Add(updatePage);
             tabDetails.SelectedTab = updatePage;
 
-            // Ensure the tab has an icon list
             if (tabDetails.ImageList == null)
-            {
                 tabDetails.ImageList = new ImageList { ImageSize = new Size(16, 16) };
-            }
 
-            // Load icon if exists
             string iconKey = "updates";
             string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "monovera.png");
-
             if (File.Exists(iconFile))
             {
                 try
@@ -3056,7 +2977,6 @@ namespace Monovera
                 catch { }
             }
 
-            // --- Step 2: Initialize WebView2 and show Loading ---
             await webView.EnsureCoreWebView2Async();
             webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
@@ -3064,7 +2984,6 @@ namespace Monovera
             File.WriteAllText(htmlFilePath, HTML_LOADINGPAGE);
             webView.CoreWebView2.Navigate(htmlFilePath);
 
-            // Handle dialogs and messages
             webView.CoreWebView2.ScriptDialogOpening += (s, args) =>
             {
                 var deferral = args.GetDeferral();
@@ -3077,9 +2996,7 @@ namespace Monovera
                 {
                     string message = args.TryGetWebMessageAsString()?.Trim();
                     if (!string.IsNullOrWhiteSpace(message))
-                    {
                         SelectAndLoadTreeNode(message);
-                    }
                 }
                 catch (Exception ex)
                 {
@@ -3087,15 +3004,12 @@ namespace Monovera
                 }
             };
 
-            // Optional: delay a little so user sees loading
             await Task.Delay(800);
 
             // --- Step 3: Build the JQL and get issues ---
-            DateTime oneMonthAgo = DateTime.UtcNow.AddMonths(-1);
             string jql = $"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC";
             var rawIssues = await frmSearch.SearchJiraIssues(jql, null);
 
-            // When building filteredIssues, collect all change types for the issue:
             var tasks = rawIssues.Select(async issue =>
             {
                 var url = $"{jiraBaseUrl}/rest/api/3/issue/{issue.Key}?expand=changelog";
@@ -3110,17 +3024,15 @@ namespace Monovera
                 var content = await response.Content.ReadAsStringAsync();
                 using var doc = JsonDocument.Parse(content);
 
-                // Extract the created date from the fields property
                 DateTime? createdDate = null;
-                
                 var changeTags = new List<string>();
 
                 if (doc.RootElement.TryGetProperty("changelog", out var changelog) &&
                     changelog.TryGetProperty("histories", out var histories))
                 {
                     if (doc.RootElement.TryGetProperty("fields", out var fields) &&
-                    fields.TryGetProperty("created", out var createdProp) &&
-                    createdProp.ValueKind == JsonValueKind.String)
+                        fields.TryGetProperty("created", out var createdProp) &&
+                        createdProp.ValueKind == JsonValueKind.String)
                     {
                         if (DateTime.TryParse(createdProp.GetString(), out var dt))
                             createdDate = dt;
@@ -3132,13 +3044,10 @@ namespace Monovera
                     {
                         if (history.TryGetProperty("created", out var createdDateOfHistory) &&
                             DateTime.TryParse(createdDateOfHistory.GetString(), out var changeDate) &&
-                            (changeDate.Date == issue.Updated?.ToLocalTime().Date)) // Only changes on the update date
+                            (changeDate.Date == issue.Updated?.ToLocalTime().Date))
                         {
-                            // Add "Created" tag if this history matches the issue's Created date and has no items
-                            if (issue.Created.Value.Date == changeDate.Date)
-                            {
-                                    changeTags.Add("Created");
-                            }
+                            if (issue.Created.HasValue && issue.Created.Value.Date == changeDate.Date)
+                                changeTags.Add("Created");
 
                             if (history.TryGetProperty("items", out var items))
                             {
@@ -3152,9 +3061,7 @@ namespace Monovera
                                         else if (field.ToLower().Contains("issuetype"))
                                             changeTags.Add("type");
                                         else
-                                        {
                                             changeTags.Add(field);
-                                        }
                                     }
                                 }
                             }
@@ -3194,49 +3101,92 @@ namespace Monovera
             // --- Step 4: Generate the HTML content ---
             var sb = new StringBuilder();
 
-            foreach (var group in grouped)
-            {
-                // Collect all change types for this group
-                var allChangeTypes = group
+            // 1. Collect all unique issue types and change types across all groups
+            var allIssueTypesGlobal = grouped
+                .SelectMany(g => g.Select(issue => issue.Type ?? ""))
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
+
+            var allChangeTypesGlobal = grouped
+                .SelectMany(g => g
                     .SelectMany(issue =>
                         (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
                             ? tagsList
-                            : new List<string>())
-                    .Distinct()
-                    .OrderBy(x => x)
-                    .ToList();
+                            : new List<string>()))
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
 
-                // Collect all issue types for this group
-                var allIssueTypes = group
-                    .Select(issue => issue.Type ?? "")
-                    .Where(t => !string.IsNullOrWhiteSpace(t))
-                    .Distinct()
-                    .OrderBy(x => x)
-                    .ToList();
+            // 2. Render filter panels with scrollable overflow
+            sb.AppendLine($@"
+<!-- Show Panel Button -->
+<button id='show-filter-btn'>Apply Filter</button>
 
-                // Filter bar for change types and issue types
+<!-- Floating Panel -->
+<div id='floating-filter-container'>
+  <div class='filter-panel'>
+    <div class='filter-panel-title'>Issue Types</div>
+    <div id='issue-type-checkboxes' class='checkbox-container'>
+      <label><input type='checkbox' class='issue-type-checkbox-all change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+      {string.Join("\n", allIssueTypesGlobal.Select(t =>
+         $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='issue-type-checkbox change-type-checkbox' value='{HttpUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{HttpUtility.HtmlEncode(t)}</span></label>"))}
+    </div>
+  </div>
+
+  <div class='filter-panel'>
+    <div class='filter-panel-title'>Change Types</div>
+    <div id='change-type-checkboxes' class='checkbox-container'>
+      <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+      {string.Join("\n", allChangeTypesGlobal.Select(t =>
+         $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{HttpUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{HttpUtility.HtmlEncode(t)}</span></label>"))}
+    </div>
+  </div>
+</div>
+
+<script>
+  const panel = document.getElementById('floating-filter-container');
+  const showBtn = document.getElementById('show-filter-btn');
+
+  let panelVisible = false;
+
+  function showPanel() {{
+    panel.style.top = '0px';
+    panelVisible = true;
+  }}
+
+  function hidePanel() {{
+    panel.style.top = '-300px';
+    panelVisible = false;
+  }}
+
+  showBtn.addEventListener('click', () => {{
+    if (panelVisible) {{
+      hidePanel();
+    }} else {{
+      showPanel();
+    }}
+  }});
+
+  // Hide on outside click
+  document.addEventListener('click', (event) => {{
+    const isClickInside = panel.contains(event.target) || showBtn.contains(event.target);
+    if (!isClickInside) {{
+      hidePanel();
+    }}
+  }});
+</script>
+");
+
+
+            foreach (var group in grouped)
+            {
                 sb.AppendLine($@"
 <details open>
   <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
   <section>
     <div class='subsection'>
-      <div class='filter-bar' style='margin-bottom:10px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;'>
-        <div>
-          <strong>Issue Type:</strong>
-          <select class='issue-type-dropdown' style='margin-left:8px;padding:4px 8px;'>
-            <option value=''>All</option>
-            {string.Join("", allIssueTypes.Select(t => $"<option value='{HttpUtility.HtmlEncode(t)}'>{HttpUtility.HtmlEncode(t)}</option>"))}
-          </select>
-        </div>
-        <div>
-          <strong>Changes:</strong>
-          <label style='margin-right:10px;'>
-  <input type='checkbox' class='change-type-checkbox-all' checked> All
-</label>
-{string.Join(" ", allChangeTypes.Select(t =>
-    $"<label style='margin-right:10px;'><input type='checkbox' class='change-type-checkbox' value='{HttpUtility.HtmlEncode(t)}' checked> {HttpUtility.HtmlEncode(t)}</label>"))}
-        </div>
-      </div>
       <table class='recent-updates-table' style='width:100%;border-collapse:collapse;'>
         <thead>
           <tr>
@@ -3247,7 +3197,6 @@ namespace Monovera
           </tr>
         </thead>
         <tbody>");
-
                 foreach (var issue in group)
                 {
                     string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
@@ -3256,7 +3205,6 @@ namespace Monovera
                     string updated = issue.Updated?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "";
                     string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
 
-                    // Render all change tags for this issue
                     List<string> changeTags = new();
                     if (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
                     {
@@ -3291,7 +3239,6 @@ namespace Monovera
                         }
                     }
 
-                    // Add a data attribute for change types and issue type to the row for filtering
                     var changeTypeList = changeTags
                         .Select(tag => Regex.Match(tag, @"data-changetype='([^']+)'").Groups[1].Value)
                         .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -3311,7 +3258,6 @@ namespace Monovera
   <td>{updated}</td>
 </tr>");
                 }
-
                 sb.AppendLine(@"
         </tbody>
       </table>
@@ -3320,59 +3266,51 @@ namespace Monovera
 </details>");
             }
 
-            // Add JS for filtering by change type and issue type
             sb.AppendLine(@"
 <script>
-document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
-    var allCheckbox = filterBar.querySelector('.change-type-checkbox-all');
-    var checkboxes = filterBar.querySelectorAll('.change-type-checkbox');
-    var dropdown = filterBar.querySelector('.issue-type-dropdown');
-    var table = filterBar.parentElement.querySelector('table.recent-updates-table');
-    var rows = table.querySelectorAll('tbody tr');
+function applyGlobalFilter() {
+    var checkedIssueTypes = Array.from(document.querySelectorAll('#issue-type-checkboxes .change-type-checkbox'))
+        .filter(x => x.checked)
+        .map(x => x.value);
+    var checkedChangeTypes = Array.from(document.querySelectorAll('#change-type-checkboxes .change-type-checkbox'))
+        .filter(x => x.checked)
+        .map(x => x.value);
 
-    function applyFilter() {
-        var checkedTypes = Array.from(checkboxes)
-            .filter(x => x.checked)
-            .map(x => x.value);
-        var selectedType = dropdown.value;
-        rows.forEach(function(row) {
-            var types = (row.getAttribute('data-changetypes') || '').split(',');
-            var issueType = row.getAttribute('data-issuetype') || '';
-            var show = true;
-            if (checkedTypes.length > 0 && !types.some(t => checkedTypes.includes(t))) {
-                show = false;
-            }
-            if (selectedType && issueType !== selectedType) {
-                show = false;
-            }
-            row.style.display = show ? '' : 'none';
-        });
-    }
+    document.querySelectorAll('table.recent-updates-table tbody tr').forEach(function(row) {
+        var rowIssueType = row.getAttribute('data-issuetype') || '';
+        var rowChangeTypes = (row.getAttribute('data-changetypes') || '').split(',');
+        var show = true;
+        if (checkedIssueTypes.length > 0 && !checkedIssueTypes.includes(rowIssueType)) show = false;
+        if (checkedChangeTypes.length > 0 && !rowChangeTypes.some(t => checkedChangeTypes.includes(t))) show = false;
+        row.style.display = show ? '' : 'none';
+    });
+}
 
-    if (allCheckbox) {
-        allCheckbox.addEventListener('change', function() {
-            checkboxes.forEach(function(cb) {
-                cb.checked = allCheckbox.checked;
-            });
-            applyFilter();
-        });
-    }
+document.querySelectorAll('.filter-panel').forEach(panel => {
+    const allCheckbox = panel.querySelector('.change-type-checkbox-all');
+    const checkboxes = panel.querySelectorAll('.change-type-checkbox');
 
-    checkboxes.forEach(function(cb) {
-        cb.addEventListener('change', function() {
-            var allChecked = Array.from(checkboxes).every(x => x.checked);
-            allCheckbox.checked = allChecked;
-            applyFilter();
-        });
+    if (!allCheckbox) return;
+
+    allCheckbox.addEventListener('change', function () {
+        const checked = this.checked;
+        checkboxes.forEach(cb => cb.checked = checked);
+        applyGlobalFilter();
     });
 
-    dropdown.addEventListener('change', applyFilter);
+    checkboxes.forEach(cb => {
+        cb.addEventListener('change', function () {
+            const allChecked = Array.from(checkboxes).every(x => x.checked);
+            allCheckbox.checked = allChecked;
+            applyGlobalFilter();
+        });
+    });
 });
+
+window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </script>
 ");
 
-
-            // Update the script to handle summary clicks
             string html = $@"
 <!DOCTYPE html>
 <html>
@@ -3396,11 +3334,11 @@ document.querySelectorAll('.filter-bar').forEach(function(filterBar) {
 </body>
 </html>";
 
-            // --- Step 5: Show the final HTML ---
             string tempFilePath = Path.Combine(tempFolder, "monovera_updated.html");
             File.WriteAllText(tempFilePath, html);
             webView.CoreWebView2.Navigate(tempFilePath);
         }
+
 
         private TreeNode CreateTreeNode(JiraIssue issue)
         {
@@ -4518,7 +4456,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             //InlineAttachmentImages(doc, key);
 
-            ReplaceColorMacros(doc);
+            ReplaceColorMacrosAndSymbols(doc);
             ReplaceJiraIssueMacros(doc);
             ReplaceJiraAnchorLinks(doc, issueDict);
             ReplaceWikiStyleLinks(doc, issueDict);
@@ -4721,10 +4659,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        private static void ReplaceColorMacros(HtmlAgilityPack.HtmlDocument doc)
+        private static void ReplaceColorMacrosAndSymbols(HtmlAgilityPack.HtmlDocument doc)
         {
             var html = doc.DocumentNode.InnerHtml;
 
+            // Replace color start macros
             html = Regex.Replace(html, @"\{color:(#[0-9a-fA-F]{6})\}", match =>
             {
                 var hex = match.Groups[1].Value.ToLower();
@@ -4732,10 +4671,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 return $"<span style=\"color:{hex}\">";
             });
 
+            // Replace color end macros
             html = Regex.Replace(html, @"\{color\}", "</span>", RegexOptions.IgnoreCase);
 
-            doc.LoadHtml(html); // reload after text replacement
+            // Replace plain (*) with <sup>🔸</sup>
+            html = Regex.Replace(html, @"(?<!\w)\*(?!\w)", "<sup>🔸</sup>");
+
+            // Replace <img ... star_yellow.png ... > with <sup>⭐</sup>
+            html = Regex.Replace(
+                html,
+                @"<img\s+[^>]*?src\s*=\s*[""']?/images/icons/emoticons/star_yellow\.png[""'][^>]*?>",
+                "<sup>★</sup>",
+                RegexOptions.IgnoreCase
+            );
+
+            // Reload modified HTML
+            doc.LoadHtml(html);
         }
+
+
 
         private static void ReplaceJiraAnchorLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
@@ -5171,25 +5125,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 AutoSize = false
             };
 
-            var btnUpdate = new System.Windows.Forms.Button
-            {
-                Text = "Update",
-                DialogResult = DialogResult.Yes,
-                Width = 100,
-                Height = 36,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                BackColor = Color.White
-            };
-
-            var btnCancel = new System.Windows.Forms.Button
-            {
-                Text = "Cancel",
-                DialogResult = DialogResult.Cancel,
-                Width = 100,
-                Height = 36,
-                Font = new Font("Segoe UI", 10),
-                BackColor = Color.White
-            };
+            var btnUpdate = CreateDialogButton("Update", DialogResult.Yes, true);
+            var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
 
             btnUpdate.Margin = new Padding(10, 0, 0, 0);
             btnCancel.Margin = new Padding(10, 0, 0, 0);
@@ -5220,15 +5157,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     _ = LoadAllProjectsToTreeAsync(true, selectedProject);
                 }
             }
-        }
-
-        /// <summary>
-        /// Performs a full hierarchy sync by reloading all Jira projects and issues from the server.
-        /// Forces a fresh sync, bypassing any cached data.
-        /// </summary>
-        private async void SyncHierarchy()
-        {
-            await LoadAllProjectsToTreeAsync(true);
         }
 
         /// <summary>
@@ -5642,26 +5570,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         Padding = new Padding(0, 10, 0, 10)
                     };
 
-                    var btnYes = new System.Windows.Forms.Button
-                    {
-                        Text = "Yes",
-                        DialogResult = DialogResult.Yes,
-                        Width = 140,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                        BackColor = Color.White
-                    };
+                    var btnYes = CreateDialogButton("Yes", DialogResult.Yes, true);
+                    var btnWait = CreateDialogButton("Wait", DialogResult.No);
 
-                    var btnWait = new System.Windows.Forms.Button
-                    {
-                        Text = "Wait",
-                        DialogResult = DialogResult.No,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10),
-                        BackColor = Color.White
-                    };
-
+                   
                     var buttonPanel = new FlowLayoutPanel
                     {
                         FlowDirection = FlowDirection.RightToLeft,
@@ -5733,35 +5645,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         Padding = new Padding(0, 10, 0, 10)
                     };
 
-                    var btnExit = new System.Windows.Forms.Button
-                    {
-                        Text = "Exit",
-                        DialogResult = DialogResult.Yes,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                        BackColor = Color.White
-                    };
-
-                    var btnMinimize = new System.Windows.Forms.Button
-                    {
-                        Text = "Minimize",
-                        DialogResult = DialogResult.Ignore,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10),
-                        BackColor = Color.White
-                    };
-
-                    var btnCancel = new System.Windows.Forms.Button
-                    {
-                        Text = "Cancel",
-                        DialogResult = DialogResult.Cancel,
-                        Width = 100,
-                        Height = 36,
-                        Font = new Font("Segoe UI", 10),
-                        BackColor = Color.White
-                    };
+                    var btnExit = CreateDialogButton("Exit", DialogResult.Yes, true);
+                    var btnMinimize = CreateDialogButton("Minimize", DialogResult.Ignore);
+                    var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
 
                     var buttonPanel = new FlowLayoutPanel
                     {
@@ -5825,6 +5711,24 @@ document.addEventListener('DOMContentLoaded', () => {
             return projectConfig?.SortingField ?? "summary";
         }
 
+        #endregion
+
+        #region GUI Components
+        // Helper to create a standardized button
+        private System.Windows.Forms.Button CreateDialogButton(string text, DialogResult result, bool isPrimary = false)
+        {
+            return new System.Windows.Forms.Button
+            {
+                Text = text,
+                DialogResult = result,
+                Width = 100,
+                Height = 40,
+                Font = isPrimary ? new Font("Segoe UI", 10, FontStyle.Bold) : new Font("Segoe UI", 10),
+                BackColor = Color.White,
+                Anchor = AnchorStyles.None,
+                Margin = new Padding(10, 0, 0, 0)
+            };
+        }
         #endregion
     }
 

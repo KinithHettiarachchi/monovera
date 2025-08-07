@@ -993,7 +993,7 @@ section img {
 
 	.recent-updates li {
 		margin-bottom: 8px;
-		font-size: 1em;
+		font-size: 0.8em;
 		text-align: left;
 		padding-left: 10px;
 	}
@@ -1195,3 +1195,86 @@ section,
 			border-width: 0 2px 2px 0;
 			transform: rotate(45deg);
 		}
+
+.filter-panel {
+	min-width: 220px;
+	max-width: 100%;
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-bottom: 4px;
+	background: #f5faff;
+	border-radius: 10px;
+	box-shadow: 0 2px 8px rgba(0,64,128,0.06);
+	margin-bottom: 12px;
+}
+
+	.filter-panel > div[id$='checkboxes'] {
+		display: flex;
+		flex-direction: row;
+		gap: 18px;
+		min-width: 180px;
+		padding: 8px 0 8px 4px;
+	}
+
+	.filter-panel label {
+		display: flex;
+		align-items: center;
+		white-space: nowrap;
+		font-size: 1em;
+		font-weight: 500;
+		color: #1565c0;
+		background: none;
+		margin: 0;
+		padding: 0 8px 0 0;
+		cursor: pointer;
+	}
+
+#floating-filter-container {
+	position: fixed;
+	top: -300px;
+	left: 0;
+	width: 100%;
+	background: #ffffff;
+	box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+	z-index: 9999;
+	transition: top 0.3s ease;
+	padding: 16px 24px;
+	box-sizing: border-box;
+	border-bottom: 1px solid #ddd;
+}
+
+.filter-panel {
+	width: 100%;
+	overflow-x: auto;
+	padding-bottom: 8px;
+	margin-bottom: 16px;
+}
+
+.filter-panel-title {
+	font-weight: 600;
+	color: #1565c0;
+	margin-bottom: 8px;
+}
+
+.checkbox-container {
+	display: flex;
+	flex-direction: row;
+	gap: 12px;
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+#show-filter-btn {
+	position: fixed;
+	top: 16px;
+	right: 16px;
+	z-index: 10000;
+	background: #1565c0;
+	color: white;
+	border: none;
+	padding: 6px 16px;
+	font-size: 14px;
+	cursor: pointer;
+	border-radius: 6px;
+	box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
