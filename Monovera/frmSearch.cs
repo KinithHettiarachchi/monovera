@@ -71,6 +71,25 @@ namespace Monovera
             webViewResults.EnsureCoreWebView2Async().ContinueWith(_ =>
             {
                 webViewResults.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
+                // Show welcome message on first open
+                webViewResults.Invoke(() =>
+                {
+                    webViewResults.NavigateToString($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <link rel='stylesheet' href='{frmMain.cssHref}' />
+</head>
+<body style=""margin:0; display:flex; align-items:center; justify-content:center; height:100vh; background-color:white;"">
+  <h2 style=""color:grey; font-size:2.5em; font-family:Segoe UI, sans-serif; text-align:center;"">
+    🙂 Ready… set… search!
+  </h2>
+</body>
+</html>");
+                });
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
             // Focus search box when dialog is shown
@@ -79,6 +98,7 @@ namespace Monovera
                 if (this.Visible)
                     txtSearch.Focus();
             };
+
         }
 
         private void ChkJQL_CheckedChanged(object sender, EventArgs e)
@@ -233,10 +253,6 @@ namespace Monovera
                 return;
             }
 
-            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
-            File.WriteAllText(htmlFilePath, frmMain.HTML_LOADINGPAGE);
-            webViewResults.CoreWebView2.Navigate(htmlFilePath);
-
             string queryKey = query.ToUpperInvariant();
 
             // If the query matches a local issue key, select it in the tree and close dialog
@@ -246,6 +262,10 @@ namespace Monovera
                 this.Hide();
                 return;
             }
+
+            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+            File.WriteAllText(htmlFilePath, frmMain.HTML_LOADINGPAGE);
+            webViewResults.CoreWebView2.Navigate(htmlFilePath);
 
             // --- Progress UI setup ---
             pbProgress.Visible = true;
@@ -290,21 +310,54 @@ namespace Monovera
             lblProgress.Text = "Searching...";
             System.Windows.Forms.Application.DoEvents();
 
-            var matches = await SearchJiraIssues(jql, new Progress<(int, int)>(p =>
+            try
             {
-                lblProgress.Invoke(() => lblProgress.Text = $"Loading {p.Item1} / {p.Item2}");
-                pbProgress.Invoke(() =>
+                var matches = await SearchJiraIssues(jql, new Progress<(int, int)>(p =>
                 {
-                    pbProgress.Style = ProgressBarStyle.Blocks;
-                    pbProgress.Maximum = p.Item2;
-                    pbProgress.Value = Math.Min(p.Item1, p.Item2);
-                });
-            }));
+                    lblProgress.Invoke(() => lblProgress.Text = $"Loading {p.Item1} / {p.Item2}");
+                    pbProgress.Invoke(() =>
+                    {
+                        pbProgress.Style = ProgressBarStyle.Blocks;
+                        pbProgress.Maximum = p.Item2;
+                        pbProgress.Value = Math.Min(p.Item1, p.Item2);
+                    });
+                }));
 
-            pbProgress.Visible = false;
-            lblProgress.Visible = false;
+                pbProgress.Visible = false;
+                lblProgress.Visible = false;
 
-            ShowResults(matches, query);
+                ShowResults(matches, query, chkJQL.Checked);
+            }
+            catch (Exception ex)
+            {
+                pbProgress.Visible = false;
+                lblProgress.Visible = false;
+
+                webViewResults.NavigateToString($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <link rel='stylesheet' href='{frmMain.cssHref}' />
+</head>
+<body style=""margin:0; display:flex; align-items:center; justify-content:center; height:100vh; background-color:white;"">
+  <div style=""text-align:center;"">
+    <h2 style=""color:#b71c1c; font-size:2.2em; font-family:Segoe UI, sans-serif;"">
+      😢 Whoops! A little glitch in the matrix. Try again?
+    </h2>
+    <p style=""color:#444; font-size:1.2em; max-width:600px; margin:0 auto 1em auto;"">
+      The Jira search could not be completed.<br>
+      Please check your connection/query and try again.
+    </p>
+    <details style=""margin-top:1em;"">
+      <summary style=""cursor:pointer; color:#b71c1c;"">Show error details</summary>
+      <pre style=""color:#b71c1c; background:#fbe9e7; padding:1em; border-radius:6px; font-size:1em;"">{System.Net.WebUtility.HtmlEncode(ex.Message)}</pre>
+    </details>
+  </div>
+</body>
+</html>");
+            }
         }
 
         public static async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
@@ -370,7 +423,9 @@ namespace Monovera
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Jira search failed: " + ex.Message);
+                throw new Exception("The Jira search could not be completed. " +
+                    "Please check your connection/query and try again.\n\n" +
+                    "Error details: " + ex.Message, ex);
             }
 
             return list;
@@ -382,20 +437,18 @@ namespace Monovera
         /// </summary>
         /// <param name="issues">List of JiraIssueDto results.</param>
         /// <param name="query">Search query string.</param>
-        private void ShowResults(List<JiraIssueDto> issues, string query)
+        private void ShowResults(List<JiraIssueDto> issues, string query, bool isJqlMode = false)
         {
             var matchedTitle = new StringBuilder();
             var matchedDesc = new StringBuilder();
             bool hasQuery = !string.IsNullOrWhiteSpace(query);
 
-            // Group results by title and description match
             foreach (var issue in issues)
             {
                 string key = issue.Key;
                 string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
                 string iconPath = "";
 
-                // Get icon for issue type
                 string typeIconKey = frmMain.GetIconForType(issue.Type);
                 if (!string.IsNullOrEmpty(typeIconKey) && typeIcons.TryGetValue(typeIconKey, out var fileName))
                 {
@@ -408,35 +461,55 @@ namespace Monovera
                             string base64 = Convert.ToBase64String(bytes);
                             iconPath = $"<img src='data:image/png;base64,{base64}' width='28' height='28' style='vertical-align:middle;margin-right:8px;' />";
                         }
-                        catch
-                        {
-                            // fallback silently
-                        }
+                        catch { }
                     }
                 }
 
                 string htmlLink = $"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath}{summary} [{key}]</a></td></tr>";
 
-                if (!hasQuery)
+                if (isJqlMode)
+                {
+                    matchedTitle.AppendLine(htmlLink); // Use matchedTitle as the single section
+                }
+                else if (!hasQuery)
+                {
                     matchedTitle.AppendLine(htmlLink);
+                }
                 else if (summary.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
                     matchedTitle.AppendLine(htmlLink);
+                }
                 else
+                {
                     matchedDesc.AppendLine(htmlLink);
+                }
             }
 
             // If nothing matched, show a message
             if (matchedTitle.Length == 0 && matchedDesc.Length == 0)
             {
-                webViewResults.NavigateToString(@"
-        <html><body style='font-family:Segoe UI;padding:30px;font-size:18px;color:#444;'>
-        <h3>Nothing was found!</h3>
-        </body></html>");
+                webViewResults.NavigateToString($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <link rel='stylesheet' href='{frmMain.cssHref}' />
+</head>
+<body style=""margin:0; display:flex; align-items:center; justify-content:center; height:100vh; background-color:white;"">
+  <h2 style=""color:grey; font-size:2.5em; font-family:Segoe UI, sans-serif; text-align:center;"">
+    🤔 No luck. Search again?
+  </h2>
+</body>
+</html>");
                 return;
             }
 
             // Build HTML for results
-            string html = $@"
+            string html;
+            if (isJqlMode)
+            {
+                html = $@"
 <!DOCTYPE html>
 <html>
 <head>
@@ -446,15 +519,9 @@ namespace Monovera
 </head>
 <body>
   <details open>
-    <summary>{(hasQuery ? "Matched by Title" : "Results")}</summary>
+    <summary>Search Results</summary>
     <section><table>{matchedTitle}</table></section>
   </details>
-  {(hasQuery ? $@"
-  <details>
-    <summary>Matched by Description</summary>
-    <section><table>{matchedDesc}</table></section>
-  </details>" : "")}
-
   <script>
     document.querySelectorAll('a').forEach(link => {{
       link.addEventListener('click', e => {{
@@ -467,26 +534,84 @@ namespace Monovera
   </script>
 </body>
 </html>";
+            }
+            else
+            {
+                var sections = new StringBuilder();
+                if (matchedTitle.Length > 0)
+                {
+                    sections.Append($@"
+  <details open>
+    <summary>Matched by Title</summary>
+    <section><table>{matchedTitle}</table></section>
+  </details>");
+                }
+                if (matchedDesc.Length > 0)
+                {
+                    sections.Append($@"
+  <details>
+    <summary>Matched by Description</summary>
+    <section><table>{matchedDesc}</table></section>
+  </details>");
+                }
+
+                html = $@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+ <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+ <link rel='stylesheet' href='{frmMain.cssHref}' />
+</head>
+<body>
+{sections}
+  <script>
+    document.querySelectorAll('a').forEach(link => {{
+      link.addEventListener('click', e => {{
+        e.preventDefault();
+        const key = link.dataset.key;
+        if (key && window.chrome?.webview)
+          window.chrome.webview.postMessage(key);
+      }});
+    }});
+  </script>
+</body>
+</html>";
+            }
 
             try
             {
-                // Write HTML to temp file and navigate WebView2 to it
                 string tempFilePath = Path.Combine(Path.GetTempPath(), "monovera_results.html");
                 File.WriteAllText(tempFilePath, html);
                 webViewResults.CoreWebView2.Navigate(tempFilePath);
             }
             catch (Exception ex)
             {
-                // Optionally log the error for debugging
                 Debug.WriteLine("NavigateToString error: " + ex.Message);
-
-                // Show user-friendly message
-                MessageBox.Show(
-                    $"Result list is too long to show.\nPlease filter your results to get more specific results.\n\n{ex.Message}",
-                    "Too Many Results!",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
+                webViewResults.NavigateToString($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet'>
+  <link rel='stylesheet' href='{frmMain.cssHref}' />
+</head>
+<body style=""margin:0; display:flex; align-items:center; justify-content:center; height:100vh; background-color:white;"">
+  <div style=""text-align:center;"">
+    <h2 style=""color:#b71c1c; font-size:2.2em; font-family:Segoe UI, sans-serif;"">
+      ⚠️ Unable to display results
+    </h2>
+    <p style=""color:#444; font-size:1.2em; max-width:600px; margin:0 auto 1em auto;"">
+      The result list is too long or there was an error rendering the results.<br>
+      Please filter your search to get more specific results.
+    </p>
+    <details style=""margin-top:1em;"">
+      <summary style=""cursor:pointer; color:#b71c1c;"">Show error details</summary>
+      <pre style=""color:#b71c1c; background:#fbe9e7; padding:1em; border-radius:6px; font-size:1em;"">{System.Net.WebUtility.HtmlEncode(ex.Message)}</pre>
+    </details>
+  </div>
+</body>
+</html>");
             }
         }
 
