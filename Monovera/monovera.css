@@ -1061,11 +1061,11 @@ section,
 }
 
 .recent-update-summary {
-	font-weight: 600;
+	font-weight: normal;
 	color: #1565c0;
-	text-decoration: underline;
+	text-decoration: none;
 	cursor: pointer;
-	font-size: 1.1em;
+	font-size: 1.0em;
 }
 
 .recent-update-tags {
@@ -1082,7 +1082,7 @@ section,
 	padding: 2px 5px;
 	border-radius: 8px;
 	font-size: 0.95em;
-	font-weight: 500;
+	font-weight: normal;
 	white-space: nowrap;
 	max-width: 120px;
 	overflow: hidden;
