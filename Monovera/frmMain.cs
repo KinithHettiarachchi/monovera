@@ -4071,31 +4071,37 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
     </table>
 </div>
 
-<div id=""diffBackdrop"" class=""diff-backdrop hide""></div>
-<details id=""diffDetails"" class=""diff-overlay"" style=""display:none;"">
-  <summary class=""diff-overlay-summary""></summary>
+<div id='diffBackdrop' class='diff-backdrop hide'></div>
+<details id='diffDetails' class='diff-overlay' style='display:none;'>
+  <summary class='diff-overlay-summary'></summary>
   <section>
-    <div class=""diff-overlay-header"">
-      <h3 id=""diffTitle""></h3>
-      <div class=""diff-close"" onclick=""
-        document.getElementById('diffBackdrop').classList.add('hide');
-        document.getElementById('diffDetails').open = false;
-        document.getElementById('diffDetails').style.display = 'none';
-      "">✖</div>
+    <div class='diff-overlay-header'>
+      <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()'>
+        <span id='diffToggleIcon'>☰</span>
+      </div>
+      <h3 id='diffTitle'></h3>
+    <div class='diff-close' onclick='
+        document.getElementById(""diffBackdrop"").classList.add(""hide"");
+        document.getElementById(""diffDetails"").open = false;
+        document.getElementById(""diffDetails"").style.display = ""none"";
+    '>✖</div>
     </div>
-    <div class=""diff-columns"">
+    <div id='diffSideBySide' class='diff-columns' style='display:none;'>
       <div>
         <h4>Before</h4>
-        <div id=""diffFrom"" class=""diff-content""></div>
+        <div id='diffFrom' class='diff-content'></div>
       </div>
       <div>
         <h4>After</h4>
-        <div id=""diffTo"" class=""diff-content""></div>
+        <div id='diffTo' class='diff-content'></div>
       </div>
+    </div>
+    <div id='diffInline' style='display:block;'>
+      <h4>Difference</h4>
+      <div id='diffInlineContent' class='diff-content'></div>
     </div>
   </section>
 </details>
-
 
 <!-- Custom alert modal -->
 <div id='customAlert' class='custom-alert' style='display:none;'>
@@ -4114,8 +4120,32 @@ function escapeHtml(text) {
                .replace(/'/g, '&#039;');
 }
 
+// --- Diff Overlay Toggle and Rendering Logic ---
+let diffViewMode = 'inline'; // Default view
+
+function toggleDiffView() {
+    diffViewMode = (diffViewMode === 'inline') ? 'side' : 'inline';
+    updateDiffView();
+}
+
+function updateDiffView() {
+    const side = document.getElementById('diffSideBySide');
+    const inline = document.getElementById('diffInline');
+    const icon = document.getElementById('diffToggleIcon');
+    if (diffViewMode === 'inline') {
+        side.style.display = 'none';
+        inline.style.display = 'block';
+        icon.textContent = '☰'; // Inline icon
+    } else {
+        side.style.display = 'flex';
+        inline.style.display = 'none';
+        icon.textContent = '⇄'; // Side-by-side icon
+    }
+}
+
+// Simple word-based diff, returns { htmlFrom, htmlTo, htmlInline }
 function simpleDiffHtml(oldText, newText) {
-    const oldWords = oldText.split(/(\s+|\b)/);  // split by words and spaces
+    const oldWords = oldText.split(/(\s+|\b)/);
     const newWords = newText.split(/(\s+|\b)/);
 
     const dp = Array(oldWords.length + 1).fill(null).map(() =>
@@ -4132,38 +4162,61 @@ function simpleDiffHtml(oldText, newText) {
     }
 
     let i = oldWords.length, j = newWords.length;
-    const fromDiff = [], toDiff = [];
+    const fromDiff = [], toDiff = [], inlineDiff = [];
 
     while (i > 0 && j > 0) {
         if (oldWords[i - 1] === newWords[j - 1]) {
             fromDiff.unshift(escapeHtml(oldWords[i - 1]));
             toDiff.unshift(escapeHtml(newWords[j - 1]));
+            inlineDiff.unshift(escapeHtml(oldWords[i - 1]));
             i--;
             j--;
         } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-            fromDiff.unshift(`<span class='diff-deleted'>${escapeHtml(oldWords[i - 1])}</span>`);
+            fromDiff.unshift('<span class=""diff-deleted"">' + escapeHtml(oldWords[i - 1]) + '</span>');
+            inlineDiff.unshift('<span class=""diff-deleted"">' + escapeHtml(oldWords[i - 1]) + '</span>');
             i--;
         } else {
-            toDiff.unshift(`<span class='diff-added'>${escapeHtml(newWords[j - 1])}</span>`);
+            toDiff.unshift('<span class=""diff-added"">' + escapeHtml(newWords[j - 1]) + '</span>');
+            inlineDiff.unshift('<span class=""diff-added"">' + escapeHtml(newWords[j - 1]) + '</span>');
             j--;
         }
     }
-
     while (i > 0) {
-        fromDiff.unshift(`<span class='diff-deleted'>${escapeHtml(oldWords[i - 1])}</span>`);
+        fromDiff.unshift('<span class=""diff-deleted"">' + escapeHtml(oldWords[i - 1]) + '</span>');
+        inlineDiff.unshift('<span class=""diff-deleted"">' + escapeHtml(oldWords[i - 1]) + '</span>');
         i--;
     }
     while (j > 0) {
-        toDiff.unshift(`<span class='diff-added'>${escapeHtml(newWords[j - 1])}</span>`);
+        toDiff.unshift('<span class=""diff-added"">' + escapeHtml(newWords[j - 1]) + '</span>');
+        inlineDiff.unshift('<span class=""diff-added"">' + escapeHtml(newWords[j - 1]) + '</span>');
         j--;
     }
 
     return {
         htmlFrom: fromDiff.join(''),
-        htmlTo: toDiff.join('')
+        htmlTo: toDiff.join(''),
+        htmlInline: inlineDiff.join('')
     };
 }
 
+// --- Main Diff Overlay Show Function ---
+function showDiffOverlay(field, from, to) {
+    const diffs = simpleDiffHtml(from, to);
+
+    // Always update both views
+    document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
+    document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
+    document.getElementById('diffInlineContent').innerHTML = diffs.htmlInline.replace(/\n/g, '<br>');
+
+    document.getElementById('diffTitle').innerText = 'Compare ' + field;
+    document.getElementById('diffBackdrop').classList.remove('hide');
+    document.getElementById('diffDetails').open = true;
+    document.getElementById('diffDetails').style.display = 'block';
+
+    // Default to inline view
+    diffViewMode = 'inline';
+    updateDiffView();
+}
 
 function showCustomAlert(message) {
     document.getElementById('customAlertMessage').innerText = message;
@@ -4175,56 +4228,49 @@ function closeCustomAlert() {
 
 function viewSelectedDiff() {
     const checks = Array.from(document.querySelectorAll('.compare-check:checked'));
-
     if (checks.length === 1) {
         const c = checks[0];
         const field = c.dataset.field;
         let from = c.dataset.from;
         let to = c.dataset.to;
-
         from = from.replace(/\\n/g, '\n');
         to = to.replace(/\\n/g, '\n');
-
-        const diffs = simpleDiffHtml(from, to);
-        document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
-        document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
-        document.getElementById('diffTitle').innerText = `Compare ${field}`;
-        document.getElementById('diffBackdrop').classList.remove('hide');
-        document.getElementById('diffDetails').open = true;
-        document.getElementById('diffDetails').style.display = 'block';;
-    }
-    else if (checks.length === 2) {
+        showDiffOverlay(field, from, to);
+    } else if (checks.length === 2) {
         const [c1, c2] = checks;
         const field1 = c1.dataset.field;
         const field2 = c2.dataset.field;
-
         if (field1 !== field2) {
             showCustomAlert('Selected rows must be of the same type to compare.');
             return;
         }
-
         const changeId1 = parseInt(c1.value);
         const changeId2 = parseInt(c2.value);
-
         const older = changeId1 < changeId2 ? c1 : c2;
         const newer = changeId1 > changeId2 ? c1 : c2;
-
         let newerTo = older.dataset.to.replace(/\\n/g, '\n');
         let olderFrom = newer.dataset.from.replace(/\\n/g, '\n');
-
-        const diffs = simpleDiffHtml(olderFrom, newerTo);
-
-        document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
-        document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
-        document.getElementById('diffTitle').innerText = `Compare ${field1}`;
-        document.getElementById('diffBackdrop').classList.remove('hide');
-        document.getElementById('diffDetails').open = true;
-        document.getElementById('diffDetails').style.display = 'block';
-    }
-    else {
+        showDiffOverlay(field1, olderFrom, newerTo);
+    } else {
         showCustomAlert('Select one or two rows to view changes.');
     }
 }
+
+// --- Close overlay on backdrop click (optional) ---
+document.getElementById('diffBackdrop').addEventListener('click', function() {
+    document.getElementById('diffBackdrop').classList.add('hide');
+    document.getElementById('diffDetails').open = false;
+    document.getElementById('diffDetails').style.display = 'none';
+});
+
+// --- Keyboard ESC to close overlay (optional) ---
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        document.getElementById('diffBackdrop').classList.add('hide');
+        document.getElementById('diffDetails').open = false;
+        document.getElementById('diffDetails').style.display = 'none';
+    }
+});
 
 function applyFilters() {
     const date = document.getElementById('filterDate').value;
