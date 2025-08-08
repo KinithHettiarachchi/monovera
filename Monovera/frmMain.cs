@@ -1892,7 +1892,7 @@ namespace Monovera
 
                 var result = DialogReportConfirmation.ShowDialog(this);
 
-                if (result != DialogResult.Yes)
+                if (result != DialogResult.OK)
                     return;
 
                 // Show progress UI

@@ -63,7 +63,10 @@ namespace Monovera
             // Attach search box and button handlers
             txtSearch.KeyDown += TxtSearch_KeyDown;
             btnSearch.Click += BtnSearch_Click;
-            
+
+
+            chkJQL.CheckedChanged += ChkJQL_CheckedChanged;
+
             // Initialize WebView2 and attach message handler
             webViewResults.EnsureCoreWebView2Async().ContinueWith(_ =>
             {
@@ -76,6 +79,32 @@ namespace Monovera
                 if (this.Visible)
                     txtSearch.Focus();
             };
+        }
+
+        private void ChkJQL_CheckedChanged(object sender, EventArgs e)
+        {
+            bool jqlMode = chkJQL.Checked;
+
+            // Hide or show labels and dropdowns
+            lblType.Visible = !jqlMode;
+            lblStatus.Visible = !jqlMode;
+            cmbType.Visible = !jqlMode;
+            cmbStatus.Visible = !jqlMode;
+            cmbProject.Visible = !jqlMode;
+            lblProject.Visible = !jqlMode;
+            txtSearch.Clear();
+
+            // Resize txtSearch to the end of the status dropdown
+            if (jqlMode)
+            {
+                txtSearch.Width = cmbStatus.Right - txtSearch.Left;
+                txtSearch.PlaceholderText = "Enter JQL...";
+            }
+            else
+            {
+                txtSearch.Width = lblProject.Left - txtSearch.Left -5;
+                txtSearch.PlaceholderText = "Enter issue key or search text...";
+            }
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)
@@ -194,16 +223,21 @@ namespace Monovera
         /// </summary>
         private async void BtnSearch_Click(object sender, EventArgs e)
         {
+            string query = txtSearch.Text.Trim();
+
+            if (chkJQL.Checked)
+            {
+                // Use the entered JQL as-is
+                string jql = query;
+                await DoJiraSearch(jql, query);
+                return;
+            }
+
             string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
             File.WriteAllText(htmlFilePath, frmMain.HTML_LOADINGPAGE);
             webViewResults.CoreWebView2.Navigate(htmlFilePath);
 
-            string query = txtSearch.Text.Trim();
             string queryKey = query.ToUpperInvariant();
-
-            string selectedProject = cmbProject.SelectedItem?.ToString() ?? "All";
-            string selectedType = cmbType.SelectedItem?.ToString() ?? "All";
-            string selectedStatus = cmbStatus.SelectedItem?.ToString() ?? "All";
 
             // If the query matches a local issue key, select it in the tree and close dialog
             if (!string.IsNullOrWhiteSpace(queryKey) && issueDict.ContainsKey(queryKey))
@@ -220,8 +254,12 @@ namespace Monovera
             lblProgress.Text = "Searching...";
             System.Windows.Forms.Application.DoEvents(); // Let UI render the progress state
 
-            // Build JQL filters based on UI selections
+            // Build JQL filters based on UI selections as before
             List<string> jqlFilters = new();
+            string selectedProject = cmbProject.SelectedItem?.ToString() ?? "All";
+            string selectedType = cmbType.SelectedItem?.ToString() ?? "All";
+            string selectedStatus = cmbStatus.SelectedItem?.ToString() ?? "All";
+
             if (selectedProject == "All")
                 jqlFilters.Add($"({string.Join(" OR ", projectList.Select(p => $"project = \"{p}\""))})");
             else
@@ -236,9 +274,22 @@ namespace Monovera
             if (selectedStatus != "All")
                 jqlFilters.Add($"status = \"{selectedStatus}\"");
 
-            string jql = $"{string.Join(" AND ", jqlFilters)} ORDER BY key ASC";
+            string normalJql = $"{string.Join(" AND ", jqlFilters)} ORDER BY key ASC";
+            await DoJiraSearch(normalJql, query);
+        }
 
-            // Perform Jira search and report progress
+        private async Task DoJiraSearch(string jql, string query)
+        {
+            string htmlFilePath = Path.Combine(tempFolder, $"HTML_LOADINGPAGE.html");
+            File.WriteAllText(htmlFilePath, frmMain.HTML_LOADINGPAGE);
+            webViewResults.CoreWebView2.Navigate(htmlFilePath);
+
+            pbProgress.Visible = true;
+            lblProgress.Visible = true;
+            pbProgress.Style = ProgressBarStyle.Marquee;
+            lblProgress.Text = "Searching...";
+            System.Windows.Forms.Application.DoEvents();
+
             var matches = await SearchJiraIssues(jql, new Progress<(int, int)>(p =>
             {
                 lblProgress.Invoke(() => lblProgress.Text = $"Loading {p.Item1} / {p.Item2}");
@@ -253,7 +304,6 @@ namespace Monovera
             pbProgress.Visible = false;
             lblProgress.Visible = false;
 
-            // Display results in WebView2
             ShowResults(matches, query);
         }
 

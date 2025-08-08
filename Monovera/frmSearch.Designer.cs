@@ -33,29 +33,32 @@
             lblStatus = new Label();
             webViewResults = new Microsoft.Web.WebView2.WinForms.WebView2();
             topPanel = new Panel();
+            chkJQL = new CheckBox();
             lblProgress = new Label();
             pbProgress = new ProgressBar();
             cmbProject = new ComboBox();
-            label1 = new Label();
+            lblProject = new Label();
             btnClose = new Button();
+            pnlSearch = new Panel();
             ((System.ComponentModel.ISupportInitialize)webViewResults).BeginInit();
             topPanel.SuspendLayout();
+            pnlSearch.SuspendLayout();
             SuspendLayout();
             // 
             // txtSearch
             // 
             txtSearch.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
             txtSearch.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            txtSearch.Location = new Point(13, 14);
+            txtSearch.Location = new Point(76, 14);
             txtSearch.Name = "txtSearch";
             txtSearch.PlaceholderText = "Enter issue key or search text...";
-            txtSearch.Size = new Size(645, 33);
+            txtSearch.Size = new Size(582, 33);
             txtSearch.TabIndex = 0;
             // 
             // btnSearch
             // 
             btnSearch.Anchor = AnchorStyles.Top;
-            btnSearch.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            btnSearch.Font = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point, 0);
             btnSearch.Location = new Point(1480, 11);
             btnSearch.Name = "btnSearch";
             btnSearch.Size = new Size(113, 37);
@@ -87,23 +90,23 @@
             // 
             lblType.Anchor = AnchorStyles.Top;
             lblType.AutoSize = true;
-            lblType.Font = new Font("Segoe UI", 9F);
-            lblType.Location = new Point(898, 25);
+            lblType.Font = new Font("Segoe UI", 12F);
+            lblType.Location = new Point(894, 20);
             lblType.Name = "lblType";
-            lblType.Size = new Size(35, 15);
+            lblType.Size = new Size(42, 21);
             lblType.TabIndex = 4;
-            lblType.Text = "Type:";
+            lblType.Text = "Type";
             // 
             // lblStatus
             // 
             lblStatus.Anchor = AnchorStyles.Top;
             lblStatus.AutoSize = true;
-            lblStatus.Font = new Font("Segoe UI", 9F);
-            lblStatus.Location = new Point(1200, 26);
+            lblStatus.Font = new Font("Segoe UI", 12F);
+            lblStatus.Location = new Point(1194, 21);
             lblStatus.Name = "lblStatus";
-            lblStatus.Size = new Size(42, 15);
+            lblStatus.Size = new Size(52, 21);
             lblStatus.TabIndex = 5;
-            lblStatus.Text = "Status:";
+            lblStatus.Text = "Status";
             // 
             // webViewResults
             // 
@@ -124,7 +127,7 @@
             topPanel.Controls.Add(lblProgress);
             topPanel.Controls.Add(pbProgress);
             topPanel.Controls.Add(cmbProject);
-            topPanel.Controls.Add(label1);
+            topPanel.Controls.Add(lblProject);
             topPanel.Controls.Add(txtSearch);
             topPanel.Controls.Add(btnSearch);
             topPanel.Controls.Add(cmbType);
@@ -132,11 +135,23 @@
             topPanel.Controls.Add(lblType);
             topPanel.Controls.Add(lblStatus);
             topPanel.Controls.Add(btnClose);
+            topPanel.Controls.Add(pnlSearch);
             topPanel.Dock = DockStyle.Top;
             topPanel.Location = new Point(0, 0);
             topPanel.Name = "topPanel";
             topPanel.Size = new Size(1605, 70);
             topPanel.TabIndex = 1;
+            // 
+            // chkJQL
+            // 
+            chkJQL.AutoSize = true;
+            chkJQL.Font = new Font("Segoe UI", 12F, FontStyle.Regular, GraphicsUnit.Point, 0);
+            chkJQL.Location = new Point(10, 17);
+            chkJQL.Name = "chkJQL";
+            chkJQL.Size = new Size(55, 25);
+            chkJQL.TabIndex = 11;
+            chkJQL.Text = "JQL";
+            chkJQL.UseVisualStyleBackColor = true;
             // 
             // lblProgress
             // 
@@ -159,21 +174,21 @@
             cmbProject.Anchor = AnchorStyles.Top;
             cmbProject.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbProject.Font = new Font("Segoe UI", 14.25F, FontStyle.Regular, GraphicsUnit.Point, 0);
-            cmbProject.Location = new Point(725, 15);
+            cmbProject.Location = new Point(732, 15);
             cmbProject.Name = "cmbProject";
             cmbProject.Size = new Size(141, 33);
             cmbProject.TabIndex = 1;
             // 
-            // label1
+            // lblProject
             // 
-            label1.Anchor = AnchorStyles.Top;
-            label1.AutoSize = true;
-            label1.Font = new Font("Segoe UI", 9F);
-            label1.Location = new Point(672, 25);
-            label1.Name = "label1";
-            label1.Size = new Size(47, 15);
-            label1.TabIndex = 8;
-            label1.Text = "Project:";
+            lblProject.Anchor = AnchorStyles.Top;
+            lblProject.AutoSize = true;
+            lblProject.Font = new Font("Segoe UI", 12F);
+            lblProject.Location = new Point(672, 21);
+            lblProject.Name = "lblProject";
+            lblProject.Size = new Size(58, 21);
+            lblProject.TabIndex = 8;
+            lblProject.Text = "Project";
             // 
             // btnClose
             // 
@@ -185,6 +200,16 @@
             btnClose.TabIndex = 6;
             btnClose.Text = "Close";
             btnClose.UseVisualStyleBackColor = true;
+            // 
+            // pnlSearch
+            // 
+            pnlSearch.BorderStyle = BorderStyle.Fixed3D;
+            pnlSearch.Controls.Add(chkJQL);
+            pnlSearch.Dock = DockStyle.Fill;
+            pnlSearch.Location = new Point(0, 0);
+            pnlSearch.Name = "pnlSearch";
+            pnlSearch.Size = new Size(1605, 70);
+            pnlSearch.TabIndex = 12;
             // 
             // frmSearch
             // 
@@ -200,17 +225,21 @@
             MinimizeBox = false;
             MinimumSize = new Size(600, 400);
             Name = "frmSearch";
-            Opacity = 0.9D;
+            Opacity = 0.95D;
             StartPosition = FormStartPosition.CenterScreen;
             Text = "S E A R C H";
             ((System.ComponentModel.ISupportInitialize)webViewResults).EndInit();
             topPanel.ResumeLayout(false);
             topPanel.PerformLayout();
+            pnlSearch.ResumeLayout(false);
+            pnlSearch.PerformLayout();
             ResumeLayout(false);
         }
         private ComboBox cmbProject;
-        private Label label1;
+        private Label lblProject;
         private ProgressBar pbProgress;
         private Label lblProgress;
+        private CheckBox chkJQL;
+        private Panel pnlSearch;
     }
 }
