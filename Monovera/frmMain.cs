@@ -4070,25 +4070,32 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
         </tbody>
     </table>
 </div>
-<details id=""diffDetails"" style=""display:none;"">
-  <summary style=""font-size:1.2em; font-weight:600; color:#1565c0; cursor:pointer;"">Difference</summary>
+
+<div id=""diffBackdrop"" class=""diff-backdrop hide""></div>
+<details id=""diffDetails"" class=""diff-overlay"" style=""display:none;"">
+  <summary class=""diff-overlay-summary""></summary>
   <section>
-    <div class=""diff-overlay-header"" style=""display:flex;align-items:center;justify-content:space-between;gap:12px;"">
-      <h3 id=""diffTitle"" style=""margin:0;""></h3>
-      <div class=""diff-close"" style=""cursor:pointer;font-size:1.5em;"" onclick=""const d=document.getElementById('diffDetails');d.open=false;d.style.display='none'"">✖</div>
+    <div class=""diff-overlay-header"">
+      <h3 id=""diffTitle""></h3>
+      <div class=""diff-close"" onclick=""
+        document.getElementById('diffBackdrop').classList.add('hide');
+        document.getElementById('diffDetails').open = false;
+        document.getElementById('diffDetails').style.display = 'none';
+      "">✖</div>
     </div>
-    <div class=""diff-columns"" style=""display:flex;gap:32px;margin-top:18px;"">
-      <div style=""flex:1;"">
-        <h4 style=""margin-bottom:8px;"">Older Version</h4>
-        <div id=""diffFrom"" class=""diff-content"" style=""background:#f5f5f5;padding:12px;border-radius:6px;min-height:80px;""></div>
+    <div class=""diff-columns"">
+      <div>
+        <h4>Before</h4>
+        <div id=""diffFrom"" class=""diff-content""></div>
       </div>
-      <div style=""flex:1;"">
-        <h4 style=""margin-bottom:8px;"">New Version</h4>
-        <div id=""diffTo"" class=""diff-content"" style=""background:#f5f5f5;padding:12px;border-radius:6px;min-height:80px;""></div>
+      <div>
+        <h4>After</h4>
+        <div id=""diffTo"" class=""diff-content""></div>
       </div>
     </div>
   </section>
 </details>
+
 
 <!-- Custom alert modal -->
 <div id='customAlert' class='custom-alert' style='display:none;'>
@@ -4182,9 +4189,9 @@ function viewSelectedDiff() {
         document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
         document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
         document.getElementById('diffTitle').innerText = `Compare ${field}`;
-        const details = document.getElementById('diffDetails');
-                        details.open = true;
-                        details.style.display = 'block';
+        document.getElementById('diffBackdrop').classList.remove('hide');
+        document.getElementById('diffDetails').open = true;
+        document.getElementById('diffDetails').style.display = 'block';;
     }
     else if (checks.length === 2) {
         const [c1, c2] = checks;
@@ -4210,7 +4217,9 @@ function viewSelectedDiff() {
         document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
         document.getElementById('diffTo').innerHTML = diffs.htmlTo.replace(/\n/g, '<br>');
         document.getElementById('diffTitle').innerText = `Compare ${field1}`;
-        document.getElementById('diffOverlay').style.display = 'block';
+        document.getElementById('diffBackdrop').classList.remove('hide');
+        document.getElementById('diffDetails').open = true;
+        document.getElementById('diffDetails').style.display = 'block';
     }
     else {
         showCustomAlert('Select one or two rows to view changes.');
