@@ -3824,8 +3824,6 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
             // Now include sortingField in the tuple
             var issues = new List<(string key, string summary, string issueType, string sortingValue, JsonElement issueElem)>();
 
-            sb.AppendLine($"<div class='subsection'><h4>{HttpUtility.HtmlEncode(title)}</h4>");
-
             if (fields.TryGetProperty("issuelinks", out var links))
             {
                 foreach (var link in links.EnumerateArray())
@@ -3916,10 +3914,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
                     tableRows.AppendLine($@"
 <tr>
-    <td style='width:36px;'>{iconImgInner}</td>
-    <td>
+    <td class='confluenceTd'>
         <a href='#' data-key='{HttpUtility.HtmlEncode(i.key)}'>
-            {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}]
+            {iconImgInner} {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}]
         </a>
     </td>
 </tr>");
@@ -3928,20 +3925,49 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
                 if (matchCount > 0)
                 {
-                    sb.AppendLine(@"
-<table style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
-    <tbody>");
+                    sb.AppendLine($@"
+<table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+  <thead>
+    <tr>
+      <th class='confluenceTh' style='width:60px;'>{title}</th>
+    </tr>
+  </thead>
+  <tbody>");
                     sb.Append(tableRows);
                     sb.AppendLine("</tbody></table>");
                 }
                 else
                 {
-                    sb.AppendLine($"<div class='no-links'>No {HttpUtility.HtmlEncode(title)} issues found.</div>");
+                    sb.AppendLine($@"
+<table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+  <thead>
+    <tr>
+      <th class='confluenceTh' style='width:60px;'>{HttpUtility.HtmlEncode(title)}</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class='confluenceTd' style='text-align:left; color:#888;'>{HttpUtility.HtmlEncode($"No {title} issues found.")}</td>
+    </tr>
+  </tbody>
+</table>");
                 }
             }
             else
             {
-                sb.AppendLine($"<div class='no-links'>No {HttpUtility.HtmlEncode(title)} issues found.</div>");
+                sb.AppendLine($@"
+<table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+  <thead>
+    <tr>
+      <th class='confluenceTh' style='width:60px;'>{HttpUtility.HtmlEncode(title)}</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class='confluenceTd' style='text-align:left; color:#888;'>{HttpUtility.HtmlEncode($"No {title} issues found.")}</td>
+    </tr>
+  </tbody>
+</table>");
             }
 
             sb.AppendLine("</div>");
@@ -4028,7 +4054,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </div>
 
 <div class='table-wrap'>
-    <table class='confluenceTable'>
+    <table id='historyTable' class='confluenceTable'>
         <thead>
             <tr>
                 <th class='confluenceTh'></th>
@@ -4191,7 +4217,7 @@ function applyFilters() {
     const user = document.getElementById('filterUser').value.toLowerCase();
     const field = document.getElementById('filterField').value.toLowerCase();
 
-    document.querySelectorAll('.confluenceTable tbody tr').forEach(row => {
+    document.querySelectorAll('#historyTable tbody tr').forEach(row => {
         const matchesDate = !date || row.dataset.date === date;
         const matchesUser = !user || row.dataset.user.toLowerCase() === user;
         const matchesField = !field || row.dataset.field.toLowerCase() === field;
@@ -4204,7 +4230,7 @@ function populateDropdowns() {
     const fieldSet = new Set();
     const dateSet = new Set();
 
-    document.querySelectorAll('.confluenceTable tbody tr').forEach(row => {
+    document.querySelectorAll('#historyTable tbody tr').forEach(row => {
         userSet.add(row.dataset.user);
         fieldSet.add(row.dataset.field);
         dateSet.add(row.dataset.date);
