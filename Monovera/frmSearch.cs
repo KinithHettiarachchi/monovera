@@ -27,6 +27,8 @@ namespace Monovera
     /// </summary>
     public partial class frmSearch : Form
     {
+        private ListBox lstAutoComplete;
+
         /// <summary>
         /// Main constructor. Initializes UI, combo boxes, event handlers, and WebView2.
         /// </summary>
@@ -34,6 +36,36 @@ namespace Monovera
         public frmSearch()
         {
             InitializeComponent();
+
+            lstAutoComplete = new ListBox
+            {
+                Visible = false,
+                Height = 160,
+                Width = this.ClientSize.Width - txtSearch.Left - 16, // initial max width
+                Font = txtSearch.Font
+            };
+            this.Controls.Add(lstAutoComplete);
+            lstAutoComplete.BringToFront();
+            lstAutoComplete.Left = txtSearch.Left;
+            lstAutoComplete.Top = txtSearch.Bottom + 2;
+
+            // Handle selection
+            lstAutoComplete.Click += (s, e) => AcceptAutoComplete();
+            lstAutoComplete.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    AcceptAutoComplete();
+                    e.Handled = true;
+                }
+                else if (e.KeyCode == Keys.Escape)
+                {
+                    lstAutoComplete.Visible = false;
+                    txtSearch.Focus();
+                }
+            };
+
+            txtSearch.TextChanged += TxtSearch_TextChanged;
 
             // Only use Hide, never Close
             btnClose.Click += (s, e) => this.Hide();
@@ -64,6 +96,13 @@ namespace Monovera
             txtSearch.KeyDown += TxtSearch_KeyDown;
             btnSearch.Click += BtnSearch_Click;
 
+            txtSearch.LostFocus += (s, e) =>
+            {
+                // Hide only if focus is not moving to the listbox
+                if (!lstAutoComplete.Focused)
+                    lstAutoComplete.Visible = false;
+            };
+            lstAutoComplete.LostFocus += (s, e) => lstAutoComplete.Visible = false;
 
             chkJQL.CheckedChanged += ChkJQL_CheckedChanged;
 
@@ -101,6 +140,115 @@ namespace Monovera
 
         }
 
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            txtSearch.Focus();
+        }
+
+        private void TxtSearch_TextChanged(object sender, EventArgs e)
+        {
+            if (chkJQL.Checked || string.IsNullOrWhiteSpace(txtSearch.Text))
+            {
+                lstAutoComplete.Visible = false;
+                return;
+            }
+
+            string input = txtSearch.Text.Trim().ToLowerInvariant();
+            var matches = frmMain.issueDtoDict.Values
+                .Where(i => (!string.IsNullOrEmpty(i.Summary) && i.Summary.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0)
+                         || (!string.IsNullOrEmpty(i.Key) && i.Key.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0))
+                .OrderBy(i => i.Summary)
+                .Take(20)
+                .Select(i => $"{i.Summary} [{i.Key}]")
+                .ToList();
+
+            if (matches.Count > 0)
+            {
+                lstAutoComplete.BeginUpdate();
+                lstAutoComplete.Items.Clear();
+                foreach (var m in matches)
+                    lstAutoComplete.Items.Add(m);
+                lstAutoComplete.EndUpdate();
+
+                // Set width up to the right edge of the form (minus a margin)
+                int margin = 16;
+                int maxWidth = this.ClientSize.Width - txtSearch.Left - margin;
+                lstAutoComplete.Width = Math.Max(txtSearch.Width, maxWidth);
+
+                lstAutoComplete.Left = txtSearch.Left;
+                lstAutoComplete.Top = txtSearch.Bottom + 2;
+                lstAutoComplete.Visible = true;
+            }
+            else
+            {
+                lstAutoComplete.Visible = false;
+            }
+        }
+
+        private void AcceptAutoComplete()
+        {
+            if (lstAutoComplete.SelectedItem == null) return;
+            string selected = lstAutoComplete.SelectedItem.ToString();
+            // Extract key from "Summary [KEY]"
+            int lb = selected.LastIndexOf('[');
+            int rb = selected.LastIndexOf(']');
+            if (lb >= 0 && rb > lb)
+            {
+                string key = selected.Substring(lb + 1, rb - lb - 1);
+                SelectNodeByKey(key);
+                this.Hide();
+            }
+            lstAutoComplete.Visible = false;
+        }
+
+        private void TxtSearch_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (lstAutoComplete.Visible)
+            {
+                if (e.KeyCode == Keys.Down)
+                {
+                    if (lstAutoComplete.SelectedIndex < lstAutoComplete.Items.Count - 1)
+                        lstAutoComplete.SelectedIndex++;
+                    e.Handled = true;
+                }
+                else if (e.KeyCode == Keys.Up)
+                {
+                    if (lstAutoComplete.SelectedIndex > 0)
+                        lstAutoComplete.SelectedIndex--;
+                    e.Handled = true;
+                }
+                else if (e.KeyCode == Keys.Enter)
+                {
+                    if (lstAutoComplete.SelectedIndex >= 0)
+                    {
+                        AcceptAutoComplete();
+                    }
+                    else
+                    {
+                        // No selection, trigger search
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        BtnSearch_Click(sender, e);
+                        lstAutoComplete.Visible = false;
+                    }
+                    e.Handled = true;
+                }
+                else if (e.KeyCode == Keys.Escape)
+                {
+                    lstAutoComplete.Visible = false;
+                    e.Handled = true;
+                }
+            }
+            else if (e.KeyCode == Keys.Enter)
+            {
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                BtnSearch_Click(sender, e);
+            }
+        }
+
+
         private void ChkJQL_CheckedChanged(object sender, EventArgs e)
         {
             bool jqlMode = chkJQL.Checked;
@@ -136,20 +284,6 @@ namespace Monovera
                 this.Hide();
             }
             // Otherwise (app is exiting), allow close
-        }
-
-        /// <summary>
-        /// Handles the search box key down event.
-        /// Triggers search when Enter is pressed.
-        /// </summary>
-        private void TxtSearch_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.KeyCode == Keys.Enter)
-            {
-                e.Handled = true;
-                e.SuppressKeyPress = true; // Prevents the ding sound
-                BtnSearch_Click(sender, e); // Trigger search
-            }
         }
 
         /// <summary>
@@ -447,6 +581,7 @@ namespace Monovera
             {
                 string key = issue.Key;
                 string summary = HttpUtility.HtmlEncode(issue.Summary ?? "");
+                string issueType = issue.Type;
                 string iconPath = "";
 
                 string typeIconKey = frmMain.GetIconForType(issue.Type);
@@ -459,13 +594,13 @@ namespace Monovera
                         {
                             byte[] bytes = File.ReadAllBytes(fullPath);
                             string base64 = Convert.ToBase64String(bytes);
-                            iconPath = $"<img src='data:image/png;base64,{base64}' width='28' height='28' style='vertical-align:middle;margin-right:8px;' />";
+                            iconPath = $"<img src='data:image/png;base64,{base64}' width='28' height='28' style='vertical-align:middle;margin-right:8px;' title='{issueType}' />";
                         }
                         catch { }
                     }
                 }
 
-                string htmlLink = $"<tr><td><a href=\"#\" data-key=\"{key}\">{iconPath}{summary} [{key}]</a></td></tr>";
+                string htmlLink = $"<tr><td class='confluenceTd'><a href=\"#\" data-key=\"{key}\">{iconPath}{summary} [{key}]</a></td></tr>";
 
                 if (isJqlMode)
                 {
@@ -520,7 +655,7 @@ namespace Monovera
 <body>
   <details open>
     <summary>Search Results</summary>
-    <section><table>{matchedTitle}</table></section>
+    <section><table class='confluenceTable'>{matchedTitle}</table></section>
   </details>
   <script>
     document.querySelectorAll('a').forEach(link => {{
@@ -543,15 +678,15 @@ namespace Monovera
                     sections.Append($@"
   <details open>
     <summary>Matched by Title</summary>
-    <section><table>{matchedTitle}</table></section>
+    <section><table class='confluenceTable'>{matchedTitle}</table></section>
   </details>");
                 }
                 if (matchedDesc.Length > 0)
                 {
                     sections.Append($@"
-  <details>
+  <details open>
     <summary>Matched by Description</summary>
-    <section><table>{matchedDesc}</table></section>
+    <section><table class='confluenceTable'>{matchedDesc}</table></section>
   </details>");
                 }
 

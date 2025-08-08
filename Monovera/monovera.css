@@ -102,6 +102,7 @@ a {
 	color: #1565c0;
 	text-decoration: none;
 	transition: color 0.2s ease;
+	font-weight: normal;
 }
 
 	a:hover {
