@@ -4096,9 +4096,12 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
         <div id='diffTo' class='diff-content'></div>
       </div>
     </div>
-    <div id='diffInline' style='display:block;'>
-      <h4>Difference</h4>
-      <div id='diffInlineContent' class='diff-content'></div>
+
+    <div id='diffInline' class='diff-columns' style='display:none;'>
+      <div>
+        <h4>Difference</h4>
+        <div id='diffInlineContent' class='diff-content'></div>
+      </div>
     </div>
   </section>
 </details>
