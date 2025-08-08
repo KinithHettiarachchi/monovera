@@ -180,48 +180,6 @@ pre[class*='language-'] {
 	color: #1565c0;
 }
 
-.diff-added {
-	background-color: #dcffe5;
-	color: #00b63d;
-	font-weight: normal;
-	border-radius: 4px;
-	padding: 2px 4px;
-}
-
-.diff-deleted {
-	background-color: #ffebee;
-	color: #e10000;
-	border-radius: 4px;
-	padding: 2px 4px;
-}
-
-.diff-arrow {
-	color: #999;
-	padding: 0 4px;
-}
-
-.view-diff-btn {
-	margin-left: 10px;
-	font-size: 0.9em;
-	cursor: pointer;
-	color: #1565c0;
-}
-
-.diff-overlay {
-	position: fixed;
-	top: 5%;
-	left: 10%;
-	width: 80%;
-	height: 70%;
-	background: #ffffff;
-	border: 2px solid #90caf9;
-	z-index: 9999;
-	overflow: auto;
-	display: none;
-	border-radius: 10px;
-	box-shadow: 0 6px 18px rgba(0, 64, 128, 0.2);
-}
-
 .no-links,
 .no-attachments {
 	padding: 12px;
@@ -1091,7 +1049,8 @@ section,
 }
 
 .diff-overlay section {
-	max-width: 900px;
+	max-width: 90%;
+	max-height: 90vh;
 	margin: 60px auto;
 	background: linear-gradient(135deg, #f5faff 70%, #e3f2fd 100%);
 	border-radius: 14px;
@@ -1164,12 +1123,11 @@ section,
 	min-height: 80px;
 	max-height: 60vh;
 	overflow: auto;
-	font-family: 'IBM Plex Sans', 'Segoe UI', Arial, sans-serif;
+	font-family: 'Courier New', Courier, monospace; /* <-- monospaced font */
 	font-size: 1em;
 	line-height: 1.6;
 	word-break: break-word;
 	box-shadow: 0 2px 8px rgba(33,150,243,0.06);
-
 	color: #1a3c5d;
 }
 
@@ -1177,4 +1135,47 @@ section,
 #diffDetails[open] {
 	background: transparent !important;
 	box-shadow: none !important;
+}
+
+
+.diff-added {
+	background-color: #dcffe5;
+	color: #00b63d;
+	font-weight: normal;
+	border-radius: 4px;
+	padding: 2px 0; /* no left/right padding */
+}
+
+.diff-deleted {
+	background-color: #ffebee;
+	color: #e10000;
+	border-radius: 4px;
+	padding: 2px 0; /* no left/right padding */
+}
+
+.diff-arrow {
+	color: #999;
+	padding: 0 4px;
+}
+
+.view-diff-btn {
+	margin-left: 10px;
+	font-size: 0.9em;
+	cursor: pointer;
+	color: #1565c0;
+}
+
+.diff-overlay {
+	position: fixed;
+	top: 5%;
+	left: 10%;
+	width: 80%;
+	height: 70%;
+	background: #ffffff;
+	border: 2px solid #90caf9;
+	z-index: 9999;
+	overflow: auto;
+	display: none;
+	border-radius: 10px;
+	box-shadow: 0 6px 18px rgba(0, 64, 128, 0.2);
 }
