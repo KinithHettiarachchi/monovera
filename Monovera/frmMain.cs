@@ -13,6 +13,7 @@ using System.Globalization;
 using System.IO.Packaging;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.InteropServices;
 using System.Security.Policy;
 using System.Text;
 using System.Text.Json;
@@ -70,7 +71,7 @@ namespace Monovera
         public static string root_key = "";
         /// <summary>List of Jira project keys loaded from configuration.</summary>
         public static List<string> projectList = new();
-        
+
         private List<TreeNode> rootNodeList = new();
 
         private bool isNavigatingToNode = false;
@@ -98,6 +99,8 @@ namespace Monovera
         public static string HTML_LOADINGPAGE = "";
 
         private frmSearch frmSearchInstance;
+        private frmAITestCases frmAITestCasesInstance;
+
         private Image tabDetailsBackgroundImage;
 
         string focustToTreeJS = @"
@@ -399,7 +402,7 @@ namespace Monovera
             mnuSearch.Image = GetImageFromImagesFolder("Search.png");
             mnuReport.Image = GetImageFromImagesFolder("GenerateReport.png");
             mnuRead.Image = GetImageFromImagesFolder("Read.png");
-            mnuRecentUpdates.Image= GetImageFromImagesFolder("Monovera.png");  
+            mnuRecentUpdates.Image = GetImageFromImagesFolder("Monovera.png");
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -511,7 +514,7 @@ namespace Monovera
             if (rootKeys.Contains(nodeToMove.Tag?.ToString()))
                 return;
 
-            // Custom confirmation dialog (unchanged)
+            // Custom confirmation DialogAITestCases (unchanged)
             var DialogMoveConfirm = new Form
             {
                 Text = "Confirm Parent Change",
@@ -740,7 +743,7 @@ namespace Monovera
             if (newIndex < 0 || newIndex >= siblings.Count)
                 return;
 
-            // Show confirmation dialog before moving
+            // Show confirmation DialogAITestCases before moving
             using (var DialogMoveConfirmation = new Form
             {
                 Text = direction < 0 ? "Confirm Move Up" : "Confirm Move Down",
@@ -772,7 +775,7 @@ namespace Monovera
                     Padding = new Padding(0, 10, 0, 10)
                 };
 
-                var btnMove = CreateDialogButton(direction < 0 ? "Move Up" : "Move Down", DialogResult.Yes,true);
+                var btnMove = CreateDialogButton(direction < 0 ? "Move Up" : "Move Down", DialogResult.Yes, true);
                 var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
 
                 var buttonPanel = new FlowLayoutPanel
@@ -827,7 +830,7 @@ namespace Monovera
                                             "💡 M O N O V E R A Tips!",
                                             "💡 Ctrl + Click a tree node to reload detail",
                                             "💡 Right Click a tree node to get context menu",
-                                            "💡 Ctrl + Q = Open search dialog",
+                                            "💡 Ctrl + Q = Open search DialogAITestCases",
                                             "💡 Ctrl + P = Generate report",
                                             "💡 Ctrl + R = Read selected text aloud",
                                             "💡 For all shortcuts, press after clicking tree area"
@@ -1231,7 +1234,7 @@ namespace Monovera
                     AddKeysToGrid(txtInput.Text);
                     txtInput.Clear();
                     e.SuppressKeyPress = true;
-                    e.Handled = true; // Prevent dialog from closing
+                    e.Handled = true; // Prevent DialogAITestCases from closing
                 }
             };
 
@@ -1273,7 +1276,7 @@ namespace Monovera
 
             var btnLink = CreateDialogButton("Link", DialogResult.OK, true);
             var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
-          
+
             buttonPanel.Controls.Add(btnLink);
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 0, 3);
@@ -1338,7 +1341,7 @@ namespace Monovera
                 }
                 CollectKeys(tree.Nodes);
 
-                // Get mouse position for dialog
+                // Get mouse position for DialogAITestCases
                 Point menuLocation = tree.PointToClient(treeContextMenu.Bounds.Location);
 
                 using (var DialogChangeParentMenu = new Form())
@@ -1574,7 +1577,7 @@ namespace Monovera
             // Prepare issue types for dropdown
             var issueTypes = projectConfig.Types.Keys.ToList();
 
-            // Create dialog
+            // Create DialogAITestCases
             var DialogCreateIssue = new Form
             {
                 Text = $"Add {mode.ToLower()} node to {baseKey}",
@@ -1687,7 +1690,7 @@ namespace Monovera
 
             var btnCreate = CreateDialogButton("Create", DialogResult.OK, true);
             var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
-            
+
             buttonPanel.Controls.Add(btnCreate);
             buttonPanel.Controls.Add(btnCancel);
             layout.Controls.Add(buttonPanel, 1, 4);
@@ -1718,7 +1721,7 @@ namespace Monovera
 
                 if (!string.IsNullOrWhiteSpace(newIssueKey))
                 {
-                    // Immediately open the created issue in the Edit dialog
+                    // Immediately open the created issue in the Edit DialogAITestCases
                     await Task.Delay(500); // Optional: give Jira a moment to process
                     EditCurrentIssue(newIssueKey, summary);
                 }
@@ -1772,7 +1775,7 @@ namespace Monovera
                         lastTreeMouseButton = MouseButtons.Left;
                         await Tree_AfterSelect_Internal(tree, new TreeViewEventArgs(node), true);
                     }
-                    tree.Focus(); // <-- Always focus tree after dialog closes
+                    tree.Focus(); // <-- Always focus tree after DialogAITestCases closes
                 };
 
                 DialogEditIssue.ShowDialog(this);
@@ -1798,7 +1801,7 @@ namespace Monovera
         }
 
         /// <summary>
-        /// Displays the search dialog for the tree view, allowing users to search for issues.
+        /// Displays the search DialogAITestCases for the tree view, allowing users to search for issues.
         /// </summary>
         /// <param name="tree">The tree view to search within.</param>
         private void ShowSearchDialog()
@@ -1819,7 +1822,7 @@ namespace Monovera
         {
             if (tree.SelectedNode?.Tag is string rootKey)
             {
-                // Custom confirmation dialog (similar to OnFormClosing)
+                // Custom confirmation DialogAITestCases (similar to OnFormClosing)
                 var DialogReportConfirmation = new Form
                 {
                     Text = $"Generate Report for {rootKey}",
@@ -1866,7 +1869,7 @@ namespace Monovera
 
                 var btnGenerate = CreateDialogButton("Generate", DialogResult.OK, true);
                 var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
-                
+
                 var buttonPanel = new FlowLayoutPanel
                 {
                     FlowDirection = FlowDirection.RightToLeft,
@@ -2589,7 +2592,7 @@ namespace Monovera
             // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync(false);
 
-   
+
         }
 
         /// <summary>
@@ -4827,7 +4830,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     summary = issue.Summary;
                     issueType = issue.Type;
                     icon = GetIconForType(issueType); // returns image URL or base64 string
-                }else if (!string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issueRertry))
+                }
+                else if (!string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issueRertry))
                 {
                     summary = issueRertry.Summary;
                     issueType = issueRertry.Type;
@@ -4984,7 +4988,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Step 2: Handle wiki-style links and smart-link anchors
             var REGEX_FONT_WRAPPED_LINK = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
             var REGEX_ANCHOR_WRAPPED_LINK = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            var REGEX_SMART_LINK = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>.*?smart-link\s*\[\k<key>\]\s*</a>",RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            var REGEX_SMART_LINK = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>.*?smart-link\s*\[\k<key>\]\s*</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
             var targetNodes = doc.DocumentNode
                                             .SelectNodes("//*")
@@ -5113,8 +5117,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 else
                 {
-                    if (!key.ToLower().StartsWith("recent updates") 
-                        && !key.ToLower().StartsWith("welcome to") 
+                    if (!key.ToLower().StartsWith("recent updates")
+                        && !key.ToLower().StartsWith("welcome to")
                         && !key.ToLower().ToLower().StartsWith("__tree_focus__")
                         && !key.ToLower().ToLower().StartsWith("__keep_webview_focus__"))
                     {
@@ -5356,7 +5360,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         /// <summary>
-        /// Launches the configuration form as a modal dialog, centered on the parent form.
+        /// Launches the configuration form as a modal DialogAITestCases, centered on the parent form.
         /// Allows the user to view and edit Jira and project configuration settings.
         /// </summary>
         private void LaunchConfigForm()
@@ -5425,7 +5429,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 DialogEditIssue.MinimizeBox = false;
                 DialogEditIssue.MaximizeBox = true;
 
-                // Set dialog icon from Monovera.ico in images folder
+                // Set DialogAITestCases icon from Monovera.ico in images folder
                 string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
                 if (File.Exists(iconPath))
                 {
@@ -5723,7 +5727,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (isSequenceWorkerActive)
                 {
-                    // Custom dialog for sequence update confirmation
+                    // Custom DialogAITestCases for sequence update confirmation
                     var DialogSequenceCancel = new Form
                     {
                         Text = "Jira Sequence Updates In Progress",
@@ -5758,7 +5762,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     var btnYes = CreateDialogButton("Yes", DialogResult.Yes, true);
                     var btnWait = CreateDialogButton("Wait", DialogResult.No);
 
-                   
+
                     var buttonPanel = new FlowLayoutPanel
                     {
                         FlowDirection = FlowDirection.RightToLeft,
@@ -5798,7 +5802,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 else
                 {
-                    // Normal exit confirmation dialog (existing code)
+                    // Normal exit confirmation DialogAITestCases (existing code)
                     var DialogClosingConfirmation = new Form
                     {
                         Text = "Confirm Exit",
@@ -5915,6 +5919,93 @@ document.addEventListener('DOMContentLoaded', () => {
             };
         }
         #endregion
+
+        private async void mnuAITestCases_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                // 1. Validate selected tab and key format
+                if (tabDetails.SelectedTab is not TabPage tab)
+                {
+                    MessageBox.Show("No issue tab is selected.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string key = tab.Text?.Trim();
+                if (string.IsNullOrWhiteSpace(key) || !Regex.IsMatch(key, @"^[A-Z]+-\d+$", RegexOptions.IgnoreCase))
+                {
+                    MessageBox.Show("Selected tab is not a valid Jira issue tab.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // 2. Get WebView2 control from the selected tab
+                var webView = tab.Controls.OfType<Microsoft.Web.WebView2.WinForms.WebView2>().FirstOrDefault();
+                if (webView == null)
+                {
+                    MessageBox.Show("No WebView2 found in the selected tab.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Ensure WebView2 is initialized
+                if (webView.CoreWebView2 == null)
+                    await webView.EnsureCoreWebView2Async();
+
+                // 3. Extract summary and description from the page
+                string summary = "";
+                string description = "";
+
+                try
+                {
+                    string jsSummary = @"(function() {
+                var h2 = document.querySelector('h2');
+                return h2 ? h2.innerText : '';
+            })();";
+                    var resultSummary = await webView.CoreWebView2.ExecuteScriptAsync(jsSummary);
+                    summary = Regex.Unescape(resultSummary.Trim('"'));
+
+                    string jsDescription = @"(function() {
+                var detailsList = document.querySelectorAll('details');
+                for (var i = 0; i < detailsList.length; i++) {
+                    var summaryElem = detailsList[i].querySelector('summary');
+                    if (summaryElem && summaryElem.textContent.trim().toLowerCase() === 'description') {
+                        var section = detailsList[i].querySelector('section');
+                        if (section) return section.innerText;
+                    }
+                }
+                return '';
+            })();";
+                    var resultDescription = await webView.CoreWebView2.ExecuteScriptAsync(jsDescription);
+                    description = Regex.Unescape(resultDescription.Trim('"'));
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Could not extract summary or description from the selected issue.\n" + ex.Message, "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(description))
+                {
+                    MessageBox.Show("No summary or description found in the selected issue.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string aiInput = $"{summary}\n\n{description}".Trim();
+
+                // ==== Use frmAITestCases instead of dialogAITestCases ====
+                if (frmAITestCasesInstance == null || frmAITestCasesInstance.IsDisposed)
+                    frmAITestCasesInstance = new frmAITestCases();
+
+                frmAITestCasesInstance.Show(this); // Use Show, not ShowDialog, to allow hiding
+                frmAITestCasesInstance.BringToFront();
+                frmAITestCasesInstance.Focus();
+                frmAITestCasesInstance.LoadAIContext(key, summary, aiInput);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("A fatal error occurred: " + ex.Message, "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
     }
 
 }

@@ -40,6 +40,9 @@
             mnuReport = new ToolStripMenuItem();
             mnuRecentUpdates = new ToolStripMenuItem();
             mnuSearch = new ToolStripMenuItem();
+            mnuAI = new ToolStripSplitButton();
+            mnuAITestCases = new ToolStripMenuItem();
+            mnuPutMeInContext = new ToolStripMenuItem();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             mnuConfiguration = new ToolStripMenuItem();
@@ -98,7 +101,7 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuSettings, pbProgress, lblProgress, lblJiraUpdateProcessing, lblShortcuts });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuAI, mnuSettings, pbProgress, lblProgress, lblJiraUpdateProcessing, lblShortcuts });
             statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
@@ -156,6 +159,27 @@
             mnuSearch.Size = new Size(226, 22);
             mnuSearch.Text = "Search...";
             mnuSearch.Click += mnuSearch_Click;
+            // 
+            // mnuAI
+            // 
+            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext });
+            mnuAI.ImageTransparentColor = Color.Magenta;
+            mnuAI.Name = "mnuAI";
+            mnuAI.Size = new Size(84, 21);
+            mnuAI.Text = "AI Assistant";
+            // 
+            // mnuAITestCases
+            // 
+            mnuAITestCases.Name = "mnuAITestCases";
+            mnuAITestCases.Size = new Size(257, 22);
+            mnuAITestCases.Text = "Generate Test Cases (Experimental)";
+            mnuAITestCases.Click += mnuAITestCases_Click;
+            // 
+            // mnuPutMeInContext
+            // 
+            mnuPutMeInContext.Name = "mnuPutMeInContext";
+            mnuPutMeInContext.Size = new Size(257, 22);
+            mnuPutMeInContext.Text = "Put Me In Context (Experimental)";
             // 
             // mnuSettings
             // 
@@ -254,5 +278,8 @@
         private ToolStripMenuItem mnuRead;
         private ToolStripMenuItem mnuRecentUpdates;
         private ToolStripStatusLabel lblJiraUpdateProcessing;
+        private ToolStripSplitButton mnuAI;
+        private ToolStripMenuItem mnuAITestCases;
+        private ToolStripMenuItem mnuPutMeInContext;
     }
 }
