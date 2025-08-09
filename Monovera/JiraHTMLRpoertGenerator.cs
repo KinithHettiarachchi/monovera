@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using static Monovera.frmMain;
+using static System.Windows.Forms.LinkLabel;
 
 /// <summary>
 /// Generates a hierarchical HTML report for Jira issues.
@@ -318,6 +319,11 @@ public class JiraHtmlReportGenerator
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Report [{issues[0].issue.Key}]</title>");
+        sb.AppendLine("< link href = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.css' rel = 'stylesheet' />");
+        sb.AppendLine("< script src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.js' ></ script >");
+        sb.AppendLine("< script src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js' ></ script >");
+        sb.AppendLine("< script src = 'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js' ></ script >");
+        sb.AppendLine("< link href = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel = 'stylesheet' />");
         sb.AppendLine("<style>");
         sb.AppendLine(cssContent);
         sb.AppendLine("</style>");

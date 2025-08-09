@@ -404,6 +404,10 @@ namespace Monovera
             mnuRead.Image = GetImageFromImagesFolder("Read.png");
             mnuRecentUpdates.Image = GetImageFromImagesFolder("Monovera.png");
 
+            mnuAI.Image = GetImageFromImagesFolder("AI.png");
+            mnuAITestCases.Image = GetImageFromImagesFolder("AITestCases.png");
+            mnuPutMeInContext.Image = GetImageFromImagesFolder("PutMeInContext.png");
+
             // Set up tab control for details panel
             tabDetails = new TabControl
             {
@@ -3298,6 +3302,14 @@ namespace Monovera
                     string updated = issue.Updated?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "";
                     string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
 
+                    string pathHtml = "";
+                    string path = frmSearch.GetRequirementPath(key);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:1px;margin-top:1px;'>{path}</div>";
+                    }
+
+
                     List<string> changeTags = new();
                     if (issue.CustomFields.TryGetValue("ChangeTypeTags", out var tagsObj) && tagsObj is List<string> tagsList)
                     {
@@ -3352,7 +3364,7 @@ namespace Monovera
     <a href='#' data-key='{key}' class='recent-update-icon-link'>{iconImgInner}</a>
   </td>
   <td class='confluenceTd'>
-    <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>
+    <a href='#' data-key='{key}' class='recent-update-summary'>{summary} [{key}]</a>{pathHtml}
   </td>
   <td class='confluenceTd'>{changeTagsHtml}</td>
   <td class='confluenceTd'>{updated}</td>
@@ -3822,6 +3834,8 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
         private string BuildHTMLSection_LINKS(JsonElement fields, string title, string linkType, string prop)
         {
+            bool isRelatedTable = linkType == "Relates";
+
             var sb = new StringBuilder();
             int matchCount = 0;
             // Now include sortingField in the tuple
@@ -3854,6 +3868,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                             var issueType = issueElem.GetProperty("fields").TryGetProperty("issuetype", out var typeField) && typeField.TryGetProperty("name", out var typeName)
                                 ? typeName.GetString() ?? ""
                                 : "";
+
 
                             // Get sorting field value for this key from issueDtoDict
                             string sortingValue = "";
@@ -3915,11 +3930,20 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                         iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(i.issueType)}'>🟥</span>";
                     }
 
+
+                    string pathHtml = "";
+                    if (isRelatedTable)
+                    {
+                        string path = frmSearch.GetRequirementPath(i.key);
+                        if (!string.IsNullOrEmpty(path))
+                            pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{path}</div>";
+                    }
+
                     tableRows.AppendLine($@"
 <tr>
     <td class='confluenceTd'>
         <a href='#' data-key='{HttpUtility.HtmlEncode(i.key)}'>
-            {iconImgInner} {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}]
+            {iconImgInner} {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}] {pathHtml}
         </a>
     </td>
 </tr>");

@@ -600,7 +600,13 @@ namespace Monovera
                     }
                 }
 
-                string htmlLink = $"<tr><td class='confluenceTd'><a href=\"#\" data-key=\"{key}\">{iconPath}{summary} [{key}]</a></td></tr>";
+                string pathHtml = "";
+                string path = GetRequirementPath(key);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{path}</div>";
+                }
+                string htmlLink = $"<tr><td class='confluenceTd'><a href=\"#\" data-key=\"{key}\">{iconPath}{summary} [{key}]</a>{pathHtml}</td></tr>";
 
                 if (isJqlMode)
                 {
@@ -759,6 +765,44 @@ namespace Monovera
             string key = e.TryGetWebMessageAsString();
             if (string.IsNullOrWhiteSpace(key)) return;
             SelectNodeByKey(key);
+        }
+
+        public static string GetRequirementPath(string issueKey)
+        {
+            var path = new List<string>();
+            string? currentKey = issueKey;
+
+            while (!string.IsNullOrEmpty(currentKey))
+            {
+                // Extract project key (e.g., "PROJ" from "PROJ-123")
+                var dashIdx = currentKey.IndexOf('-');
+                if (dashIdx <= 0) break;
+                var projectKey = currentKey.Substring(0, dashIdx);
+
+                // Find the project config for this key
+                var projectConfig = config.Projects
+                    .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
+                if (projectConfig == null || string.IsNullOrEmpty(projectConfig.LinkTypeName))
+                    break;
+
+                string hierarchyLinkType = projectConfig.LinkTypeName;
+
+                // Find the parent: an issue that links to currentKey via the project's hierarchy link type
+                var parent = frmMain.issueDtoDict.Values
+                    .FirstOrDefault(issue =>
+                        issue.IssueLinks != null &&
+                        issue.IssueLinks.Any(link =>
+                            link.LinkTypeName == hierarchyLinkType &&
+                            link.OutwardIssueKey == currentKey));
+
+                if (parent == null || string.Equals(parent.Key, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                path.Insert(0, $"{HttpUtility.HtmlEncode(parent.Summary)} [{parent.Key}]");
+                currentKey = parent.Key;
+            }
+
+            return path.Count > 0 ? string.Join(" &gt; ", path) : "";
         }
     }
 }
