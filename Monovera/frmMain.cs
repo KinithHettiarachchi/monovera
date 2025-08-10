@@ -6161,32 +6161,96 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     return;
                 }
 
-                // 2. Build the set of relevant issue keys: root, all children, all related
-                var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootKey };
+                // Show the AI dialog (reuse frmAITestCases for display)
+                if (frmAITestCasesInstance == null || frmAITestCasesInstance.IsDisposed)
+                    frmAITestCasesInstance = new frmAITestCases();
 
-                // Add all children recursively
-                void AddChildren(string parentKey)
+                frmAITestCasesInstance.AI_MODE = mode;
+                frmAITestCasesInstance.Text = $"Put Me In Context: {rootKey}";
+                frmAITestCasesInstance.Show(this);
+                frmAITestCasesInstance.BringToFront();
+                frmAITestCasesInstance.Focus();
+
+                // 2. Build the set of relevant issue keys: root, all children, all related (recursively, including "Relates" links)
+                var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                async Task CollectAllRelatedAndChildrenAsync(string key)
                 {
-                    if (childrenByParent.TryGetValue(parentKey, out var children))
+                    if (!allKeys.Add(key))
+                        return; // Already visited
+
+                    // Add children recursively (from memory)
+                    if (childrenByParent.TryGetValue(key, out var children))
                     {
                         foreach (var child in children)
                         {
-                            if (allKeys.Add(child.Key))
-                                AddChildren(child.Key);
+                            await CollectAllRelatedAndChildrenAsync(child.Key);
                         }
                     }
-                }
-                AddChildren(rootKey);
 
-                // Add all related issues (from FlatJiraIssueDictionary)
-                if (FlatJiraIssueDictionary.TryGetValue(rootKey, out var rootIssue))
-                {
-                    foreach (var link in rootIssue.IssueLinks)
+                    // Add all outward links (from memory)
+                    if (FlatJiraIssueDictionary.TryGetValue(key, out var issue))
                     {
-                        if (!string.IsNullOrWhiteSpace(link.OutwardIssueKey))
-                            allKeys.Add(link.OutwardIssueKey);
+                        foreach (var link in issue.IssueLinks)
+                        {
+                            if (!string.IsNullOrWhiteSpace(link.OutwardIssueKey))
+                            {
+                                await CollectAllRelatedAndChildrenAsync(link.OutwardIssueKey);
+                            }
+                        }
+                    }
+
+                    // --- Fetch "Relates" issues from Jira using REST API if not already in memory ---
+                    try
+                    {
+                        // Use REST API to get the issue JSON
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        using var client = new HttpClient();
+                        client.BaseAddress = new Uri(jiraBaseUrl);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        var response = await client.GetAsync($"/rest/api/3/issue/{key}?fields=issuelinks");
+                        response.EnsureSuccessStatusCode();
+                        var json = await response.Content.ReadAsStringAsync();
+
+                        using var doc = JsonDocument.Parse(json);
+                        var root = doc.RootElement;
+
+                        if (root.TryGetProperty("fields", out var fields) &&
+                            fields.TryGetProperty("issuelinks", out var links) &&
+                            links.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var link in links.EnumerateArray())
+                            {
+                                if (link.TryGetProperty("type", out var typeProp) &&
+                                    typeProp.TryGetProperty("name", out var nameProp) &&
+                                    nameProp.GetString() == "Relates")
+                                {
+                                    // Check both outward and inward issues
+                                    if (link.TryGetProperty("outwardIssue", out var outward) && outward.TryGetProperty("key", out var outwardKeyProp))
+                                    {
+                                        var outwardKey = outwardKeyProp.GetString();
+                                        if (!string.IsNullOrWhiteSpace(outwardKey))
+                                            await CollectAllRelatedAndChildrenAsync(outwardKey);
+                                    }
+                                    if (link.TryGetProperty("inwardIssue", out var inward) && inward.TryGetProperty("key", out var inwardKeyProp))
+                                    {
+                                        var inwardKey = inwardKeyProp.GetString();
+                                        if (!string.IsNullOrWhiteSpace(inwardKey))
+                                            await CollectAllRelatedAndChildrenAsync(inwardKey);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore fetch errors for missing/permission issues
                     }
                 }
+
+                // Start from the root key
+                await CollectAllRelatedAndChildrenAsync(rootKey);
 
                 // 3. Fetch summary and description for each key
                 var issueInfos = new List<(string Key, string Summary, string Description, string ParentKey, List<string> RelatedKeys)>();
@@ -6255,16 +6319,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
 
                 // 5. Send to GeminiAI for summarization
                 string aiPrompt = contextText;
-
-                // Show the AI dialog (reuse frmAITestCases for display)
-                if (frmAITestCasesInstance == null || frmAITestCasesInstance.IsDisposed)
-                    frmAITestCasesInstance = new frmAITestCases();
-
-                frmAITestCasesInstance.AI_MODE = mode;
-                frmAITestCasesInstance.Text = $"Put Me In Context: {rootKey}";
-                frmAITestCasesInstance.Show(this);
-                frmAITestCasesInstance.BringToFront();
-                frmAITestCasesInstance.Focus();
 
                 frmAITestCasesInstance.LoadAIContext(rootKey, issueInfos.FirstOrDefault(i => i.Key == rootKey).Summary, aiPrompt);
             }
