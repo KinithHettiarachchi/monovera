@@ -4106,11 +4106,18 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 <details id='diffDetails' class='diff-overlay' style='display:none;'>
   <summary class='diff-overlay-summary'></summary>
   <section>
+    <h3 id='diffTitle'></h3>
     <div class='diff-overlay-header'>
       <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()'>
         <span id='diffToggleIcon'>☰</span>
       </div>
-      <h3 id='diffTitle'></h3>
+      <div style='margin:18px 0 0 0;'>
+      <label style='font-weight:500;color:#1565c0;'>
+        <input type='checkbox' id='excludeFormattingCheck' style='margin-right:8px;' />
+        Exclude Formatting
+      </label>
+    </div>
+      
     <div class='diff-close' onclick='
         document.getElementById(""diffBackdrop"").classList.add(""hide"");
         document.getElementById(""diffDetails"").open = false;
@@ -4146,6 +4153,15 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </div>
 
 <script>
+
+function stripJiraFormatting(text) {
+    // Remove {color:#xxxxxx} and {color} and similar tags
+    return text.replace(/\{color(:#[0-9a-fA-F]{6})?\}/g, '')
+               .replace(/\{panel(:[^\}]*)?\}/g, '')
+               .replace(/\{noformat\}/g, '')
+               .replace(/\{code(:[^\}]*)?\}/g, '');
+}
+
 document.getElementById('clearHistoryBtn').addEventListener('click', function() {
     // Uncheck all checkboxes in the history table
     document.querySelectorAll('#historyTable .compare-check').forEach(cb => cb.checked = false);
@@ -4249,7 +4265,13 @@ function simpleDiffHtml(oldText, newText) {
 
 // --- Main Diff Overlay Show Function ---
 function showDiffOverlay(field, from, to) {
-    const diffs = simpleDiffHtml(from, to);
+    const excludeFormatting = document.getElementById('excludeFormattingCheck')?.checked;
+    let fromText = from, toText = to;
+    if (excludeFormatting) {
+        fromText = stripJiraFormatting(fromText);
+        toText = stripJiraFormatting(toText);
+    }
+    const diffs = simpleDiffHtml(fromText, toText);
 
     // Always update both views
     document.getElementById('diffFrom').innerHTML = diffs.htmlFrom.replace(/\n/g, '<br>');
@@ -4379,6 +4401,14 @@ document.getElementById('filterField').addEventListener('change', applyFilters);
 document.addEventListener('DOMContentLoaded', () => {
     populateDropdowns();
     applyFilters();
+});
+
+document.getElementById('excludeFormattingCheck').addEventListener('change', function() {
+    // If the diff overlay is open, re-run the diff with the new setting
+    if (document.getElementById('diffDetails').open) {
+        // Find the currently selected checkboxes and re-run viewSelectedDiff
+        viewSelectedDiff();
+    }
 });
 </script>
 ");
