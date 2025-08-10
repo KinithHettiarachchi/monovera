@@ -1237,3 +1237,33 @@ section,
 		background: #bbdefb;
 		color: #0d47a1;
 	}
+
+.tab-bar {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.tab-btn {
+	padding: 8px 24px;
+	border: none;
+	background: #e3f2fd;
+	color: #1565c0;
+	font-weight: 600;
+	border-radius: 8px 8px 0 0;
+	cursor: pointer;
+	outline: none;
+	transition: background 0.2s;
+}
+
+	.tab-btn.active {
+		background: #ffffff;
+		border-bottom: 2px solid #1565c0;
+	}
+
+.tab-content {
+	background: #fff;
+	border: 1px solid #c0daf3;
+	border-radius: 0 0 8px 8px;
+	padding: 18px 12px;
+}

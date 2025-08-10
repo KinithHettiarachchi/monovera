@@ -3,6 +3,7 @@ using Microsoft.VisualBasic;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using SharpSvn;
+using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -3689,10 +3690,11 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     }
                     var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
 
-                    string HTML_SECTION_LINKS =
-                                    BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0].ToString(), "outwardIssue") +
-                                    BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0].ToString(), "inwardIssue") +
-                                    BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
+                    string linksHtml =
+                        BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0], "outwardIssue") +
+                        BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0], "inwardIssue") +
+                        BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
+
 
                     string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(root);
 
@@ -3706,7 +3708,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                         headerLine, issueType, statusIcon, status,
                         createdDate, lastUpdated, issueUrl,
                         HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS,
-                        HTML_SECTION_LINKS, HTML_SECTION_HISTORY, responseHTML
+                        linksHtml, HTML_SECTION_HISTORY, responseHTML
                     );
 
                     // Ensure focustToTreeJS is present in the HTML
@@ -3734,13 +3736,10 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
         private string BuildHTMLSection_ATTACHMENTS(JsonElement fields, string issueKey)
         {
             if (!fields.TryGetProperty("attachment", out var attachments) || attachments.ValueKind != JsonValueKind.Array || attachments.GetArrayLength() == 0)
-                return "<details open>\r\n  <summary>Attachments</summary>\r\n  <section><div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
+                return "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
 
             var sb = new StringBuilder();
             sb.AppendLine(@"
-<details open>
-  <summary>Attachments</summary>
-  <section>
     <div class='attachments-strip-wrapper'>
       <button class='scroll-btn left' onclick='scrollAttachments(-1)' aria-label='Scroll left'>&#8592;</button>
       <div class='attachments-strip' id='attachmentsStrip'>
@@ -3803,8 +3802,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
     <div id='attachmentLightbox' class='attachment-lightbox' style='display:none;' onclick='closeAttachmentLightbox()'>
       <img id='lightboxImg' src='' alt='Preview' />
     </div>
-  </section>
-</details>
+
 <script>
   function scrollAttachments(direction) {
     var strip = document.getElementById('attachmentsStrip');
@@ -3998,7 +3996,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </table>");
             }
 
-            sb.AppendLine("</div>");
+            //sb.AppendLine("</div>");
             return sb.ToString();
         }
 
@@ -4107,29 +4105,27 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 <details id='diffDetails' class='diff-overlay' style='display:none;'>
   <summary class='diff-overlay-summary'></summary>
   <section>
+    <div class='diff-overlay-header' style='display:flex;align-items:center;justify-content:space-between;gap:16px;'>
+        <h3 id='diffTitle' style='margin:0;font-size:1.2em;font-weight:600;'></h3>
 
-   <div class='diff-overlay-header' style='display:flex;align-items:center;justify-content:space-between;gap:16px;'>
-  <h3 id='diffTitle' style='margin:0;font-size:1.2em;font-weight:600;'></h3>
+      <div style='display:flex;align-items:center;gap:16px;'>
+        <label style='font-weight:500;color:#1565c0;display:flex;align-items:center;gap:6px;'>
+        <input type='checkbox' id='excludeFormattingCheck' style='margin-right:6px;' />
+            Formatting
+        </label>
 
-  <div style='display:flex;align-items:center;gap:16px;'>
-    <label style='font-weight:500;color:#1565c0;display:flex;align-items:center;gap:6px;'>
-    <input type='checkbox' id='excludeFormattingCheck' style='margin-right:6px;' />
-        Formatting
-    </label>
+        <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()' style='cursor:pointer;'>
+          <span id='diffToggleIcon'>☰</span>
+        </div>
 
-    <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()' style='cursor:pointer;'>
-      <span id='diffToggleIcon'>☰</span>
+        <div class='diff-close' style='cursor:pointer;font-size:1.4em;line-height:1;' onclick=""
+          document.getElementById('diffBackdrop').classList.add('hide');
+          document.getElementById('diffDetails').open = false;
+          document.getElementById('diffDetails').style.display = 'none';
+        "">✖</div>
+      </div>
     </div>
 
-    <div class='diff-close' style='cursor:pointer;font-size:1.4em;line-height:1;' onclick=""
-      document.getElementById('diffBackdrop').classList.add('hide');
-      document.getElementById('diffDetails').open = false;
-      document.getElementById('diffDetails').style.display = 'none';
-    "">✖</div>
-  </div>
-</div>
-
-    </div>
     <div id='diffSideBySide' class='diff-columns' style='display:none;'>
       <div>
         <h4>Before</h4>
@@ -4147,6 +4143,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
         <div id='diffInlineContent' class='diff-content'></div>
       </div>
     </div>
+   
   </section>
 </details>
 
@@ -4465,25 +4462,41 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     <section>{resolvedDesc}</section>
   </details>
 
-  {attachmentsHtml}
-
-  <details open>
-    <summary>Links</summary>
-    <section>{linksHtml}</section>
-  </details>
-
-  <details>
-    <summary>History</summary>
-    <section>{historyHtml}</section>
-  </details>
-
-  <details>
-    <summary>Response</summary>
-    <section>
-      <pre class='language-json'><code>{encodedJson}</code></pre>
-    </section>
-  </details>
-
+    <details open>
+    <summary>Information</summary>
+        <section>
+         <div class='tab-container' style='margin-top:24px;'>
+              <div class='tab-bar'>
+                <button class='tab-btn active' data-tab='linksTab'>Links</button>
+                <button class='tab-btn' data-tab='historyTab'>History</button>
+                <button class='tab-btn' data-tab='attachmentsTab'>Attachments</button>
+                <button class='tab-btn' data-tab='ResponseTab'>Response</button>
+              </div>
+              <div class='tab-content' id='linksTab' style='display:block;'>
+                {linksHtml}
+              </div>
+              <div class='tab-content' id='historyTab' style='display:none;'>
+                {historyHtml}
+              </div>
+              <div class='tab-content' id='attachmentsTab' style='display:none;'>
+                {attachmentsHtml}
+              </div>
+              <div class='tab-content' id='ResponseTab' style='display:none;'>
+                <pre class='language-json'><code>{encodedJson}</code></pre>
+              </div>
+            </div>
+        <script>
+          document.querySelectorAll('.tab-btn').forEach(btn => {{
+            btn.addEventListener('click', function() {{
+              document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+              btn.classList.add('active');
+              document.querySelectorAll('.tab-content').forEach(tc => tc.style.display = 'none');
+              document.getElementById(btn.dataset.tab).style.display = 'block';
+            }});
+          }});
+        </script>
+        </section>
+    </details>
   <script>
     Prism.highlightAll();
 
