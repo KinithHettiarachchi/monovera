@@ -6056,10 +6056,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
         }
         #endregion
 
-        private async void mnuAITestCases_Click(object sender, EventArgs e)
-        {
-            TalkToAI("test");
-        }
 
         public static string GetRequirementPath(string issueKey)
         {
@@ -6138,12 +6134,18 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             return parent.Key;
         }
 
-        private async void mnuPutMeInContext_Click(object sender, EventArgs e)
+
+        private async void mnuAITestCases_Click(object sender, EventArgs e)
         {
-            TalkToAI("context");
+            TalkToAI("test", 3);
         }
 
-        private async void TalkToAI(string mode)
+        private async void mnuPutMeInContext_Click(object sender, EventArgs e)
+        {
+            TalkToAI("context",3);
+        }
+
+        private async void TalkToAI(string mode, int maxRelatesDepth = 0)
         {
             try
             {
@@ -6228,9 +6230,47 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 // Cache for already-fetched descriptions to avoid redundant requests
                 var descriptionCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-                async Task CollectAllRelatedAndChildrenAsync(string key)
+                // --- NEW: Process root issue's description for related keys ---
+                try
                 {
+                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    using var client = new HttpClient();
+                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
+                    var response = await client.GetAsync($"/rest/api/3/issue/{rootKey}?fields=description");
+                    response.EnsureSuccessStatusCode();
+                    var json = await response.Content.ReadAsStringAsync();
+
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty("fields", out var fields))
+                    {
+                        string description = "";
+                        if (fields.TryGetProperty("description", out var descProp))
+                        {
+                            if (descProp.ValueKind == JsonValueKind.String)
+                                description = descProp.GetString() ?? "";
+                            else if (descProp.ValueKind == JsonValueKind.Object && descProp.TryGetProperty("content", out var contentProp))
+                                description = contentProp.ToString();
+                        }
+
+                        // Extract keys from root issue's description and add to allKeys
+                        foreach (var foundKey in ExtractKeysFromDescription(description))
+                        {
+                            if (!allKeys.Contains(foundKey))
+                                allKeys.Add(foundKey);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore errors for missing/permission issues
+                }
+
+                async Task CollectAllRelatedAndChildrenAsync(string key, int currentDepth)
+                {
                     frmAITestCasesInstance.UpdateAIProgress($"Adding issue to the list : [{key}] ...");
 
                     if (!allKeys.Add(key))
@@ -6240,80 +6280,84 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     if (childrenByParent.TryGetValue(key, out var children))
                     {
                         foreach (var child in children)
-                            await CollectAllRelatedAndChildrenAsync(child.Key);
+                            await CollectAllRelatedAndChildrenAsync(child.Key, currentDepth);
                     }
 
-                    // --- Fetch "Relates" issues and description from Jira using REST API ---
-                    try
+                    // Only go deeper if depth is not limited or not exceeded
+                    if (maxRelatesDepth == 0 || currentDepth < maxRelatesDepth)
                     {
-                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                        using var client = new HttpClient();
-                        client.BaseAddress = new Uri(jiraBaseUrl);
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                        var response = await client.GetAsync($"/rest/api/3/issue/{key}?fields=issuelinks,description,summary");
-                        response.EnsureSuccessStatusCode();
-                        var json = await response.Content.ReadAsStringAsync();
-
-                        using var doc = JsonDocument.Parse(json);
-                        var root = doc.RootElement;
-
-                        if (root.TryGetProperty("fields", out var fields))
+                        // --- Fetch "Relates" issues and description from Jira using REST API ---
+                        try
                         {
-                            // 1. "Relates" links
-                            if (fields.TryGetProperty("issuelinks", out var links) && links.ValueKind == JsonValueKind.Array)
+                            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                            using var client = new HttpClient();
+                            client.BaseAddress = new Uri(jiraBaseUrl);
+                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                            var response = await client.GetAsync($"/rest/api/3/issue/{key}?fields=issuelinks,description,summary");
+                            response.EnsureSuccessStatusCode();
+                            var json = await response.Content.ReadAsStringAsync();
+
+                            using var doc = JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+
+                            if (root.TryGetProperty("fields", out var fields))
                             {
-                                foreach (var link in links.EnumerateArray())
+                                // 1. "Relates" links
+                                if (fields.TryGetProperty("issuelinks", out var links) && links.ValueKind == JsonValueKind.Array)
                                 {
-                                    if (link.TryGetProperty("type", out var typeProp) &&
-                                        typeProp.TryGetProperty("name", out var nameProp) &&
-                                        nameProp.GetString() == "Relates")
+                                    foreach (var link in links.EnumerateArray())
                                     {
-                                        // Outward
-                                        if (link.TryGetProperty("outwardIssue", out var outward) && outward.TryGetProperty("key", out var outwardKeyProp))
+                                        if (link.TryGetProperty("type", out var typeProp) &&
+                                            typeProp.TryGetProperty("name", out var nameProp) &&
+                                            nameProp.GetString() == "Relates")
                                         {
-                                            var outwardKey = outwardKeyProp.GetString();
-                                            if (!string.IsNullOrWhiteSpace(outwardKey))
-                                                await CollectAllRelatedAndChildrenAsync(outwardKey);
-                                        }
-                                        // Inward
-                                        if (link.TryGetProperty("inwardIssue", out var inward) && inward.TryGetProperty("key", out var inwardKeyProp))
-                                        {
-                                            var inwardKey = inwardKeyProp.GetString();
-                                            if (!string.IsNullOrWhiteSpace(inwardKey))
-                                                await CollectAllRelatedAndChildrenAsync(inwardKey);
+                                            // Outward
+                                            if (link.TryGetProperty("outwardIssue", out var outward) && outward.TryGetProperty("key", out var outwardKeyProp))
+                                            {
+                                                var outwardKey = outwardKeyProp.GetString();
+                                                if (!string.IsNullOrWhiteSpace(outwardKey))
+                                                    await CollectAllRelatedAndChildrenAsync(outwardKey, currentDepth + 1);
+                                            }
+                                            // Inward
+                                            if (link.TryGetProperty("inwardIssue", out var inward) && inward.TryGetProperty("key", out var inwardKeyProp))
+                                            {
+                                                var inwardKey = inwardKeyProp.GetString();
+                                                if (!string.IsNullOrWhiteSpace(inwardKey))
+                                                    await CollectAllRelatedAndChildrenAsync(inwardKey, currentDepth + 1);
+                                            }
                                         }
                                     }
                                 }
-                            }
 
-                            // 2. Issue keys in description (plain, HTML, macros)
-                            string description = "";
-                            if (fields.TryGetProperty("description", out var descProp))
-                            {
-                                if (descProp.ValueKind == JsonValueKind.String)
-                                    description = descProp.GetString() ?? "";
-                                else if (descProp.ValueKind == JsonValueKind.Object && descProp.TryGetProperty("content", out var contentProp))
-                                    description = contentProp.ToString();
-                            }
+                                // 2. Issue keys in description (plain, HTML, macros)
+                                string description = "";
+                                if (fields.TryGetProperty("description", out var descProp))
+                                {
+                                    if (descProp.ValueKind == JsonValueKind.String)
+                                        description = descProp.GetString() ?? "";
+                                    else if (descProp.ValueKind == JsonValueKind.Object && descProp.TryGetProperty("content", out var contentProp))
+                                        description = contentProp.ToString();
+                                }
 
-                            descriptionCache[key] = description;
+                                descriptionCache[key] = description;
 
-                            foreach (var foundKey in ExtractKeysFromDescription(description))
-                            {
-                                if (!allKeys.Contains(foundKey))
-                                    await CollectAllRelatedAndChildrenAsync(foundKey);
+                                foreach (var foundKey in ExtractKeysFromDescription(description))
+                                {
+                                    if (!allKeys.Contains(foundKey))
+                                        await CollectAllRelatedAndChildrenAsync(foundKey, currentDepth + 1);
+                                }
                             }
                         }
-                    }
-                    catch
-                    {
-                        // Ignore fetch errors for missing/permission issues
+                        catch
+                        {
+                            // Ignore fetch errors for missing/permission issues
+                        }
                     }
                 }
 
                 // Start from the root key
-                await CollectAllRelatedAndChildrenAsync(rootKey);
+                await CollectAllRelatedAndChildrenAsync(rootKey, 0);
 
                 // 3. Fetch summary and description for each key (from Jira)
                 var issueInfos = new List<(string Key, string Summary, string Description, string ParentKey, List<string> RelatedKeys)>();
