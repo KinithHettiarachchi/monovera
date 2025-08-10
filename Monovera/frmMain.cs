@@ -4102,6 +4102,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
     </table>
 </div>
 
+<!-- Difference overalay dialog -->
 <div id='diffBackdrop' class='diff-backdrop hide'></div>
 <details id='diffDetails' class='diff-overlay' style='display:none;'>
   <summary class='diff-overlay-summary'></summary>
@@ -4112,8 +4113,8 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
   <div style='display:flex;align-items:center;gap:16px;'>
     <label style='font-weight:500;color:#1565c0;display:flex;align-items:center;gap:6px;'>
-      <input type='checkbox' id='excludeFormattingCheck' style='margin-right:6px;' />
-      Exclude Formatting
+    <input type='checkbox' id='excludeFormattingCheck' style='margin-right:6px;' />
+        Formatting
     </label>
 
     <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()' style='cursor:pointer;'>
@@ -4270,9 +4271,9 @@ function simpleDiffHtml(oldText, newText) {
 
 // --- Main Diff Overlay Show Function ---
 function showDiffOverlay(field, from, to) {
-    const excludeFormatting = document.getElementById('excludeFormattingCheck')?.checked;
+    const showFormatting = document.getElementById('excludeFormattingCheck')?.checked;
     let fromText = from, toText = to;
-    if (excludeFormatting) {
+    if (!showFormatting) {
         fromText = stripJiraFormatting(fromText);
         toText = stripJiraFormatting(toText);
     }
