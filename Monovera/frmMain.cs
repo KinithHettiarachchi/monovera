@@ -3943,8 +3943,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 <tr>
     <td class='confluenceTd'>
         <a href='#' data-key='{HttpUtility.HtmlEncode(i.key)}'>
-            {iconImgInner} {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}] {pathHtml}
+            {iconImgInner} {HttpUtility.HtmlEncode(i.summary)} [{HttpUtility.HtmlEncode(i.key)}]
         </a>
+        {pathHtml}
     </td>
 </tr>");
                     matchCount++;
@@ -4075,7 +4076,10 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
             <option value=''>-- All Types --</option>
         </select>
     </label>
-    <button onclick='viewSelectedDiff()' class='download-btn' style='margin-left:18px;font-size:1em;display:flex;align-items:center;gap:6px;'>
+    <button id='clearHistoryBtn' class='history-btn' style='margin-left:8px;font-size:1em;display:flex;align-items:center;gap:6px;'>
+        <span style='font-size:1.2em;'>❌</span> Clear
+    </button>
+    <button onclick='viewSelectedDiff()' class='history-btn' style='margin-left:18px;font-size:1em;display:flex;align-items:center;gap:6px;'>
         <span style='font-size:1.2em;'>🔍</span> Show Difference
     </button>
 </div>
@@ -4142,6 +4146,20 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </div>
 
 <script>
+document.getElementById('clearHistoryBtn').addEventListener('click', function() {
+    // Uncheck all checkboxes in the history table
+    document.querySelectorAll('#historyTable .compare-check').forEach(cb => cb.checked = false);
+
+    // Reset all dropdowns to their first option
+    ['filterDate', 'filterUser', 'filterField'].forEach(id => {
+        var sel = document.getElementById(id);
+        if (sel) sel.selectedIndex = 0;
+    });
+
+    // Optionally, re-apply filters to show all rows
+    if (typeof applyFilters === 'function') applyFilters();
+});
+
 function escapeHtml(text) {
     return text.replace(/&/g, '&amp;')
                .replace(/</g, '&lt;')

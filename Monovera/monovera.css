@@ -141,6 +141,42 @@ pre[class*='language-'] {
 	box-shadow: 0 1px 3px rgba(0, 32, 64, 0.04);
 }
 
+.history-btn {
+	display: inline-block;
+	margin-top: 6px;
+	padding: 6px 14px; /* Match dropdown vertical and horizontal padding */
+	min-height: 34px; /* Ensures height matches dropdown (adjust if needed) */
+	background: linear-gradient(90deg, #dcefff 60%, #bbdefb 100%);
+	color: #1565c0;
+	border-radius: 8px;
+	text-decoration: none;
+	font-weight: 600;
+	border: 2px solid #90caf9;
+	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
+	cursor: pointer;
+	transition: background 0.2s, box-shadow 0.2s, color 0.2s, border 0.2s;
+	font-size: 1em;
+	letter-spacing: 0.5px;
+	box-sizing: border-box; /* Ensures padding and border are included in height */
+	vertical-align: middle;
+}
+
+	.history-btn:hover,
+	.history-btn:focus {
+		background: linear-gradient(90deg, #bbdefb 60%, #e1f0ff 100%);
+		color: #0d47a1;
+		border-color: #1565c0;
+		box-shadow: 0 4px 16px rgba(33,150,243,0.18);
+		outline: none;
+	}
+
+	.history-btn:active {
+		background: #e1f0ff;
+		color: #0d47a1;
+		border-color: #1565c0;
+		box-shadow: 0 2px 4px rgba(33,150,243,0.10);
+	}
+
 .change-header {
 	font-weight: 600;
 	color: #0d47a1;
