@@ -4161,11 +4161,50 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 <script>
 
 function stripJiraFormatting(text) {
-    // Remove {color:#xxxxxx} and {color} and similar tags
-    return text.replace(/\{color(:#[0-9a-fA-F]{6})?\}/g, '')
-               .replace(/\{panel(:[^\}]*)?\}/g, '')
-               .replace(/\{noformat\}/g, '')
-               .replace(/\{code(:[^\}]*)?\}/g, '');
+    // Remove formatting tags
+    return text
+    // Text & Code
+    .replace(/\{noformat\}/g, '')
+    .replace(/\{code(:[^\}]*)?\}/g, '')
+    .replace(/\{quote(:[^\}]*)?\}/g, '')
+
+    // Color & Panels
+    .replace(/\{color(:#[0-9a-fA-F]{6}|:[a-zA-Z]+)?\}/g, '')
+    .replace(/\{panel(:[^\}]*)?\}/g, '')
+    .replace(/\{status(:[^\}]*)?\}/g, '')
+
+    // Layout & Structure
+    .replace(/\{section(:[^\}]*)?\}/g, '')
+    .replace(/\{column(:[^\}]*)?\}/g, '')
+    .replace(/\{div(:[^\}]*)?\}/g, '')
+    .replace(/\{span(:[^\}]*)?\}/g, '')
+
+    // Navigation & Linking
+    .replace(/\{anchor(:[^\}]*)?\}/g, '')
+    .replace(/\{toc(:[^\}]*)?\}/g, '')
+    .replace(/\{include(:[^\}]*)?\}/g, '')
+    .replace(/\{excerpt(:[^\}]*)?\}/g, '')
+    .replace(/\{excerpt-include(:[^\}]*)?\}/g, '')
+    .replace(/\{page-tree(:[^\}]*)?\}/g, '')
+    .replace(/\{children(:[^\}]*)?\}/g, '')
+
+    // Tasks, Tables, UI
+    .replace(/\{tasklist(:[^\}]*)?\}/g, '')
+    .replace(/\{checkbox(:[^\}]*)?\}/g, '')
+    .replace(/\{table-plus(:[^\}]*)?\}/g, '')
+    .replace(/\{chart(:[^\}]*)?\}/g, '')
+    .replace(/\{expand(:[^\}]*)?\}/g, '')
+    .replace(/\{jira(:[^\}]*)?\}/g, '')
+
+    // Special & Less Common
+    .replace(/\{gliffy(:[^\}]*)?\}/g, '')
+    .replace(/\{drawio(:[^\}]*)?\}/g, '')
+    .replace(/\{html(:[^\}]*)?\}/g, '')
+    .replace(/\{rss(:[^\}]*)?\}/g, '')
+    .replace(/\{calendar(:[^\}]*)?\}/g, '')
+    .replace(/\{blog-posts(:[^\}]*)?\}/g, '')
+    .replace(/\{contentbylabel(:[^\}]*)?\}/g, '');
+
 }
 
 document.getElementById('clearHistoryBtn').addEventListener('click', function() {
@@ -4462,19 +4501,19 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
   </div>
 
   <details open>
-    <summary>Description</summary>
+    <summary> 📜 Description</summary>
     <section>{resolvedDesc}</section>
   </details>
 
     <details open>
-    <summary>Information</summary>
+    <summary> ℹ️ Information</summary>
         <section>
          <div class='tab-container' style='margin-top:24px;'>
               <div class='tab-bar'>
-                <button class='tab-btn active' data-tab='linksTab'>Links</button>
-                <button class='tab-btn' data-tab='historyTab'>History</button>
-                <button class='tab-btn' data-tab='attachmentsTab'>Attachments [#{attachmentCount}]</button>
-                <button class='tab-btn' data-tab='ResponseTab'>Response</button>
+                <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
+                <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
+                <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
+                <button class='tab-btn' data-tab='ResponseTab'>🗨️ Response</button>
               </div>
               <div class='tab-content' id='linksTab' style='display:block;'>
                 {linksHtml}
