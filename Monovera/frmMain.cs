@@ -4106,23 +4106,28 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 <details id='diffDetails' class='diff-overlay' style='display:none;'>
   <summary class='diff-overlay-summary'></summary>
   <section>
-    <h3 id='diffTitle'></h3>
-    <div class='diff-overlay-header'>
-      <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()'>
-        <span id='diffToggleIcon'>☰</span>
-      </div>
-      <div style='margin:18px 0 0 0;'>
-      <label style='font-weight:500;color:#1565c0;'>
-        <input type='checkbox' id='excludeFormattingCheck' style='margin-right:8px;' />
-        Exclude Formatting
-      </label>
+
+   <div class='diff-overlay-header' style='display:flex;align-items:center;justify-content:space-between;gap:16px;'>
+  <h3 id='diffTitle' style='margin:0;font-size:1.2em;font-weight:600;'></h3>
+
+  <div style='display:flex;align-items:center;gap:16px;'>
+    <label style='font-weight:500;color:#1565c0;display:flex;align-items:center;gap:6px;'>
+      <input type='checkbox' id='excludeFormattingCheck' style='margin-right:6px;' />
+      Exclude Formatting
+    </label>
+
+    <div id='diffToggle' class='diff-toggle' title='Toggle diff view' onclick='toggleDiffView()' style='cursor:pointer;'>
+      <span id='diffToggleIcon'>☰</span>
     </div>
-      
-    <div class='diff-close' onclick='
-        document.getElementById(""diffBackdrop"").classList.add(""hide"");
-        document.getElementById(""diffDetails"").open = false;
-        document.getElementById(""diffDetails"").style.display = ""none"";
-    '>✖</div>
+
+    <div class='diff-close' style='cursor:pointer;font-size:1.4em;line-height:1;' onclick=""
+      document.getElementById('diffBackdrop').classList.add('hide');
+      document.getElementById('diffDetails').open = false;
+      document.getElementById('diffDetails').style.display = 'none';
+    "">✖</div>
+  </div>
+</div>
+
     </div>
     <div id='diffSideBySide' class='diff-columns' style='display:none;'>
       <div>
