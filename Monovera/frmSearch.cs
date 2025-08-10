@@ -155,7 +155,7 @@ namespace Monovera
             }
 
             string input = txtSearch.Text.Trim().ToLowerInvariant();
-            var matches = frmMain.issueDtoDict.Values
+            var matches = frmMain.FlatJiraIssueDictionary.Values
                 .Where(i => (!string.IsNullOrEmpty(i.Summary) && i.Summary.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0)
                          || (!string.IsNullOrEmpty(i.Key) && i.Key.IndexOf(input, StringComparison.OrdinalIgnoreCase) >= 0))
                 .OrderBy(i => i.Summary)
@@ -494,9 +494,9 @@ namespace Monovera
             }
         }
 
-        public static async Task<List<JiraIssueDto>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
+        public static async Task<List<JiraIssueDictionary>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
         {
-            var list = new List<JiraIssueDto>();
+            var list = new List<JiraIssueDictionary>();
 
             try
             {
@@ -540,7 +540,7 @@ namespace Monovera
                             updated = dt;
                         }
 
-                        list.Add(new JiraIssueDto
+                        list.Add(new JiraIssueDictionary
                         {
                             Key = key,
                             Summary = summary,
@@ -569,9 +569,9 @@ namespace Monovera
         /// Displays the search results in the WebView2 browser.
         /// Results are grouped by title and description matches, and rendered as HTML.
         /// </summary>
-        /// <param name="issues">List of JiraIssueDto results.</param>
+        /// <param name="issues">List of JiraIssueDictionary results.</param>
         /// <param name="query">Search query string.</param>
-        private void ShowResults(List<JiraIssueDto> issues, string query, bool isJqlMode = false)
+        private void ShowResults(List<JiraIssueDictionary> issues, string query, bool isJqlMode = false)
         {
             var matchedTitle = new StringBuilder();
             var matchedDesc = new StringBuilder();
@@ -601,7 +601,7 @@ namespace Monovera
                 }
 
                 string pathHtml = "";
-                string path = GetRequirementPath(key);
+                string path = frmMain.GetRequirementPath(key);
                 if (!string.IsNullOrEmpty(path))
                 {
                     pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{path}</div>";
@@ -765,44 +765,6 @@ namespace Monovera
             string key = e.TryGetWebMessageAsString();
             if (string.IsNullOrWhiteSpace(key)) return;
             SelectNodeByKey(key);
-        }
-
-        public static string GetRequirementPath(string issueKey)
-        {
-            var path = new List<string>();
-            string? currentKey = issueKey;
-
-            while (!string.IsNullOrEmpty(currentKey))
-            {
-                // Extract project key (e.g., "PROJ" from "PROJ-123")
-                var dashIdx = currentKey.IndexOf('-');
-                if (dashIdx <= 0) break;
-                var projectKey = currentKey.Substring(0, dashIdx);
-
-                // Find the project config for this key
-                var projectConfig = config.Projects
-                    .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
-                if (projectConfig == null || string.IsNullOrEmpty(projectConfig.LinkTypeName))
-                    break;
-
-                string hierarchyLinkType = projectConfig.LinkTypeName;
-
-                // Find the parent: an issue that links to currentKey via the project's hierarchy link type
-                var parent = frmMain.issueDtoDict.Values
-                    .FirstOrDefault(issue =>
-                        issue.IssueLinks != null &&
-                        issue.IssueLinks.Any(link =>
-                            link.LinkTypeName == hierarchyLinkType &&
-                            link.OutwardIssueKey == currentKey));
-
-                if (parent == null || string.Equals(parent.Key, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
-                    break;
-
-                path.Insert(0, $"{HttpUtility.HtmlEncode(parent.Summary)} [{parent.Key}]");
-                currentKey = parent.Key;
-            }
-
-            return path.Count > 0 ? string.Join(" &gt; ", path) : "";
         }
     }
 }

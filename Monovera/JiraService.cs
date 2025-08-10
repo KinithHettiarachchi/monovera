@@ -165,8 +165,8 @@ public class JiraService
     /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
     /// <param name="progressUpdate">Callback for progress reporting (completed, total, percent).</param>
     /// <param name="maxParallelism">Maximum parallel requests to Jira.</param>
-    /// <returns>List of JiraIssueDto objects for the project.</returns>
-    public async Task<List<JiraIssueDto>> GetAllIssuesForProject(
+    /// <returns>List of JiraIssueDictionary objects for the project.</returns>
+    public async Task<List<JiraIssueDictionary>> GetAllIssuesForProject(
         string projectKey,
         List<string> fields,
         string sortingField = "created",
@@ -180,14 +180,14 @@ public class JiraService
         if (!forceSync && File.Exists(cacheFile))
         {
             string json = await File.ReadAllTextAsync(cacheFile);
-            var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDto>>(json, new JsonSerializerOptions
+            var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDictionary>>(json, new JsonSerializerOptions
             {
                 PropertyNameCaseInsensitive = true
             });
-            return cachedIssues ?? new List<JiraIssueDto>();
+            return cachedIssues ?? new List<JiraIssueDictionary>();
         }
 
-        var allIssues = new List<JiraIssueDto>();
+        var allIssues = new List<JiraIssueDictionary>();
         string jql = $"project={projectKey} ORDER BY key ASC";
         int totalCount = await GetTotalIssueCountAsync(projectKey);
 
@@ -216,7 +216,7 @@ public class JiraService
 
                 var response = await client.GetStringAsync(url);
                 var json = JObject.Parse(response);
-                var issues = json["issues"].Select(issue => new JiraIssueDto
+                var issues = json["issues"].Select(issue => new JiraIssueDictionary
                 {
                     Key = (string)issue["key"],
                     Summary = (string)issue["fields"]["summary"],

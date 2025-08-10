@@ -244,6 +244,8 @@ namespace Monovera
             public List<string> RelatedIssueKeys { get; set; } = new List<string>();
 
             public string SortingField { get; set; }
+
+            public string FullPath { get; set; }
         }
 
         /// <summary>
@@ -265,7 +267,7 @@ namespace Monovera
         /// Data transfer object for Jira issues, including links and timestamps.
         /// Used for parsing and caching.
         /// </summary>
-        public class JiraIssueDto
+        public class JiraIssueDictionary
         {
             /// <summary>Issue key.</summary>
             public string Key { get; set; }
@@ -928,7 +930,7 @@ namespace Monovera
         /// </summary>
         private ToolStripMenuItem reportMenuItem;
         // Add this field to frmMain
-        public static Dictionary<string, JiraIssueDto> issueDtoDict = new();
+        public static Dictionary<string, JiraIssueDictionary> FlatJiraIssueDictionary = new();
         // Add these fields to frmMain
         private ContextMenuStrip tabContextMenu;
         private TabPage rightClickedTab;
@@ -1068,9 +1070,9 @@ namespace Monovera
             string baseKey = tree.SelectedNode.Tag?.ToString();
             if (string.IsNullOrWhiteSpace(baseKey)) return;
 
-            // Gather all keys and summaries from issueDtoDict instead of the tree
-            var allKeys = issueDtoDict.Keys.ToList();
-            var keySummaryDict = issueDtoDict.ToDictionary(
+            // Gather all keys and summaries from FlatJiraIssueDictionary instead of the tree
+            var allKeys = FlatJiraIssueDictionary.Keys.ToList();
+            var keySummaryDict = FlatJiraIssueDictionary.ToDictionary(
                 kvp => kvp.Key,
                 kvp => kvp.Value.Summary ?? ""
             );
@@ -2620,7 +2622,7 @@ namespace Monovera
 
             issueDict.Clear();
             childrenByParent.Clear();
-            issueDtoDict.Clear();
+            FlatJiraIssueDictionary.Clear();
 
             // 1. Sync only the requested project (if any)
             var projectsToSync = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
@@ -2656,10 +2658,10 @@ namespace Monovera
                 if (File.Exists(cacheFile))
                 {
                     string json = await File.ReadAllTextAsync(cacheFile);
-                    var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDto>>(json, new JsonSerializerOptions
+                    var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDictionary>>(json, new JsonSerializerOptions
                     {
                         PropertyNameCaseInsensitive = true
-                    }) ?? new List<JiraIssueDto>();
+                    }) ?? new List<JiraIssueDictionary>();
 
                     foreach (var myIssue in cachedIssues)
                     {
@@ -2688,7 +2690,7 @@ namespace Monovera
                         }
 
                         allIssues.Add(issue);
-                        issueDtoDict[myIssue.Key] = myIssue;
+                        FlatJiraIssueDictionary[myIssue.Key] = myIssue;
                     }
                 }
             }
@@ -2795,7 +2797,7 @@ namespace Monovera
 
             var sortedChildren = children.OrderBy(child =>
             {
-                if (issueDtoDict.TryGetValue(child.Key, out var dto))
+                if (FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
                     return dto.SortingField ?? "";
                 return child.Summary ?? "";
             }, comparer).ToList();
@@ -2826,7 +2828,7 @@ namespace Monovera
                 // Sort children using the project's sorting field
                 var sortedChildren = children.OrderBy(child =>
                 {
-                    if (issueDtoDict.TryGetValue(child.Key, out var dto))
+                    if (FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
                         return dto.SortingField ?? "";
                     return child.Summary ?? "";
                 }, comparer).ToList();
@@ -3174,7 +3176,7 @@ namespace Monovera
             var withChanges = await Task.WhenAll(tasks);
             var filteredIssues = withChanges.Where(i => i != null).ToList();
 
-            IEnumerable<IGrouping<DateTime, JiraIssueDto>> grouped;
+            IEnumerable<IGrouping<DateTime, JiraIssueDictionary>> grouped;
             try
             {
                 grouped = filteredIssues
@@ -3304,7 +3306,7 @@ namespace Monovera
                     string status = issue.CustomFields.TryGetValue("status", out var statusObj) ? HttpUtility.HtmlEncode(statusObj?.ToString() ?? "") : "";
 
                     string pathHtml = "";
-                    string path = frmSearch.GetRequirementPath(key);
+                    string path = GetRequirementPath(key);
                     if (!string.IsNullOrEmpty(path))
                     {
                         pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:1px;margin-top:1px;'>{path}</div>";
@@ -3871,9 +3873,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                                 : "";
 
 
-                            // Get sorting field value for this key from issueDtoDict
+                            // Get sorting field value for this key from FlatJiraIssueDictionary
                             string sortingValue = "";
-                            if (issueDtoDict.TryGetValue(key, out var dto))
+                            if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
                             {
                                 sortingValue = dto.SortingField ?? "";
                             }
@@ -3883,7 +3885,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     }
                 }
 
-                // Sort issues by sortingValue (from issueDtoDict)
+                // Sort issues by sortingValue (from FlatJiraIssueDictionary)
                 if (issues.Count > 0)
                 {
                     var comparer = new AlphanumericComparer();
@@ -3935,7 +3937,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     string pathHtml = "";
                     if (isRelatedTable)
                     {
-                        string path = frmSearch.GetRequirementPath(i.key);
+                        string path = GetRequirementPath(i.key);
                         if (!string.IsNullOrEmpty(path))
                             pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{path}</div>";
                     }
@@ -4806,7 +4808,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
 
         private static void InlineAttachmentImages(HtmlAgilityPack.HtmlDocument doc, string issueKey)
         {
-            if (!issueDtoDict.TryGetValue(issueKey, out var issueDto) || issueDto == null)
+            if (!FlatJiraIssueDictionary.TryGetValue(issueKey, out var issueDto) || issueDto == null)
                 return;
 
             // Find all text nodes that look like image file names
@@ -6056,90 +6058,221 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
 
         private async void mnuAITestCases_Click(object sender, EventArgs e)
         {
+            TalkToAI("test");
+        }
+
+        public static string GetRequirementPath(string issueKey)
+        {
+            var path = new List<string>();
+            string? currentKey = issueKey;
+
+            while (!string.IsNullOrEmpty(currentKey))
+            {
+                // Extract project key (e.g., "PROJ" from "PROJ-123")
+                var dashIdx = currentKey.IndexOf('-');
+                if (dashIdx <= 0) break;
+                var projectKey = currentKey.Substring(0, dashIdx);
+
+                // Find the project config for this key
+                var projectConfig = config.Projects
+                    .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
+                if (projectConfig == null || string.IsNullOrEmpty(projectConfig.LinkTypeName))
+                    break;
+
+                string hierarchyLinkType = projectConfig.LinkTypeName;
+
+                // Find the parent: an issue that links to currentKey via the project's hierarchy link type
+                var parent = frmMain.FlatJiraIssueDictionary.Values
+                    .FirstOrDefault(issue =>
+                        issue.IssueLinks != null &&
+                        issue.IssueLinks.Any(link =>
+                            link.LinkTypeName == hierarchyLinkType &&
+                            link.OutwardIssueKey == currentKey));
+
+                if (parent == null || string.Equals(parent.Key, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                path.Insert(0, $"{HttpUtility.HtmlEncode(parent.Summary)} [{parent.Key}]");
+                currentKey = parent.Key;
+            }
+
+            return path.Count > 0 ? string.Join(" &gt; ", path) : "";
+        }
+
+        /// <summary>
+        /// Finds the parent issue key for the given child issue key, based on the hierarchy link type for the project.
+        /// Returns the parent key if found, or null if the issue is a root or parent cannot be determined.
+        /// </summary>
+        /// <param name="childKey">The Jira issue key to find the parent for.</param>
+        /// <returns>The parent issue key, or null if not found or is a root.</returns>
+        public static string? GetParentByKey(string childKey)
+        {
+            if (string.IsNullOrWhiteSpace(childKey) || config?.Projects == null)
+                return null;
+
+            // Extract project key (e.g., "PROJ" from "PROJ-123")
+            var dashIdx = childKey.IndexOf('-');
+            if (dashIdx <= 0) return null;
+            var projectKey = childKey.Substring(0, dashIdx);
+
+            // Find the project config for this key
+            var projectConfig = config.Projects
+                .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
+            if (projectConfig == null || string.IsNullOrEmpty(projectConfig.LinkTypeName))
+                return null;
+
+            string hierarchyLinkType = projectConfig.LinkTypeName;
+
+            // Find the parent: an issue that links to childKey via the project's hierarchy link type
+            var parent = FlatJiraIssueDictionary.Values
+                .FirstOrDefault(issue =>
+                    issue.IssueLinks != null &&
+                    issue.IssueLinks.Any(link =>
+                        link.LinkTypeName == hierarchyLinkType &&
+                        link.OutwardIssueKey == childKey));
+
+            // If parent is root or not found, return null
+            if (parent == null || string.Equals(parent.Key, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return parent.Key;
+        }
+
+        private async void mnuPutMeInContext_Click(object sender, EventArgs e)
+        {
+            TalkToAI("context");
+        }
+
+        private async void TalkToAI(string mode)
+        {
             try
             {
-                // 1. Validate selected tab and key format
+                // 1. Get the current tab and key
                 if (tabDetails.SelectedTab is not TabPage tab)
                 {
-                    MessageBox.Show("No issue tab is selected.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("No issue tab is selected.", "Put Me In Context", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                string key = tab.Text?.Trim();
-                if (string.IsNullOrWhiteSpace(key) || !Regex.IsMatch(key, @"^[A-Z]+-\d+$", RegexOptions.IgnoreCase))
+                string rootKey = tab.Text?.Trim();
+                if (string.IsNullOrWhiteSpace(rootKey) || !Regex.IsMatch(rootKey, @"^[A-Z]+-\d+$", RegexOptions.IgnoreCase))
                 {
-                    MessageBox.Show("Selected tab is not a valid Jira issue tab.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Selected tab is not a valid Jira issue tab.", "Put Me In Context", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                // 2. Get WebView2 control from the selected tab
-                var webView = tab.Controls.OfType<Microsoft.Web.WebView2.WinForms.WebView2>().FirstOrDefault();
-                if (webView == null)
+                // 2. Build the set of relevant issue keys: root, all children, all related
+                var allKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootKey };
+
+                // Add all children recursively
+                void AddChildren(string parentKey)
                 {
-                    MessageBox.Show("No WebView2 found in the selected tab.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                // Ensure WebView2 is initialized
-                if (webView.CoreWebView2 == null)
-                    await webView.EnsureCoreWebView2Async();
-
-                // 3. Extract summary and description from the page
-                string summary = "";
-                string description = "";
-
-                try
-                {
-                    string jsSummary = @"(function() {
-                var h2 = document.querySelector('h2');
-                return h2 ? h2.innerText : '';
-            })();";
-                    var resultSummary = await webView.CoreWebView2.ExecuteScriptAsync(jsSummary);
-                    summary = Regex.Unescape(resultSummary.Trim('"'));
-
-                    string jsDescription = @"(function() {
-                var detailsList = document.querySelectorAll('details');
-                for (var i = 0; i < detailsList.length; i++) {
-                    var summaryElem = detailsList[i].querySelector('summary');
-                    if (summaryElem && summaryElem.textContent.trim().toLowerCase() === 'description') {
-                        var section = detailsList[i].querySelector('section');
-                        if (section) return section.innerText;
+                    if (childrenByParent.TryGetValue(parentKey, out var children))
+                    {
+                        foreach (var child in children)
+                        {
+                            if (allKeys.Add(child.Key))
+                                AddChildren(child.Key);
+                        }
                     }
                 }
-                return '';
-            })();";
-                    var resultDescription = await webView.CoreWebView2.ExecuteScriptAsync(jsDescription);
-                    description = Regex.Unescape(resultDescription.Trim('"'));
-                }
-                catch (Exception ex)
+                AddChildren(rootKey);
+
+                // Add all related issues (from FlatJiraIssueDictionary)
+                if (FlatJiraIssueDictionary.TryGetValue(rootKey, out var rootIssue))
                 {
-                    MessageBox.Show("Could not extract summary or description from the selected issue.\n" + ex.Message, "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    foreach (var link in rootIssue.IssueLinks)
+                    {
+                        if (!string.IsNullOrWhiteSpace(link.OutwardIssueKey))
+                            allKeys.Add(link.OutwardIssueKey);
+                    }
                 }
 
-                if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(description))
+                // 3. Fetch summary and description for each key
+                var issueInfos = new List<(string Key, string Summary, string Description, string ParentKey, List<string> RelatedKeys)>();
+                foreach (var key in allKeys)
                 {
-                    MessageBox.Show("No summary or description found in the selected issue.", "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    string summary = "";
+                    string description = "";
+                    string parentKey = GetParentByKey(key);
+                    List<string> relatedKeys = new();
+
+                    if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
+                    {
+                        summary = dto.Summary ?? "";
+                        // Try to get description from renderedFields if available
+                        if (dto.CustomFields != null && dto.CustomFields.TryGetValue("description", out var descObj) && descObj is string descStr)
+                            description = descStr;
+                        // Fallback: try to fetch from Jira if missing
+                        if (string.IsNullOrWhiteSpace(description))
+                        {
+                            try
+                            {
+                                var issue = await jiraService.GetIssueAsync(key);
+                                description = issue.Description ?? "";
+                            }
+                            catch { }
+                        }
+                        // Related keys
+                        if (dto.IssueLinks != null)
+                        {
+                            foreach (var link in dto.IssueLinks)
+                            {
+                                if (!string.IsNullOrWhiteSpace(link.OutwardIssueKey))
+                                    relatedKeys.Add(link.OutwardIssueKey);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: fetch from Jira
+                        try
+                        {
+                            var issue = await jiraService.GetIssueAsync(key);
+                            summary = issue.Summary ?? "";
+                            description = issue.Description ?? "";
+                        }
+                        catch { }
+                    }
+
+                    issueInfos.Add((key, summary, description, parentKey, relatedKeys));
                 }
 
-                string aiInput = $"{summary}\n\n{description}".Trim();
+                // 4. Build the context string
+                var sb = new StringBuilder();
+                sb.AppendLine($"Main requirement [{rootKey}]:");
+                foreach (var info in issueInfos)
+                {
+                    sb.AppendLine($"\n---\nKey: {info.Key}");
+                    if (!string.IsNullOrWhiteSpace(info.ParentKey))
+                        sb.AppendLine($"Parent: {info.ParentKey}");
+                    if (info.RelatedKeys.Count > 0)
+                        sb.AppendLine($"Related: {string.Join(", ", info.RelatedKeys)}");
+                    sb.AppendLine($"Summary: {info.Summary}");
+                    sb.AppendLine($"Description:\n{info.Description}");
+                }
+                string contextText = sb.ToString();
 
-                // ==== Use frmAITestCases instead of dialogAITestCases ====
+                // 5. Send to GeminiAI for summarization
+                string aiPrompt = contextText;
+
+                // Show the AI dialog (reuse frmAITestCases for display)
                 if (frmAITestCasesInstance == null || frmAITestCasesInstance.IsDisposed)
                     frmAITestCasesInstance = new frmAITestCases();
 
-                frmAITestCasesInstance.Show(this); // Use Show, not ShowDialog, to allow hiding
+                frmAITestCasesInstance.AI_MODE = mode;
+                frmAITestCasesInstance.Text = $"Put Me In Context: {rootKey}";
+                frmAITestCasesInstance.Show(this);
                 frmAITestCasesInstance.BringToFront();
                 frmAITestCasesInstance.Focus();
-                frmAITestCasesInstance.LoadAIContext(key, summary, aiInput);
+
+                frmAITestCasesInstance.LoadAIContext(rootKey, issueInfos.FirstOrDefault(i => i.Key == rootKey).Summary, aiPrompt);
             }
             catch (Exception ex)
             {
-                MessageBox.Show("A fatal error occurred: " + ex.Message, "AI Test Cases", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("A fatal error occurred: " + ex.Message, "Put Me In Context", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
-
     }
 
 }

@@ -95,7 +95,7 @@ public class JiraHtmlReportGenerator
             var comparer = new frmMain.AlphanumericComparer();
             var sortedChildren = children.OrderBy(child =>
             {
-                if (frmMain.issueDtoDict != null && frmMain.issueDtoDict.TryGetValue(child.Key, out var dto))
+                if (frmMain.FlatJiraIssueDictionary != null && frmMain.FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
                     return dto.SortingField ?? "";
                 return child.Summary ?? "";
             }, comparer).ToList();

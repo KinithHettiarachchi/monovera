@@ -75,7 +75,7 @@
             splitContainer1.Panel2.Controls.Add(panelTabs);
             splitContainer1.Panel2.Controls.Add(statusStrip1);
             splitContainer1.Size = new Size(1904, 1001);
-            splitContainer1.SplitterDistance = 670;
+            splitContainer1.SplitterDistance = 540;
             splitContainer1.TabIndex = 0;
             // 
             // tree
@@ -85,7 +85,8 @@
             tree.Font = new Font("Segoe UI", 9.75F, FontStyle.Regular, GraphicsUnit.Point, 0);
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
-            tree.Size = new Size(670, 1001);
+            tree.ShowNodeToolTips = true;
+            tree.Size = new Size(540, 1001);
             tree.TabIndex = 0;
             tree.AfterSelect += Tree_AfterSelect;
             tree.NodeMouseClick += tree_NodeMouseClick;
@@ -96,7 +97,7 @@
             panelTabs.Dock = DockStyle.Fill;
             panelTabs.Location = new Point(0, 0);
             panelTabs.Name = "panelTabs";
-            panelTabs.Size = new Size(1230, 978);
+            panelTabs.Size = new Size(1360, 978);
             panelTabs.TabIndex = 1;
             // 
             // statusStrip1
@@ -105,7 +106,7 @@
             statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
-            statusStrip1.Size = new Size(1230, 23);
+            statusStrip1.Size = new Size(1360, 23);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
@@ -180,6 +181,7 @@
             mnuPutMeInContext.Name = "mnuPutMeInContext";
             mnuPutMeInContext.Size = new Size(257, 22);
             mnuPutMeInContext.Text = "Put Me In Context (Experimental)";
+            mnuPutMeInContext.Click += mnuPutMeInContext_Click;
             // 
             // mnuSettings
             // 
