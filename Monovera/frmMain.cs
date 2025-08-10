@@ -3679,6 +3679,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
                     string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
 
+                    int attachmentCount = 0;
+                    if (fields.TryGetProperty("attachment", out var attachments) && attachments.ValueKind == JsonValueKind.Array)
+                        attachmentCount = attachments.GetArrayLength();
                     string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
 
                     string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
@@ -3707,7 +3710,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     string html = BuildIssueDetailFullPageHtml(
                         headerLine, issueType, statusIcon, status,
                         createdDate, lastUpdated, issueUrl,
-                        HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS,
+                        HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS, attachmentCount,
                         linksHtml, HTML_SECTION_HISTORY, responseHTML
                     );
 
@@ -4432,6 +4435,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     string issueUrl,
     string resolvedDesc,
     string attachmentsHtml,
+    int attachmentCount,
     string linksHtml,
     string historyHtml,
     string encodedJson)
@@ -4469,7 +4473,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
               <div class='tab-bar'>
                 <button class='tab-btn active' data-tab='linksTab'>Links</button>
                 <button class='tab-btn' data-tab='historyTab'>History</button>
-                <button class='tab-btn' data-tab='attachmentsTab'>Attachments</button>
+                <button class='tab-btn' data-tab='attachmentsTab'>Attachments [#{attachmentCount}]</button>
                 <button class='tab-btn' data-tab='ResponseTab'>Response</button>
               </div>
               <div class='tab-content' id='linksTab' style='display:block;'>
