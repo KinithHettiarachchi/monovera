@@ -177,6 +177,19 @@ pre[class*='language-'] {
 		box-shadow: 0 2px 4px rgba(33,150,243,0.10);
 	}
 
+.history-scroll-cell-content {
+	display: block;
+	max-height: 4.8em; /* 4 lines at 1.2em line-height */
+	overflow-y: auto;
+	white-space: pre-wrap;
+	word-break: break-word;
+	padding: 4px 8px;
+	background: #f0f9ff;
+	border-radius: 4px;
+	font-family: inherit;
+	font-size: inherit;
+}
+
 .change-header {
 	font-weight: 600;
 	color: #0d47a1;
