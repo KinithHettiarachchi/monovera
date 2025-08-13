@@ -26,6 +26,7 @@ using System.Xml.Linq;
 using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
+using ComboBox = System.Windows.Forms.ComboBox;
 using Font = System.Drawing.Font;
 using Image = System.Drawing.Image;
 
@@ -103,6 +104,7 @@ namespace Monovera
         private frmTalkToAI frmTalkToAIInstance;
 
         private Image tabDetailsBackgroundImage;
+        private static readonly SemaphoreSlim updateRepoSemaphore = new SemaphoreSlim(1, 1);
 
         string focustToTreeJS = @"
 <script>
@@ -217,7 +219,7 @@ namespace Monovera
             /// <summary>Link type name used for hierarchy (e.g. "Blocks").</summary>
             public string LinkTypeName { get; set; }
             /// <summary>Field name to sort child nodes by (e.g. "created", "summary", "customfield_12345").</summary>
-            public string SortingField { get; set; } // <-- Add this line
+            public string SortingField { get; set; } 
             /// <summary>Maps issue type names to icon filenames.</summary>
             public Dictionary<string, string> Types { get; set; }
             /// <summary>Maps status names to icon filenames.</summary>
@@ -286,6 +288,8 @@ namespace Monovera
             public DateTime? Created { get; set; }
 
             public Dictionary<string, object> CustomFields { get; set; } = new();
+
+            public string ParentKey { get; set; }
         }
 
         private NotifyIcon notifyIcon;
@@ -2607,140 +2611,166 @@ namespace Monovera
         /// Optionally forces a fresh sync from the server, bypassing cache.
         /// </summary>
         /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
-        private async Task LoadAllProjectsToTreeAsync(bool forceSync, string? project = null)
+        private async Task LoadAllProjectsToTreeAsync(bool forceSync, string? updateType = "Complete", string? project = null)
         {
-            // --- 1. Store the currently selected node's key (if any) ---
-            string? previouslySelectedKey = null;
-            if (forceSync && tree.SelectedNode != null && tree.SelectedNode.Tag is string tag && !string.IsNullOrWhiteSpace(tag))
-                previouslySelectedKey = tag;
-
-            pbProgress.Visible = true;
-            pbProgress.Value = 0;
-            pbProgress.Maximum = 100;
-            lblProgress.Visible = true;
-            lblProgress.Text = "Loading...";
-
-            issueDict.Clear();
-            childrenByParent.Clear();
-            FlatJiraIssueDictionary.Clear();
-
-            // 1. Sync only the requested project (if any)
-            var projectsToSync = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
-            foreach (var proj in projectsToSync)
+            if (updateRepoSemaphore.CurrentCount == 0)
             {
-                var projectConfig = config.Projects.FirstOrDefault(p => p.Project == proj);
-                string sortingField = projectConfig?.SortingField ?? "summary";
-                string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
-                var fieldsList = new List<string> { "summary", "issuetype", "issuelinks", sortingField };
-
-                await jiraService.GetAllIssuesForProject(
-                    proj,
-                    fieldsList,
-                    sortingField,
-                    linkTypeName,
-                    forceSync,
-                    (completed, total, percent) =>
-                    {
-                        this.Invoke(() =>
-                        {
-                            pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
-                            lblProgress.Text = $"Loading project ({proj}) : {completed}/{total} ({percent:0.0}%)...";
-                        });
-                    }
-                );
+                MessageBox.Show("A hierarchy update is already running. Please wait for it to finish.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
             }
 
-            // 2. Load all cached issues for all projects (not just the one synced)
-            var allIssues = new List<JiraIssue>();
-            foreach (var proj in projectList)
+            string? previouslySelectedKey = tree.SelectedNode?.Tag as string;
+
+            await updateRepoSemaphore.WaitAsync();
+            try
             {
-                string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{proj}.json");
-                if (File.Exists(cacheFile))
+                await Task.Run(async () =>
                 {
-                    string json = await File.ReadAllTextAsync(cacheFile);
-                    var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDictionary>>(json, new JsonSerializerOptions
+                    this.Invoke(() =>
                     {
-                        PropertyNameCaseInsensitive = true
-                    }) ?? new List<JiraIssueDictionary>();
+                        pbProgress.Visible = true;
+                        pbProgress.Value = 0;
+                        pbProgress.Maximum = 100;
+                        lblProgress.Visible = true;
+                        lblProgress.Text = "Loading...";
+                    });
 
-                    foreach (var myIssue in cachedIssues)
+                    issueDict.Clear();
+                    childrenByParent.Clear();
+                    FlatJiraIssueDictionary.Clear();
+
+                    var projectsToSync = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
+                    var allIssues = new List<JiraIssue>();
+
+                    foreach (var projectName in projectsToSync)
                     {
-                        var issue = new JiraIssue
-                        {
-                            Key = myIssue.Key,
-                            Summary = myIssue.Summary,
-                            Type = myIssue.Type,
-                            ParentKey = null,
-                            RelatedIssueKeys = new List<string>(),
-                            SortingField = myIssue.SortingField
-                        };
-
-                        var projectConfig = config.Projects.FirstOrDefault(p => myIssue.Key.StartsWith(p.Root.Split("-")[0]));
+                        var projectConfig = config.Projects.FirstOrDefault(p => p.Project == projectName);
+                        string projectKey = projectConfig?.Root.Split("-")[0] ?? "PROJ";
+                        string sortingField = projectConfig?.SortingField ?? "summary";
                         string linkTypeName = projectConfig?.LinkTypeName ?? "Blocks";
 
-                        if (myIssue.IssueLinks != null)
+                        List<JiraIssueDictionary> issueDictList;
+
+                        if (updateType == "Difference")
                         {
-                            foreach (var link in myIssue.IssueLinks)
+                            // Get max UPDATEDTIME from DB for this project
+                            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+                            string connStr = $"Data Source={dbPath};";
+                            string maxUpdatedTime = null;
+                            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
                             {
-                                if (link.LinkTypeName == linkTypeName && !string.IsNullOrEmpty(link.OutwardIssueKey))
+                                conn.Open();
+                                using (var cmd = conn.CreateCommand())
                                 {
-                                    issue.RelatedIssueKeys.Add(link.OutwardIssueKey);
+                                    cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTCODE = @pcode";
+                                    cmd.Parameters.AddWithValue("@pcode", projectKey);
+                                    var result = cmd.ExecuteScalar();
+                                    maxUpdatedTime = result != DBNull.Value && result != null ? result.ToString() : null;
                                 }
                             }
+
+                            // Call JiraService with custom JQL
+                            issueDictList = await jiraService.UpdateLocalIssueRepositoryAndLoadTree(
+                                projectKey,
+                                projectName,
+                                sortingField,
+                                linkTypeName,
+                                forceSync: forceSync,
+                                progressUpdate: (completed, total, percent) =>
+                                {
+                                    this.Invoke(() =>
+                                    {
+                                        pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
+                                        lblProgress.Text = $"Loading project ({projectName}) : {completed}/{total} ({percent:0.0}%)...";
+                                    });
+                                },
+                                maxParallelism: 4,
+                                updateType
+                            );
+                        }
+                        else // Complete
+                        {
+                            issueDictList = await jiraService.UpdateLocalIssueRepositoryAndLoadTree(
+                                projectKey,
+                                projectName,
+                                sortingField,
+                                linkTypeName,
+                                forceSync: forceSync,
+                                progressUpdate: (completed, total, percent) =>
+                                {
+                                    this.Invoke(() =>
+                                    {
+                                        pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
+                                        lblProgress.Text = $"Loading project ({projectName}) : {completed}/{total} ({percent:0.0}%)...";
+                                    });
+                                }
+                            );
                         }
 
-                        allIssues.Add(issue);
-                        FlatJiraIssueDictionary[myIssue.Key] = myIssue;
+                        foreach (var dto in issueDictList)
+                        {
+                            if (!FlatJiraIssueDictionary.ContainsKey(dto.Key))
+                            {
+                                var issue = new JiraIssue
+                                {
+                                    Key = dto.Key,
+                                    Summary = dto.Summary,
+                                    Type = dto.Type,
+                                    ParentKey = dto.ParentKey,
+                                    RelatedIssueKeys = dto.IssueLinks?.Select(l => l.OutwardIssueKey).ToList() ?? new List<string>(),
+                                    SortingField = dto.SortingField,
+                                    FullPath = ""
+                                };
+                                allIssues.Add(issue);
+                                FlatJiraIssueDictionary[issue.Key] = dto;
+                            }
+                        }
                     }
-                }
-            }
 
-            BuildDictionaries(allIssues);
+                    BuildDictionaries(allIssues);
 
-            pbProgress.Visible = false;
-            lblProgress.Visible = false;
-
-            // Always build the tree for all projects, not just the synced one
-            tree.Invoke(() =>
-            {
-                tree.Nodes.Clear();
-                rootNodeList.Clear();
-                var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
-
-                foreach (var rootIssue in issueDict.Values.Where(i => i.ParentKey == null || !issueDict.ContainsKey(i.ParentKey)))
-                {
-                    if (!rootKeys.Contains(rootIssue.Key)) continue;
-
-                    var rootNode = CreateTreeNode(rootIssue);
-                    if (GetChildrenForNode(rootIssue.Key).Count > 0)
-                        rootNode.Nodes.Add(new TreeNode("Loading...") { Tag = "DUMMY" });
-                    tree.Nodes.Add(rootNode);
-                    rootNodeList.Add(rootNode);
-                }
-
-                // Expand all root nodes after loading
-                foreach (var rootNode in rootNodeList)
-                {
-                    rootNode.Expand();
-                }
-            });
-
-            // --- 2. After reload, try to restore selection ---
-            if (forceSync && !string.IsNullOrWhiteSpace(previouslySelectedKey))
-            {
-                // Wait a moment to ensure UI is updated and nodes are available
-                await Task.Delay(100);
-
-                tree.Invoke(async () =>
-                {
-                    var node = await ExpandPathToKeyAsync(previouslySelectedKey);
-                    if (node != null)
+                    this.Invoke(async () =>
                     {
-                        tree.SelectedNode = node;
-                        node.EnsureVisible();
-                        tree.Focus();
-                    }
+                        pbProgress.Visible = false;
+                        lblProgress.Visible = false;
+
+                        tree.Nodes.Clear();
+                        rootNodeList.Clear();
+                        var rootKeys = root_key.Split(',').Select(k => k.Trim()).ToHashSet();
+
+                        foreach (var rootIssue in issueDict.Values.Where(i => string.IsNullOrEmpty(i.ParentKey) || !issueDict.ContainsKey(i.ParentKey)))
+                        {
+                            if (!rootKeys.Contains(rootIssue.Key)) continue;
+
+                            var rootNode = CreateTreeNode(rootIssue);
+                            if (GetChildrenForNode(rootIssue.Key).Count > 0)
+                                rootNode.Nodes.Add(new TreeNode("Loading...") { Tag = "DUMMY" });
+                            tree.Nodes.Add(rootNode);
+                            rootNodeList.Add(rootNode);
+                        }
+
+                        foreach (var rootNode in rootNodeList)
+                        {
+                            rootNode.Expand();
+                        }
+
+                        // Restore selection
+                        if (!string.IsNullOrWhiteSpace(previouslySelectedKey))
+                        {
+                            var node = await ExpandPathToKeyAsync(previouslySelectedKey);
+                            if (node != null)
+                            {
+                                tree.SelectedNode = node;
+                                node.EnsureVisible();
+                                tree.Focus();
+                            }
+                        }
+                    });
                 });
+            }
+            finally
+            {
+                updateRepoSemaphore.Release();
             }
         }
 
@@ -2792,15 +2822,13 @@ namespace Monovera
             if (!childrenByParent.TryGetValue(parentKey, out var children) || children.Count == 0)
                 return;
 
-            string sortingField = projectConfig?.SortingField ?? "summary";
-            var comparer = new AlphanumericComparer();
-
+            // Sort children by SortingField as integer
             var sortedChildren = children.OrderBy(child =>
             {
-                if (FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
-                    return dto.SortingField ?? "";
-                return child.Summary ?? "";
-            }, comparer).ToList();
+                if (int.TryParse(child.SortingField, out int num))
+                    return num;
+                return int.MaxValue;
+            }).ToList();
 
             foreach (var child in sortedChildren)
             {
@@ -2822,14 +2850,14 @@ namespace Monovera
                 string key = node.Tag?.ToString();
                 string keyPrefix = key?.Split('-')[0];
                 var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
-                string sortingField = projectConfig?.SortingField ?? "summary";
+                string sortingField = projectConfig?.SortingField;
                 var comparer = new AlphanumericComparer();
 
                 // Sort children using the project's sorting field
                 var sortedChildren = children.OrderBy(child =>
                 {
                     if (FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
-                        return dto.SortingField ?? "";
+                        return dto.SortingField ?? "summary";
                     return child.Summary ?? "";
                 }, comparer).ToList();
 
@@ -2866,22 +2894,15 @@ namespace Monovera
                 issueDict[issue.Key] = issue;
             }
 
-            // Build parent-child relationships based on RelatedIssueKeys (hierarchy links)
+            // Build parent-child relationships using ParentKey
             foreach (var issue in issues)
             {
-                foreach (var relatedKey in issue.RelatedIssueKeys)
+                if (!string.IsNullOrEmpty(issue.ParentKey))
                 {
-                    if (issueDict.TryGetValue(relatedKey, out var child))
-                    {
-                        if (string.IsNullOrEmpty(child.ParentKey))
-                            child.ParentKey = issue.Key;
+                    if (!childrenByParent.ContainsKey(issue.ParentKey))
+                        childrenByParent[issue.ParentKey] = new List<JiraIssue>();
 
-                        if (!childrenByParent.ContainsKey(issue.Key))
-                            childrenByParent[issue.Key] = new List<JiraIssue>();
-
-                        if (!childrenByParent[issue.Key].Any(c => c.Key == child.Key))
-                            childrenByParent[issue.Key].Add(child);
-                    }
+                    childrenByParent[issue.ParentKey].Add(issue);
                 }
             }
         }
@@ -3457,11 +3478,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
         private TreeNode CreateTreeNode(JiraIssue issue)
         {
-            //string typeKey = GetIconForType(issue.Type);
-            //string statusKey = GetIconForStatus(issue.Status);
-            //string iconKey = !string.IsNullOrEmpty(statusKey) ? statusKey : typeKey;
-
-            string iconKey = GetIconForType(issue.Type); // or combine with status if needed
+            string iconKey = GetIconForType(issue.Type);
             return new TreeNode($"{issue.Summary} [{issue.Key}]")
             {
                 Tag = issue.Key,
@@ -3874,10 +3891,10 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
 
                             // Get sorting field value for this key from FlatJiraIssueDictionary
-                            string sortingValue = "";
+                            string sortingValue = "0";
                             if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
                             {
-                                sortingValue = dto.SortingField ?? "";
+                                sortingValue = dto.SortingField;
                             }
 
                             issues.Add((key, sum, issueType, sortingValue, issueElem));
@@ -3889,7 +3906,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 if (issues.Count > 0)
                 {
                     var comparer = new AlphanumericComparer();
-                    issues = issues.OrderBy(i => i.sortingValue ?? i.summary ?? "", comparer).ToList();
+                    issues = issues.OrderBy(i => i.sortingValue, comparer).ToList();
                 }
 
                 var tableRows = new StringBuilder();
@@ -4105,7 +4122,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
     </table>
 </div>
 
-<!-- Difference overalay dialog -->
+<!-- Difference overalay DialogUpdateHierarchy -->
 <div id='diffBackdrop' class='diff-backdrop hide'></div>
 <details id='diffDetails' class='diff-overlay' style='display:none;'>
   <summary class='diff-overlay-summary'></summary>
@@ -5359,21 +5376,20 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
         /// </summary>
         /// <param name="sender">The menu item clicked.</param>
         /// <param name="e">Event arguments.</param>
-        private void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
+        private async void updateHierarchyToolStripMenuItem_Click(object sender, EventArgs e)
         {
             var DialogUpdateHierarchy = new Form
             {
                 Text = "Update Hierarchy",
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
-                Width = 400,
-                Height = 254,
+                Width = 420,
+                Height = 240,
+                BackColor = GetCSSColor_Tree_Background(cssPath),
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ShowInTaskbar = false,
-                Font = new Font("Segoe UI", 10),
-                BackColor = GetCSSColor_Tree_Background(cssPath),
-                Padding = new Padding(20),
+                Font = new Font("Segoe UI", 10)
             };
 
             string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", "Monovera.ico");
@@ -5382,106 +5398,112 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 DialogUpdateHierarchy.Icon = new Icon(iconPath);
             }
 
-            // Main layout
             var layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-                Padding = new Padding(0),
+                ColumnCount = 2,
+                RowCount = 4, // FIXED to handle title + 2 combo rows + buttons
+                Padding = new Padding(20, 15, 20, 15),
                 BackColor = GetCSSColor_Tree_Background(cssPath),
+                AutoSize = true
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120)); // Label width
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // Control width
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Title row
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); // Project row
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); // Type row
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); // Buttons row
 
-            // Label
-            var lbl = new Label
+            // Title
+            var lblTitle = new Label
             {
-                Text = "Select a project to update.",
-                Dock = DockStyle.Fill,
-                AutoSize = false,
-                TextAlign = ContentAlignment.MiddleCenter,
+                Text = "Update Hierarchy",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
-                Padding = new Padding(10),
-                MaximumSize = new Size(400, 0),
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = GetCSSColor_Title(cssPath)
             };
+            layout.SetColumnSpan(lblTitle, 2);
+            layout.Controls.Add(lblTitle, 0, 0);
 
-            // ComboBox
-            var cmbProjects = new System.Windows.Forms.ComboBox
+            // Project label
+            var lblProject = new Label
             {
-                Font = new Font("Segoe UI", 10),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 300,
-                DropDownWidth = 300,
-                Anchor = AnchorStyles.None,
+                Text = "Project:",
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill
             };
+            layout.Controls.Add(lblProject, 0, 1);
 
-            cmbProjects.Items.Add("All Projects");
-            foreach (var proj in projectList)
-                cmbProjects.Items.Add(proj);
-            cmbProjects.SelectedIndex = 0;
-
-            // Centering ComboBox in a Panel
-            var comboPanel = new Panel
+            // Project combo
+            var cmbProject = new ComboBox
             {
                 Dock = DockStyle.Fill,
-                AutoSize = false,
-                Padding = new Padding(0),
-                BackColor = Color.Transparent,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10)
             };
-
-            cmbProjects.Location = new Point((comboPanel.Width - cmbProjects.Width) / 2, (comboPanel.Height - cmbProjects.Height) / 2);
-            cmbProjects.Anchor = AnchorStyles.None;
-
-            comboPanel.Controls.Add(cmbProjects);
-            comboPanel.Resize += (s, e) =>
+            cmbProject.Items.Add("All");
+            if (config?.Projects != null)
             {
-                cmbProjects.Location = new Point(
-                    (comboPanel.Width - cmbProjects.Width) / 2,
-                    (comboPanel.Height - cmbProjects.Height) / 2
-                );
-            };
+                foreach (var proj in config.Projects)
+                    cmbProject.Items.Add(proj.Project);
+            }
+            cmbProject.SelectedIndex = 0;
+            layout.Controls.Add(cmbProject, 1, 1);
 
-            // Buttons
+            // Update Type label
+            var lblType = new Label
+            {
+                Text = "Update Type:",
+                TextAlign = ContentAlignment.MiddleRight,
+                Dock = DockStyle.Fill
+            };
+            layout.Controls.Add(lblType, 0, 2);
+
+            // Update Type combo
+            var cmbType = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 10)
+            };
+            cmbType.Items.AddRange(new[] { "Difference", "Complete" });
+            cmbType.SelectedIndex = 0;
+            layout.Controls.Add(cmbType, 1, 2);
+
+            // Buttons panel
             var buttonPanel = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
                 Dock = DockStyle.Fill,
-                Padding = new Padding(0, 10, 0, 0),
+                Padding = new Padding(0, 5, 0, 0),
+                BackColor = GetCSSColor_Tree_Background(cssPath)
             };
 
-            var btnUpdate = CreateDialogButton("Update", DialogResult.Yes, true);
+            var btnOk = CreateDialogButton("Update", DialogResult.OK, true);
             var btnCancel = CreateDialogButton("Cancel", DialogResult.Cancel);
-            btnUpdate.Margin = new Padding(10, 0, 0, 0);
-            btnCancel.Margin = new Padding(10, 0, 0, 0);
-            buttonPanel.Controls.Add(btnUpdate);
+
+            buttonPanel.Controls.Add(btnOk);
             buttonPanel.Controls.Add(btnCancel);
 
-            // Add controls to layout
-            layout.Controls.Add(lbl, 0, 0);
-            layout.Controls.Add(comboPanel, 0, 1);
-            layout.Controls.Add(buttonPanel, 0, 2);
+            layout.SetColumnSpan(buttonPanel, 2);
+            layout.Controls.Add(buttonPanel, 0, 3);
 
             DialogUpdateHierarchy.Controls.Add(layout);
-            DialogUpdateHierarchy.AcceptButton = btnUpdate;
+            DialogUpdateHierarchy.AcceptButton = btnOk;
             DialogUpdateHierarchy.CancelButton = btnCancel;
 
 
-            var result = DialogUpdateHierarchy.ShowDialog(this);
+            if (DialogUpdateHierarchy.ShowDialog(this) != DialogResult.OK)
+                return;
 
-            if (result == DialogResult.Yes)
-            {
-                string selectedProject = cmbProjects.SelectedItem?.ToString();
-                if (selectedProject == "All Projects")
-                {
-                    _ = LoadAllProjectsToTreeAsync(true);
-                }
-                else
-                {
-                    _ = LoadAllProjectsToTreeAsync(true, selectedProject);
-                }
-            }
+            string updateType = cmbType.SelectedItem?.ToString() ?? "Difference";
+            string selectedProject = cmbProject.SelectedItem?.ToString();
+
+            if (selectedProject == "All")
+                await LoadAllProjectsToTreeAsync(true, updateType, null);
+            else
+                await LoadAllProjectsToTreeAsync(true, updateType, selectedProject);
         }
 
         /// <summary>
@@ -6225,7 +6247,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     return;
                 }
 
-                // Show the AI dialog (reuse frmAITestCases for display)
+                // Show the AI DialogUpdateHierarchy (reuse frmAITestCases for display)
                 if (frmTalkToAIInstance == null || frmTalkToAIInstance.IsDisposed)
                     frmTalkToAIInstance = new frmTalkToAI();
 

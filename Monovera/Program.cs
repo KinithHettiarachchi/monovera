@@ -1,5 +1,6 @@
 namespace Monovera
 {
+    using SQLitePCL;
     internal static class Program
     {
         /// <summary>
@@ -8,6 +9,7 @@ namespace Monovera
         [STAThread]
         static void Main()
         {
+            Batteries_V2.Init();
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
             ApplicationConfiguration.Initialize();

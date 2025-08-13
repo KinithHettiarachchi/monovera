@@ -96,7 +96,7 @@ public class JiraHtmlReportGenerator
             var sortedChildren = children.OrderBy(child =>
             {
                 if (frmMain.FlatJiraIssueDictionary != null && frmMain.FlatJiraIssueDictionary.TryGetValue(child.Key, out var dto))
-                    return dto.SortingField ?? "";
+                    return dto.SortingField;
                 return child.Summary ?? "";
             }, comparer).ToList();
 

@@ -9,6 +9,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using static Monovera.frmMain;
 using Monovera;
+using System.Data.SQLite;
+using Microsoft.Data.Sqlite;
 
 /// <summary>
 /// Service class to interact with Jira via Atlassian.Jira SDK and REST API.
@@ -166,159 +168,408 @@ public class JiraService
     /// <param name="progressUpdate">Callback for progress reporting (completed, total, percent).</param>
     /// <param name="maxParallelism">Maximum parallel requests to Jira.</param>
     /// <returns>List of JiraIssueDictionary objects for the project.</returns>
-    public async Task<List<JiraIssueDictionary>> GetAllIssuesForProject(
-        string projectKey,
-        List<string> fields,
-        string sortingField = "created",
-        string linkTypeName = "Blocks",
-        bool forceSync = false,
-        Action<int, int, double> progressUpdate = null,
-        int maxParallelism = 10)
+    public async Task<List<JiraIssueDictionary>> UpdateLocalIssueRepositoryAndLoadTree(
+    string projectKey,
+    string projectName,
+    string sortingField,
+    string linkTypeName = "Blocks",
+    bool forceSync = false,
+    Action<int, int, double> progressUpdate = null,
+    int maxParallelism = 100,
+    string updateType = "Complete")
     {
-        string cacheFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{projectKey}.json");
+        string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+        string connStr = $"Data Source={dbPath};";
 
-        if (!forceSync && File.Exists(cacheFile))
+        bool dbExists = File.Exists(dbPath);
+        bool tableEmpty = true;
+
+        // Ensure DB and tables exist, and set WAL mode for concurrency
+        if (!dbExists)
         {
-            string json = await File.ReadAllTextAsync(cacheFile);
-            var cachedIssues = JsonSerializer.Deserialize<List<JiraIssueDictionary>>(json, new JsonSerializerOptions
+            using (var conn = new SqliteConnection(connStr))
             {
-                PropertyNameCaseInsensitive = true
-            });
-            return cachedIssues ?? new List<JiraIssueDictionary>();
-        }
-
-        var allIssues = new List<JiraIssueDictionary>();
-        string jql = $"project={projectKey} ORDER BY key ASC";
-        int totalCount = await GetTotalIssueCountAsync(projectKey);
-
-        if (totalCount == 0) return allIssues;
-
-        const int pageSize = 100;
-        int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
-        var pageStarts = Enumerable.Range(0, totalPages).Select(i => i * pageSize).ToList();
-        var batches = pageStarts
-            .Select((startAt, idx) => new { startAt, batch = idx / maxParallelism })
-            .GroupBy(x => x.batch)
-            .Select(g => g.Select(x => x.startAt).ToList())
-            .ToList();
-
-        int completed = 0;
-
-        foreach (var batch in batches)
-        {
-            var tasks = batch.Select(async startAt =>
-            {
-                string fieldsStr = fields != null && fields.Any() ? string.Join(",", fields) : "*all";
-                string url = $"{jiraBaseUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields={Uri.EscapeDataString(fieldsStr)}";
-
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}")));
-
-                var response = await client.GetStringAsync(url);
-                var json = JObject.Parse(response);
-                var issues = json["issues"].Select(issue => new JiraIssueDictionary
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
                 {
-                    Key = (string)issue["key"],
-                    Summary = (string)issue["fields"]["summary"],
-                    Type = (string)issue["fields"]["issuetype"]?["name"],
-                    IssueLinks = issue["fields"]["issuelinks"] is JArray linksArray
-                                ? linksArray
-                                    .Where(link => (string)link["type"]?["name"] == linkTypeName)
-                                    .Select(link => new JiraIssueLink
-                                    {
-                                        LinkTypeName = (string)link["type"]?["name"],
-                                        OutwardIssueKey = (string)link["outwardIssue"]?["key"],
-                                    })
-                                    .ToList()
-                                : new List<JiraIssueLink>(),
-                    SortingField = (string)issue["fields"]?[sortingField]
-                }).ToList();
-
-                return issues;
-            });
-
-            var results = await Task.WhenAll(tasks);
-            foreach (var list in results)
+                    cmd.CommandText = @"
+                PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS issue (
+                    ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                    CREATEDTIME TEXT,
+                    UPDATEDTIME TEXT,
+                    KEY TEXT UNIQUE,
+                    SUMMARY TEXT,
+                    DESCRIPTION TEXT,
+                    PARENTKEY TEXT,
+                    CHILDRENKEYS TEXT,
+                    RELATESKEYS TEXT,
+                    SORTINGFIELD TEXT,
+                    ISSUETYPE TEXT,
+                    PROJECTNAME TEXT,
+                    PROJECTCODE TEXT
+                );";
+                    cmd.ExecuteNonQuery();
+                }
+            }
+            tableEmpty = true;
+        }
+        else
+        {
+            using (var conn = new SqliteConnection(connStr))
             {
-                allIssues.AddRange(list);
-                completed += list.Count;
-                double percent = totalCount > 0 ? (completed * 100.0 / totalCount) : 100.0;
-                progressUpdate?.Invoke(completed, totalCount, percent);
+                conn.Open();
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = $"SELECT COUNT(1) FROM issue WHERE PROJECTCODE='{projectKey}'";
+                    tableEmpty = Convert.ToInt32(cmd.ExecuteScalar()) == 0;
+                }
             }
         }
 
-        string serialized = JsonSerializer.Serialize(allIssues, new JsonSerializerOptions { WriteIndented = true });
-
-        // Post-process the JSON to remove unwanted properties/values
-        using var doc = JsonDocument.Parse(serialized);
-        var filtered = new List<JsonElement>();
-
-        foreach (var issue in doc.RootElement.EnumerateArray())
+        // If DB is empty or forced sync, update DB from Jira
+        if (tableEmpty || forceSync)
         {
-            using var objDoc = JsonDocument.Parse(issue.GetRawText());
-            var obj = objDoc.RootElement;
-
-            using var ms = new MemoryStream();
-            using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+            // Build JQL based on updateType
+            string jql;
+            if (updateType == "Difference")
             {
-                writer.WriteStartObject();
-                foreach (var prop in obj.EnumerateObject())
+                // Get max UPDATEDTIME from DB for this project
+                string maxUpdatedTime = null;
+                using (var conn = new SqliteConnection(connStr))
                 {
-                    // Exclude unwanted properties/values
-                    if (prop.Name == "Updated" && prop.Value.ValueKind == JsonValueKind.Null)
-                        continue;
-                    if (prop.Name == "Created" && prop.Value.ValueKind == JsonValueKind.Null)
-                        continue;
-                    if (prop.Name == "CustomFields")
-                        continue;
-                    if (prop.Name == "IssueLinks" && prop.Value.ValueKind == JsonValueKind.Array)
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
                     {
-                        // Filter IssueLinks array
-                        writer.WritePropertyName("IssueLinks");
-                        writer.WriteStartArray();
-                        foreach (var link in prop.Value.EnumerateArray())
-                        {
-                            using var linkDoc = JsonDocument.Parse(link.GetRawText());
-                            var linkObj = linkDoc.RootElement;
-                            writer.WriteStartObject();
-                            foreach (var linkProp in linkObj.EnumerateObject())
-                            {
-                                if (linkProp.Name == "OutwardIssueSummary" && linkProp.Value.GetString() == "")
-                                    continue;
-                                if (linkProp.Name == "OutwardIssueType" && linkProp.Value.GetString() == "")
-                                    continue;
-                                writer.WritePropertyName(linkProp.Name);
-                                linkProp.Value.WriteTo(writer);
-                            }
-                            writer.WriteEndObject();
-                        }
-                        writer.WriteEndArray();
-                    }
-                    else
-                    {
-                        writer.WritePropertyName(prop.Name);
-                        prop.Value.WriteTo(writer);
+                        cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTCODE = @pcode";
+                        cmd.Parameters.AddWithValue("@pcode", projectKey);
+                        var result = cmd.ExecuteScalar();
+                        maxUpdatedTime = result != DBNull.Value && result != null ? result.ToString() : null;
                     }
                 }
-                writer.WriteEndObject();
-            }
-            filtered.Add(JsonDocument.Parse(ms.ToArray()).RootElement.Clone());
-        }
 
-        // Write filtered JSON to file
-        using (var ms = new MemoryStream())
-        {
-            using (var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = true }))
+                // Convert maxUpdatedTime to Jira format
+                string jiraTime = null;
+                if (!string.IsNullOrWhiteSpace(maxUpdatedTime) && maxUpdatedTime.Length == 14)
+                {
+                    // yyyyMMddHHmmss -> yyyy-MM-dd HH:mm
+                    jiraTime = DateTime.ParseExact(maxUpdatedTime, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
+                }
+
+                if (!string.IsNullOrWhiteSpace(jiraTime))
+                    jql = $"project={projectKey} AND (updated >= \"{jiraTime}\" OR created >= \"{jiraTime}\")";
+                else
+                    jql = $"project={projectKey}";
+            }
+            else // Complete
             {
-                writer.WriteStartArray();
-                foreach (var item in filtered)
-                    item.WriteTo(writer);
-                writer.WriteEndArray();
+                jql = $"project={projectKey}";
             }
-            await File.WriteAllTextAsync(cacheFile, Encoding.UTF8.GetString(ms.ToArray()));
+
+            int totalCount = await GetTotalIssueCountAsync(projectKey, jql);
+
+            if (totalCount > 0)
+            {
+                const int pageSize = 100;
+                int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+                var pageStarts = Enumerable.Range(0, totalPages).Select(i => i * pageSize).ToList();
+
+                int completed = 0;
+                var allIssueRows = new List<object[]>();
+
+                var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4)); // SQLite: keep parallelism low
+                var tasks = pageStarts.Select(async startAt =>
+                {
+                    await throttler.WaitAsync();
+                    try
+                    {
+                        string fieldsStr = "summary,description,issuetype,status,created,updated,issuelinks";
+                        bool hasSortingField = !string.IsNullOrWhiteSpace(sortingField);
+                        if (hasSortingField)
+                        {
+                            fieldsStr += $",{sortingField}";
+                        }
+                        string url = $"{jiraBaseUrl}/rest/api/2/search" +
+                                     $"?jql={Uri.EscapeDataString(jql)}" +
+                                     $"&startAt={startAt}" +
+                                     $"&maxResults={pageSize}" +
+                                     $"&fields={Uri.EscapeDataString(fieldsStr)}";
+
+                        using var client = new HttpClient();
+                        client.Timeout = TimeSpan.FromMinutes(5); // Increase timeout to 5 minutes
+                        client.BaseAddress = new Uri(jiraBaseUrl);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                            "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
+                        );
+
+                        var response = await client.GetStringAsync(url);
+                        var json = JObject.Parse(response);
+                        var issues = json["issues"].Select(issue =>
+                        {
+                            string created = ConvertToDbTimestamp((string)issue["fields"]["created"]);
+                            string updated = ConvertToDbTimestamp((string)issue["fields"]["updated"]);
+                            string key = (string)issue["key"];
+                            string summary = (string)issue["fields"]["summary"];
+                            string description = issue["fields"]["description"]?.ToString() ?? "";
+                            string parentKey = "";
+                            string childrenKeys = "";
+                            string relatesKeys = "";
+                            string sortingFieldValue = null;
+
+                            if (hasSortingField && issue["fields"][sortingField] != null)
+                            {
+                                sortingFieldValue = issue["fields"][sortingField].ToString();
+                            }
+
+                            string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
+
+                            if (issue["fields"]["issuelinks"] is JArray linksArray)
+                            {
+                                var relates = linksArray
+                                    .Where(link => (string)link["type"]?["name"] == "Relates")
+                                    .Select(link =>
+                                        (string)link["outwardIssue"]?["key"] ?? "")
+                                    .Where(k => !string.IsNullOrWhiteSpace(k))
+                                    .Distinct()
+                                    .ToList();
+                                relatesKeys = string.Join(",", relates);
+
+                                var children = linksArray
+                                    .Where(link => (string)link["type"]?["name"] == linkTypeName)
+                                    .Select(link =>
+                                        (string)link["outwardIssue"]?["key"])
+                                    .Where(k => !string.IsNullOrWhiteSpace(k))
+                                    .Distinct()
+                                    .ToList();
+                                childrenKeys = string.Join(",", children);
+
+                                var parentLink = linksArray
+                                    .FirstOrDefault(link =>
+                                        (string)link["type"]?["name"] == linkTypeName &&
+                                        link["inwardIssue"]?["key"] != null);
+
+                                parentKey = parentLink != null ? (string)parentLink["inwardIssue"]["key"] : "";
+                            }
+
+                            return new object[]
+                            {
+                            created, updated, key, summary, description, parentKey, childrenKeys, relatesKeys, sortingFieldValue, issueType, projectName, projectKey
+                            };
+                        }).ToList();
+
+                        lock (allIssueRows)
+                        {
+                            allIssueRows.AddRange(issues);
+                        }
+
+                        Interlocked.Add(ref completed, issues.Count);
+                        double percent = totalCount > 0 ? (completed * 100.0 / totalCount) : 100.0;
+                        progressUpdate?.Invoke(completed, totalCount, percent);
+                    }
+                    finally
+                    {
+                        throttler.Release();
+                    }
+                }).ToList();
+
+                await Task.WhenAll(tasks);
+
+                // Now batch check existence and update times, then batch write
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+
+                    // Build a lookup for all keys
+                    var keys = allIssueRows.Select(row => (string)row[2]).Distinct().ToList();
+                    var dbTimes = new Dictionary<string, string>();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = $"SELECT KEY, UPDATEDTIME FROM issue WHERE KEY IN ({string.Join(",", keys.Select((k, i) => $"@k{i}"))})";
+                        for (int i = 0; i < keys.Count; i++)
+                            cmd.Parameters.AddWithValue($"@k{i}", keys[i]);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                dbTimes[reader.GetString(0)] = reader.GetString(1);
+                            }
+                        }
+                    }
+
+                    // Prepare batch
+                    var toInsert = new List<object[]>();
+                    var toUpdate = new List<object[]>();
+
+                    foreach (var row in allIssueRows)
+                    {
+                        string key = (string)row[2];
+                        string updated = (string)row[1];
+                        bool exists = dbTimes.ContainsKey(key);
+                        bool shouldUpdate = false;
+                        if (exists)
+                        {
+                            string dbUpdated = dbTimes[key];
+                            if (string.Compare(updated, dbUpdated, StringComparison.Ordinal) > 0)
+                                shouldUpdate = true;
+                        }
+                        if (!exists)
+                            toInsert.Add(row);
+                        else if (shouldUpdate)
+                            toUpdate.Add(row);
+                    }
+
+                    // Batch insert
+                    if (toInsert.Count > 0)
+                    {
+                        using (var transaction = conn.BeginTransaction())
+                        {
+                            using (var cmd = conn.CreateCommand())
+                            {
+                                cmd.CommandText = @"
+                                INSERT INTO issue
+                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE)
+                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode)";
+                                foreach (var row in toInsert)
+                                {
+                                    cmd.Parameters.Clear();
+                                    cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                    if (!string.IsNullOrWhiteSpace(sortingField))
+                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                    else
+                                        cmd.Parameters.AddWithValue("@sorting", DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                    cmd.ExecuteNonQuery();
+                                }
+                            }
+                            transaction.Commit();
+                        }
+                    }
+
+                    // Batch update
+                    if (toUpdate.Count > 0)
+                    {
+                        using (var transaction = conn.BeginTransaction())
+                        {
+                            using (var cmd = conn.CreateCommand())
+                            {
+                                cmd.CommandText = @"
+                                UPDATE issue SET
+                                    CREATEDTIME = @created,
+                                    UPDATEDTIME = @updated,
+                                    SUMMARY = @summary,
+                                    DESCRIPTION = @desc,
+                                    PARENTKEY = @parent,
+                                    CHILDRENKEYS = @children,
+                                    RELATESKEYS = @relates,
+                                    SORTINGFIELD = @sorting,
+                                    ISSUETYPE = @issueType,
+                                    PROJECTNAME = @pname,
+                                    PROJECTCODE = @pcode
+                                WHERE KEY = @key";
+                                foreach (var row in toUpdate)
+                                {
+                                    cmd.Parameters.Clear();
+                                    cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                    if (!string.IsNullOrWhiteSpace(sortingField))
+                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                    else
+                                        cmd.Parameters.AddWithValue("@sorting", DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                    cmd.ExecuteNonQuery();
+                                }
+                            }
+                            transaction.Commit();
+                        }
+                    }
+                }
+            }
         }
 
+        // Always load all issues for this project from the database for tree display
+        var allIssues = new List<JiraIssueDictionary>();
+
+        // Get all project keys from configuration
+        var allProjectKeys = config?.Projects?.Select(p => p.Root.Split('-')[0]).Distinct().ToList() ?? new List<string>();
+
+        using (var conn = new SqliteConnection(connStr))
+        {
+            conn.Open();
+            foreach (var projectKeyIter in allProjectKeys)
+            {
+                using (var cmd = conn.CreateCommand())
+                {
+                    cmd.CommandText = "SELECT KEY, SUMMARY, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE FROM issue WHERE PROJECTCODE = @pcode";
+                    cmd.Parameters.AddWithValue("@pcode", projectKeyIter);
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            allIssues.Add(new JiraIssueDictionary
+                            {
+                                Key = reader.GetString(0),
+                                Summary = reader.GetString(1),
+                                ParentKey = reader.IsDBNull(2) ? null : reader.GetString(2),
+                                IssueLinks = new List<JiraIssueLink>(),
+                                CustomFields = null,
+                                SortingField = reader.IsDBNull(5) ? null : reader.GetString(5),
+                                Type = reader.IsDBNull(6) ? null : reader.GetString(6),
+                            });
+                        }
+                    }
+                    cmd.Parameters.Clear();
+                }
+            }
+        }
         return allIssues;
+    }
+
+    // Update GetTotalIssueCountAsync to accept JQL
+    private async Task<int> GetTotalIssueCountAsync(string projectKey, string jql = null)
+    {
+        if (string.IsNullOrWhiteSpace(jql))
+            jql = $"project={projectKey} ORDER BY key ASC";
+        using var httpClient = new HttpClient();
+        httpClient.BaseAddress = new Uri(jiraBaseUrl);
+
+        var authToken = Convert.ToBase64String(
+            System.Text.Encoding.ASCII.GetBytes($"{username}:{apiToken}"));
+        httpClient.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+
+        string url = $"/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&maxResults=0";
+
+        var response = await httpClient.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        int total = doc.RootElement.GetProperty("total").GetInt32();
+        return total;
+    }
+
+    private static string ConvertToDbTimestamp(string jiraDate)
+    {
+        if (DateTime.TryParse(jiraDate, out var dt))
+            return dt.ToString("yyyyMMddHHmmss");
+        return "";
     }
 
     /// <summary>
