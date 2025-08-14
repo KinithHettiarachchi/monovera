@@ -1,9 +1,11 @@
-﻿using HtmlAgilityPack;
+﻿using Atlassian.Jira;
+using HtmlAgilityPack;
 using Microsoft.VisualBasic;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 using SharpSvn;
 using System;
+using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
@@ -25,6 +27,7 @@ using System.Windows.Forms;
 using System.Xml.Linq;
 using static System.Net.Mime.MediaTypeNames;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.ExplorerBar;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using ComboBox = System.Windows.Forms.ComboBox;
 using Font = System.Drawing.Font;
@@ -37,16 +40,18 @@ namespace Monovera
     /// </summary>
     public partial class frmMain : Form
     {
+        public static bool OFFLINE_MODE = true;
         bool editorMode = true;
         private MouseButtons lastTreeMouseButton = MouseButtons.Left;
         private bool suppressAfterSelect = false;
+        public static string SUMMARY_MISSING = "SUMMARY MISSING!";
 
         /// <summary>
         /// Represents a service for interacting with Jira.
         /// </summary>
         /// <remarks>This field provides access to Jira-related operations and functionalities. It is
         /// intended to be used for managing and retrieving Jira issues, projects, and other related data.</remarks>
-        public JiraService jiraService;
+        public static JiraService jiraService;
 
         /// <summary>
         /// Base URL for Jira REST API.
@@ -205,6 +210,8 @@ namespace Monovera
             public string Email { get; set; }
             /// <summary>Jira API token.</summary>
             public string Token { get; set; }
+
+            public bool OfflineMode { get; set; }
         }
 
         /// <summary>
@@ -308,6 +315,24 @@ namespace Monovera
             string message = $"{key} was not found in the tree. If this belongs to one of loaded projects, please update the hierarchy to view it.";
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
+        }
+
+        private static string? GetMaxUpdatedTimeFromDb()
+        {
+            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+            string connStr = $"Data Source={dbPath};";
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue";
+            var result = cmd.ExecuteScalar();
+            if (result != DBNull.Value && result != null)
+            {
+                // Assume UPDATEDTIME is stored as "yyyyMMddHHmmss"
+                if (DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                    return dt.ToString("yyyy-MM-dd HH:mm:ss");
+            }
+            return null;
         }
 
         /// <summary>
@@ -2168,6 +2193,8 @@ namespace Monovera
             jiraBaseUrl = config.Jira.Url;
             jiraEmail = config.Jira.Email;
             jiraToken = config.Jira.Token;
+            // Load offline mode
+            OFFLINE_MODE = config.Jira.OfflineMode;
 
             // Load other config data
             projectList = config.Projects.Select(p => p.Project).ToList();
@@ -2249,7 +2276,8 @@ namespace Monovera
   ""Jira"": {
     ""Url"": ""https://YOUR_JIRA_DOMAIN.atlassian.net"",
     ""Email"": ""YOUR_EMAIL@YOUR_EMAIL_DOMAIN.com"",
-    ""Token"": ""YOUR_JIRA_API_TOKEN""
+    ""Token"": ""YOUR_JIRA_API_TOKEN"",
+    ""OfflineMode"":true
   },
   ""Projects"": [
     {
@@ -2632,10 +2660,9 @@ namespace Monovera
                         pbProgress.Value = 0;
                         pbProgress.Maximum = 100;
                         lblProgress.Visible = true;
-                        lblProgress.Text = "Loading...";
+                        lblProgress.Text = "Preparing to load...";
                     });
 
-                    issueDict.Clear();
                     childrenByParent.Clear();
                     FlatJiraIssueDictionary.Clear();
 
@@ -3635,124 +3662,394 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     return;
                 }
             }
+          
 
-            // Load content asynchronously, do not block UI
-            _ = Task.Run(async () =>
+            if (OFFLINE_MODE)
             {
-                try
+                string encodedSummary = WebUtility.HtmlEncode(GetFieldValueByKey(issueKey, "SUMMARY"));
+                string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
+
+                string issueType = GetFieldValueByKey(issueKey, "ISSUETYPE");
+
+                string statusIcon = "";
+
+                string status = GetFieldValueByKey(issueKey, "STATUS");
+
+                string createdDate = DateTime.ParseExact(
+                                GetFieldValueByKey(issueKey, "CREATEDTIME"),
+                                "yyyyMMddHHmmss",
+                                CultureInfo.InvariantCulture
+                            ).ToString("yyyy-MM-dd HH:mm");
+
+                string lastUpdated = DateTime.ParseExact(
+                                GetFieldValueByKey(issueKey, "UPDATEDTIME"),
+                                "yyyyMMddHHmmss",
+                                CultureInfo.InvariantCulture
+                                ).ToString("yyyy-MM-dd HH:mm");
+
+                string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
+
+                string HTML_SECTION_DESCRIPTION = GetFieldValueByKey(issueKey,"DESCRIPTION");
+
+                string linksHtml = BuildHTMLSection_LINKS_Offline(issueKey);
+
+                string historyString = GetFieldValueByKey(issueKey, "HISTORY");
+                JsonElement historyElement = JsonDocument.Parse(historyString).RootElement;
+                string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(historyElement);
+
+                string HTML_SECTION_ATTACHMENTS = "";
+
+                string responseHTML = "";
+
+                int attachmentCount = 0;
+
+                string tempFolderPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp");
+                string htmlFilePath2 = Path.Combine(tempFolderPath, $"{issueKey}.html");
+                Directory.CreateDirectory(tempFolderPath);
+
+                string html = BuildIssueDetailFullPageHtml(
+                    headerLine, issueType, statusIcon, status,
+                    createdDate, lastUpdated, issueUrl,
+                    HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS, attachmentCount,
+                    linksHtml, HTML_SECTION_HISTORY, responseHTML
+                );
+
+                // Ensure focustToTreeJS is present in the HTML
+                if (!html.Contains(focustToTreeJS))
+                    html = html.Replace("</body>", $"{focustToTreeJS}</body>");
+
+                File.WriteAllText(htmlFilePath2, html);
+
+                // Update WebView2 on UI thread
+                webView.Invoke(() =>
                 {
-                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                    using var client = new HttpClient();
-                    client.BaseAddress = new Uri(jiraBaseUrl);
-                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                    var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields,changelog");
-                    response.EnsureSuccessStatusCode();
-                    var json = await response.Content.ReadAsStringAsync();
-
-                    using var doc = JsonDocument.Parse(json);
-                    var root = doc.RootElement;
-
-                    if (!root.TryGetProperty("fields", out var fields))
-                        throw new Exception("Missing 'fields' in response.");
-
-                    string summary = "";
-                    if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
-                        summary = summaryProp.GetString();
-
-                    string status = fields.TryGetProperty("status", out var statusProp) &&
-                    statusProp.TryGetProperty("name", out var statusName)
-                    ? statusName.GetString() ?? ""
-                    : "";
-
-                    string lastUpdated = fields.TryGetProperty("updated", out var updatedProp)
-                                    ? DateTime.TryParse(updatedProp.GetString(), out var dt)
-                                        ? dt.ToString("yyyy-MM-dd HH:mm")
-                                        : updatedProp.GetString()
-                                    : "N/A";
-
-                    string createdDate = fields.TryGetProperty("created", out var issueCreatedProp)
-                                    ? DateTime.TryParse(issueCreatedProp.GetString(), out var IssueCreatedDt)
-                                        ? IssueCreatedDt.ToString("yyyy-MM-dd HH:mm")
-                                        : issueCreatedProp.GetString()
-                                    : "N/A";
-
-                    string statusIcon = "";
-                    string iconKeyStatus = GetIconForStatus(status);
-                    if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                    webView.Source = new Uri(htmlFilePath2);
+                });
+            }
+            else
+            {
+                // Load content asynchronously, do not block UI
+                _ = Task.Run(async () =>
+                {
+                    try
                     {
-                        using var ms = new MemoryStream();
-                        tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                        string base64 = Convert.ToBase64String(ms.ToArray());
-                        statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        using var client = new HttpClient();
+                        client.BaseAddress = new Uri(jiraBaseUrl);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        var response = await client.GetAsync($"/rest/api/3/issue/{issueKey}?expand=renderedFields,changelog");
+                        response.EnsureSuccessStatusCode();
+                        var json = await response.Content.ReadAsStringAsync();
+
+                        using var doc = JsonDocument.Parse(json);
+                        var root = doc.RootElement;
+
+                        if (!root.TryGetProperty("fields", out var fields))
+                            throw new Exception("Missing 'fields' in response.");
+
+                        string summary = "";
+                        if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                            summary = summaryProp.GetString();
+
+                        string status = fields.TryGetProperty("status", out var statusProp) &&
+                        statusProp.TryGetProperty("name", out var statusName)
+                        ? statusName.GetString() ?? ""
+                        : "";
+
+                        string lastUpdated = fields.TryGetProperty("updated", out var updatedProp)
+                                        ? DateTime.TryParse(updatedProp.GetString(), out var dt)
+                                            ? dt.ToString("yyyy-MM-dd HH:mm")
+                                            : updatedProp.GetString()
+                                        : "N/A";
+
+                        string createdDate = fields.TryGetProperty("created", out var issueCreatedProp)
+                                        ? DateTime.TryParse(issueCreatedProp.GetString(), out var IssueCreatedDt)
+                                            ? IssueCreatedDt.ToString("yyyy-MM-dd HH:mm")
+                                            : issueCreatedProp.GetString()
+                                        : "N/A";
+
+                        string statusIcon = "";
+                        string iconKeyStatus = GetIconForStatus(status);
+                        if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                        {
+                            using var ms = new MemoryStream();
+                            tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                            string base64 = Convert.ToBase64String(ms.ToArray());
+                            statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
+                        }
+
+                        string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
+
+                        string issueType = fields.TryGetProperty("issuetype", out var typeProp) &&
+                           typeProp.TryGetProperty("name", out var typeName)
+                           ? typeName.GetString() ?? ""
+                           : "";
+
+                        string encodedSummary = WebUtility.HtmlEncode(summary);
+                        string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
+                        string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
+
+                        int attachmentCount = 0;
+                        if (fields.TryGetProperty("attachment", out var attachments) && attachments.ValueKind == JsonValueKind.Array)
+                            attachmentCount = attachments.GetArrayLength();
+                        string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
+
+                        string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
+                        if (root.TryGetProperty("renderedFields", out var renderedFields) &&
+                            renderedFields.TryGetProperty("description", out var descProp) &&
+                            descProp.ValueKind == JsonValueKind.String)
+                        {
+                            HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
+                        }
+                        var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
+
+                        string linksHtml =
+                            BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0], "outwardIssue") +
+                            BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0], "inwardIssue") +
+                            BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
+
+                        string HTML_SECTION_HISTORY = "";
+                        JsonElement histories = default;
+                        if (root.TryGetProperty("changelog", out var changelog) &&
+                            changelog.TryGetProperty("histories", out histories))
+                        {
+                            HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(histories);
+                        }
+                        
+
+                        string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
+
+                        string tempFolderPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp");
+                        string htmlFilePath2 = Path.Combine(tempFolderPath, $"{issueKey}.html");
+                        Directory.CreateDirectory(tempFolderPath);
+
+                        string html = BuildIssueDetailFullPageHtml(
+                            headerLine, issueType, statusIcon, status,
+                            createdDate, lastUpdated, issueUrl,
+                            HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS, attachmentCount,
+                            linksHtml, HTML_SECTION_HISTORY, responseHTML
+                        );
+
+                        // Ensure focustToTreeJS is present in the HTML
+                        if (!html.Contains(focustToTreeJS))
+                            html = html.Replace("</body>", $"{focustToTreeJS}</body>");
+
+                        File.WriteAllText(htmlFilePath2, html);
+
+                        // Update WebView2 on UI thread
+                        webView.Invoke(() =>
+                        {
+                            webView.Source = new Uri(htmlFilePath2);
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        webView.Invoke(() =>
+                        {
+                            MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        });
+                    }
+                });
+            }
+                
+        }
+
+        /// <summary>
+        /// Builds the HTML for Parent, Children, and Related issue sections using local database values.
+        /// If summary/type is missing, fetches from Jira via Atlassian SDK.
+        /// </summary>
+        /// <param name="issueKey">The current issue key.</param>
+        /// <returns>HTML string containing all three link tables.</returns>
+        public string BuildHTMLSection_LINKS_Offline(string issueKey)
+        {
+            var sb = new StringBuilder();
+
+            // Helper to get summary/type/sortingField for a key, fallback to SDK if missing
+            (string summary, string type, string sortingField) GetIssueInfo(string key)
+            {
+                string summary = GetFieldValueByKey(key, "SUMMARY") ?? SUMMARY_MISSING;
+                string type = GetFieldValueByKey(key, "ISSUETYPE") ?? "";
+                string sortingField = GetFieldValueByKey(key, "SORTINGFIELD") ?? "0";
+
+                if (summary == SUMMARY_MISSING)
+                {
+                    try
+                    {
+                        // Build REST API URL
+                        string url = $"{jiraBaseUrl}/rest/api/3/issue/{key}?fields=summary,issuetype";
+                        using var client = new HttpClient();
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        var response = client.GetAsync(url).Result;
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var json = response.Content.ReadAsStringAsync().Result;
+                            using var doc = JsonDocument.Parse(json);
+                            var fields = doc.RootElement.GetProperty("fields");
+
+                            if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                                summary = summaryProp.GetString() ?? SUMMARY_MISSING;
+
+                            if (fields.TryGetProperty("issuetype", out var typeProp) &&
+                                typeProp.TryGetProperty("name", out var typeNameProp) &&
+                                typeNameProp.ValueKind == JsonValueKind.String)
+                                type = typeNameProp.GetString() ?? "";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Failed to fetch issue {key} from Jira REST API: {ex.Message}");
+                        ShowTrayNotification(key);
+                        summary = key;
+                    }
+                }
+                return (summary, type, sortingField);
+            }
+
+            // Helper to build a table for a list of keys
+            string BuildTable(string title, List<string> keys, bool sortByField = false, bool showPath = false)
+            {
+                var rows = new List<(string key, string summary, string type, string sortingField)>();
+                foreach (var key in keys)
+                {
+                    var info = GetIssueInfo(key);
+                    rows.Add((key, info.summary, info.type, info.sortingField));
+                }
+                if (sortByField)
+                    rows = rows.OrderBy(r => r.sortingField, new AlphanumericComparer()).ToList();
+
+                var tableRows = new StringBuilder();
+                foreach (var r in rows)
+                {
+                    // Find project config for icon
+                    var keyPrefix = r.key.Split('-')[0];
+                    var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                    string iconImgInner = "";
+                    string fileName = null;
+                    if (projectConfig != null && !string.IsNullOrEmpty(r.type))
+                    {
+                        if (!projectConfig.Types.TryGetValue(r.type, out fileName))
+                        {
+                            var match = projectConfig.Types.FirstOrDefault(kvp => kvp.Key.Equals(r.type, StringComparison.OrdinalIgnoreCase));
+                            fileName = match.Value;
+                        }
+                    }
+                    if (!string.IsNullOrEmpty(fileName))
+                    {
+                        string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
+                        if (File.Exists(fullPath))
+                        {
+                            try
+                            {
+                                byte[] bytes = File.ReadAllBytes(fullPath);
+                                string base64 = Convert.ToBase64String(bytes);
+                                iconImgInner = $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px;' title='{HttpUtility.HtmlEncode(r.type)}' />";
+                            }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(r.type)}'>🟥</span>";
                     }
 
-                    string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
-
-                    string issueType = fields.TryGetProperty("issuetype", out var typeProp) &&
-                       typeProp.TryGetProperty("name", out var typeName)
-                       ? typeName.GetString() ?? ""
-                       : "";
-
-                    string encodedSummary = WebUtility.HtmlEncode(summary);
-                    string iconImg = string.IsNullOrEmpty(iconUrl) ? "" : $"<img src='{iconUrl}' style='height: 24px; vertical-align: middle; margin-right: 8px;'>";
-                    string headerLine = $"<h2>{iconImg}{encodedSummary} [{issueKey}]</h2>";
-
-                    int attachmentCount = 0;
-                    if (fields.TryGetProperty("attachment", out var attachments) && attachments.ValueKind == JsonValueKind.Array)
-                        attachmentCount = attachments.GetArrayLength();
-                    string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
-
-                    string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
-                    if (root.TryGetProperty("renderedFields", out var renderedFields) &&
-                        renderedFields.TryGetProperty("description", out var descProp) &&
-                        descProp.ValueKind == JsonValueKind.String)
+                    string pathHtml = "";
+                    if (showPath)
                     {
-                        HTML_SECTION_DESCRIPTION_ORIGINAL = descProp.GetString() ?? "";
+                        string path = GetRequirementPath(r.key);
+                        if (!string.IsNullOrEmpty(path))
+                            pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{path}</div>";
                     }
-                    var HTML_SECTION_DESCRIPTION = BuildHTMLSection_DESCRIPTION(HTML_SECTION_DESCRIPTION_ORIGINAL, issueKey);
 
-                    string linksHtml =
-                        BuildHTMLSection_LINKS(fields, "Children", hierarchyLinkTypeName.Split(",")[0], "outwardIssue") +
-                        BuildHTMLSection_LINKS(fields, "Parent", hierarchyLinkTypeName.Split(",")[0], "inwardIssue") +
-                        BuildHTMLSection_LINKS(fields, "Related", "Relates", null);
-
-
-                    string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(root);
-
-                    string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
-
-                    string tempFolderPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp");
-                    string htmlFilePath2 = Path.Combine(tempFolderPath, $"{issueKey}.html");
-                    Directory.CreateDirectory(tempFolderPath);
-
-                    string html = BuildIssueDetailFullPageHtml(
-                        headerLine, issueType, statusIcon, status,
-                        createdDate, lastUpdated, issueUrl,
-                        HTML_SECTION_DESCRIPTION, HTML_SECTION_ATTACHMENTS, attachmentCount,
-                        linksHtml, HTML_SECTION_HISTORY, responseHTML
-                    );
-
-                    // Ensure focustToTreeJS is present in the HTML
-                    if (!html.Contains(focustToTreeJS))
-                        html = html.Replace("</body>", $"{focustToTreeJS}</body>");
-
-                    File.WriteAllText(htmlFilePath2, html);
-
-                    // Update WebView2 on UI thread
-                    webView.Invoke(() =>
-                    {
-                        webView.Source = new Uri(htmlFilePath2);
-                    });
+                    tableRows.AppendLine($@"
+<tr>
+    <td class='confluenceTd'>
+        <a href='#' data-key='{HttpUtility.HtmlEncode(r.key)}'>
+            {iconImgInner} {HttpUtility.HtmlEncode(r.summary)} [{HttpUtility.HtmlEncode(r.key)}]
+        </a>
+        {pathHtml}
+    </td>
+</tr>");
                 }
-                catch (Exception ex)
+
+                if (rows.Count > 0)
                 {
-                    webView.Invoke(() =>
-                    {
-                        MessageBox.Show($"Could not connect to fetch the information you requested.\nPlease check your connection and other settings are ok.\n{ex.Message}", "Could not connect!", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    });
+                    return $@"
+<table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+  <thead>
+    <tr>
+      <th class='confluenceTh' style='width:60px;'>{HttpUtility.HtmlEncode(title)}</th>
+    </tr>
+  </thead>
+  <tbody>
+    {tableRows}
+  </tbody>
+</table>";
                 }
-            });
+                else
+                {
+                    return $@"
+<table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-bottom:10px;'>
+  <thead>
+    <tr>
+      <th class='confluenceTh' style='width:60px;'>{HttpUtility.HtmlEncode(title)}</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class='confluenceTd' style='text-align:left; color:#888;'>{HttpUtility.HtmlEncode($"No {title} issues found.")}</td>
+    </tr>
+  </tbody>
+</table>";
+                }
+            }
+
+            // --- Parent Section ---
+            string parentKey = GetFieldValueByKey(issueKey, "PARENTKEY");
+            var parentKeys = !string.IsNullOrWhiteSpace(parentKey) ? new List<string> { parentKey } : new List<string>();
+            sb.AppendLine(BuildTable("Parent", parentKeys));
+
+            // --- Children Section ---
+            string childrenRaw = GetFieldValueByKey(issueKey, "CHILDRENKEYS");
+            var childrenKeys = !string.IsNullOrWhiteSpace(childrenRaw)
+                ? childrenRaw.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(k => k.Trim()).Where(k => !string.IsNullOrWhiteSpace(k)).ToList()
+                : new List<string>();
+            sb.AppendLine(BuildTable("Children", childrenKeys, sortByField: true));
+
+            // --- Related Section ---
+            string relatesRaw = GetFieldValueByKey(issueKey, "RELATESKEYS");
+            var relatesKeys = !string.IsNullOrWhiteSpace(relatesRaw)
+                ? relatesRaw.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(k => k.Trim()).Where(k => !string.IsNullOrWhiteSpace(k)).ToList()
+                : new List<string>();
+            sb.AppendLine(BuildTable("Related", relatesKeys, showPath: true));
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Gets the value of a specified field for a given issue key from the local database.
+        /// </summary>
+        /// <param name="key">The Jira issue key (e.g., "PROJ-123").</param>
+        /// <param name="fieldName">The field/column name to retrieve (e.g., "DESCRIPTION").</param>
+        /// <returns>The value as a string, or null if not found.</returns>
+        public static string? GetFieldValueByKey(string key, string fieldName)
+        {
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(fieldName))
+                return null;
+
+            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+            string connStr = $"Data Source={dbPath};";
+            using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT {fieldName} FROM issue WHERE KEY = @key LIMIT 1";
+            cmd.Parameters.AddWithValue("@key", key);
+
+            var result = cmd.ExecuteScalar();
+            return result != DBNull.Value && result != null ? result.ToString() : null;
         }
 
         private string BuildHTMLSection_ATTACHMENTS(JsonElement fields, string issueKey)
@@ -4022,12 +4319,9 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
             return sb.ToString();
         }
 
-        public static string BuildHTMLSection_HISTORY(JsonElement root)
+        public static string BuildHTMLSection_HISTORY(JsonElement histories)
         {
-            if (!root.TryGetProperty("changelog", out var changelog) ||
-                !changelog.TryGetProperty("histories", out var histories))
-                return "";
-
+   
             var changes = new List<string>();
             int changeId = 0;
 
@@ -4498,6 +4792,18 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     string historyHtml,
     string encodedJson)
         {
+
+
+            var responseTabTitle = string.IsNullOrWhiteSpace(encodedJson)
+                                   ? ""
+                                   : @"<button class='tab-btn' data-tab='ResponseTab'>🗨️ Response</button>";
+
+            var responseTabHtml = string.IsNullOrWhiteSpace(encodedJson)
+                                    ? ""
+                                    : @"<div class='tab-content' id='ResponseTab' style='display:none;'>
+                                        <pre class='language-json'><code>" + encodedJson + @"</code></pre>
+                                      </div>";
+
             return $@"
 <!DOCTYPE html>
 <html>
@@ -4532,7 +4838,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
                 <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
                 <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
-                <button class='tab-btn' data-tab='ResponseTab'>🗨️ Response</button>
+                {responseTabTitle}
               </div>
               <div class='tab-content' id='linksTab' style='display:block;'>
                 {linksHtml}
@@ -4543,9 +4849,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
               <div class='tab-content' id='attachmentsTab' style='display:none;'>
                 {attachmentsHtml}
               </div>
-              <div class='tab-content' id='ResponseTab' style='display:none;'>
-                <pre class='language-json'><code>{encodedJson}</code></pre>
-              </div>
+              {responseTabHtml}
             </div>
         <script>
           document.querySelectorAll('.tab-btn').forEach(btn => {{
@@ -4811,8 +5115,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             var doc = new HtmlAgilityPack.HtmlDocument();
             doc.LoadHtml(htmlDesc);
 
-            //InlineAttachmentImages(doc, key);
-
             ReplaceColorMacrosAndSymbols(doc);
             ReplaceJiraIssueMacros(doc);
             ReplaceJiraAnchorLinks(doc, issueDict);
@@ -4821,83 +5123,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             ReplaceSvnFeatures(doc, issueDict);
 
             return doc.DocumentNode.InnerHtml;
-        }
-
-        private static void InlineAttachmentImages(HtmlAgilityPack.HtmlDocument doc, string issueKey)
-        {
-            if (!FlatJiraIssueDictionary.TryGetValue(issueKey, out var issueDto) || issueDto == null)
-                return;
-
-            // Find all text nodes that look like image file names
-            var imageRegex = new Regex(@"\b([\w\-\.]+)\.(png|jpg|jpeg|gif|bmp|webp|svg)\b", RegexOptions.IgnoreCase);
-
-            // Collect all attachment images for this issue
-            var imageAttachments = new Dictionary<string, Dictionary<string, object>>();
-            if (issueDto.CustomFields.TryGetValue("attachments", out var attachmentsObj) && attachmentsObj is List<Dictionary<string, object>> attachmentsList)
-            {
-                foreach (var att in attachmentsList)
-                {
-                    if (att.TryGetValue("filename", out var fnObj) && fnObj is string filename &&
-                        att.TryGetValue("mimeType", out var mtObj) && mtObj is string mimeType &&
-                        mimeType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) &&
-                        att.TryGetValue("content", out var contentObj) && contentObj is string contentUrl)
-                    {
-                        imageAttachments[filename] = att;
-                    }
-                }
-            }
-
-            // Scan all text nodes for image file names
-            var textNodes = doc.DocumentNode.SelectNodes("//text()");
-            if (textNodes == null) return;
-
-            foreach (var textNode in textNodes.ToList())
-            {
-                var matches = imageRegex.Matches(textNode.InnerText);
-                if (matches.Count == 0) continue;
-
-                var parent = textNode.ParentNode;
-                var originalText = textNode.InnerText;
-                var replacedHtml = originalText;
-
-                foreach (Match match in matches)
-                {
-                    string filename = match.Value;
-                    if (imageAttachments.TryGetValue(filename, out var att))
-                    {
-                        string mimeType = att["mimeType"].ToString();
-                        string contentUrl = att["content"].ToString();
-
-                        // Download and encode image as base64
-                        try
-                        {
-                            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                            using var client = new HttpClient();
-                            client.BaseAddress = new Uri(jiraBaseUrl);
-                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                            using var response = client.GetAsync(contentUrl).Result;
-                            response.EnsureSuccessStatusCode();
-                            var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
-                            string base64 = Convert.ToBase64String(imageBytes);
-
-                            string imgTag = $"<img src=\"data:{mimeType};base64,{base64}\" alt=\"{HttpUtility.HtmlEncode(filename)}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />";
-                            replacedHtml = replacedHtml.Replace(filename, imgTag);
-                        }
-                        catch
-                        {
-                            // If image fetch fails, leave the filename as is
-                        }
-                    }
-                }
-
-                if (replacedHtml != originalText)
-                {
-                    var fragment = HtmlNode.CreateNode($"<span>{replacedHtml}</span>");
-                    parent.InsertBefore(fragment, textNode);
-                    parent.RemoveChild(textNode);
-                }
-            }
         }
 
         private static void ReplaceSvnFeatures(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
@@ -4991,7 +5216,37 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     icon = GetIconForType(issueType); // returns image URL or base64 string
                 }
 
-                if (string.IsNullOrWhiteSpace(summary)) summary = "Summary not found!";
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                    summary = SUMMARY_MISSING;
+                }
+
+                if (summary == SUMMARY_MISSING)
+                {
+                    try
+                    {
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        using var client = new HttpClient();
+                        client.BaseAddress = new Uri(jiraBaseUrl);
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        var response = client.GetAsync($"/rest/api/3/issue/{key}?fields=summary").Result;
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var json = response.Content.ReadAsStringAsync().Result;
+                            using var docForSummary = JsonDocument.Parse(json);
+                            var fields = docForSummary.RootElement.GetProperty("fields");
+                            if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                            {
+                                summary = summaryProp.GetString() ?? SUMMARY_MISSING;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        summary = SUMMARY_MISSING;
+                    }
+                }
 
                 string iconHtml = "";
 
@@ -5077,9 +5332,45 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     icon = GetIconForType(issueType); // returns image URL or base64 string
                 }
 
-                if (string.IsNullOrWhiteSpace(title))
-                    title = "Summary not found!";
+                if (string.IsNullOrWhiteSpace(title)){ 
+                    title = SUMMARY_MISSING;
+                }
 
+                if (title == SUMMARY_MISSING)
+                {
+                    try
+                    {
+                        // Build REST API URL for summary
+                        string url = $"{jiraBaseUrl}/rest/api/3/issue/{key}?fields=summary";
+                        using var client = new HttpClient();
+                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                        var response = client.GetAsync(url).Result;
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var json = response.Content.ReadAsStringAsync().Result;
+                            using var docForSummary = JsonDocument.Parse(json);
+                            var fields = docForSummary.RootElement.GetProperty("fields");
+                            if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                            {
+                                title = summaryProp.GetString() ?? SUMMARY_MISSING;
+                            }
+                            else
+                            {
+                                title = SUMMARY_MISSING;
+                            }
+                        }
+                        else
+                        {
+                            title = SUMMARY_MISSING;
+                        }
+                    }
+                    catch
+                    {
+                        title = SUMMARY_MISSING;
+                    }
+                }
                 string iconHtml = "";
 
                 // Get icon HTML
@@ -5190,7 +5481,35 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     string fullMatch = match.Value;
                     string key = match.Groups["key"].Value.Trim();
 
-                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : "Summary Not Found!";
+                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : SUMMARY_MISSING;
+
+                    if (summary == SUMMARY_MISSING)
+                    {
+                        try
+                        {
+                            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                            using var client = new HttpClient();
+                            client.BaseAddress = new Uri(jiraBaseUrl);
+                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                            var response = client.GetAsync($"/rest/api/3/issue/{key}?fields=summary").Result;
+                            if (response.IsSuccessStatusCode)
+                            {
+                                var json = response.Content.ReadAsStringAsync().Result;
+                                using var docForSummary = JsonDocument.Parse(json);
+                                var fields = docForSummary.RootElement.GetProperty("fields");
+                                if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
+                                {
+                                    summary = summaryProp.GetString() ?? SUMMARY_MISSING;
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            summary = SUMMARY_MISSING;
+                        }
+                    }
+
                     string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
                     string iconHtml = GetIssueTypeIconHtml(issueType);
 
@@ -5384,7 +5703,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
                 Width = 420,
-                Height = 240,
+                Height = 270,
                 BackColor = GetCSSColor_Tree_Background(cssPath),
                 MaximizeBox = false,
                 MinimizeBox = false,
@@ -5402,29 +5721,45 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                RowCount = 4, // FIXED to handle title + 2 combo rows + buttons
+                RowCount = 5, // Increased to handle Last Update label
                 Padding = new Padding(20, 15, 20, 15),
                 BackColor = GetCSSColor_Tree_Background(cssPath),
                 AutoSize = true
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120)); // Label width
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); // Control width
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); // Last Update row
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40)); // Title row
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); // Project row
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); // Type row
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48)); // Buttons row
 
+            // Last Update label
+            var lastUpdate = GetMaxUpdatedTimeFromDb();
+            var lblLastUpdate = new Label
+            {
+                Text = "Update Hierarchy",
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                Dock = DockStyle.Fill,
+                ForeColor = GetCSSColor_Title(cssPath),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Padding = new Padding(0, 0, 0, 4),
+                AutoSize = true
+            };
+            layout.SetColumnSpan(lblLastUpdate, 2);
+            layout.Controls.Add(lblLastUpdate, 0, 0);
+
             // Title
             var lblTitle = new Label
             {
-                Text = "Update Hierarchy",
+                Text = $"Last Update : {(lastUpdate ?? "N/A")}",
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 Dock = DockStyle.Fill,
-                TextAlign = ContentAlignment.MiddleLeft,
-                ForeColor = GetCSSColor_Title(cssPath)
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.DarkGray
             };
             layout.SetColumnSpan(lblTitle, 2);
-            layout.Controls.Add(lblTitle, 0, 0);
+            layout.Controls.Add(lblTitle, 0, 1);
 
             // Project label
             var lblProject = new Label
@@ -5433,7 +5768,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 TextAlign = ContentAlignment.MiddleRight,
                 Dock = DockStyle.Fill
             };
-            layout.Controls.Add(lblProject, 0, 1);
+            layout.Controls.Add(lblProject, 0, 2);
 
             // Project combo
             var cmbProject = new ComboBox
@@ -5449,7 +5784,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     cmbProject.Items.Add(proj.Project);
             }
             cmbProject.SelectedIndex = 0;
-            layout.Controls.Add(cmbProject, 1, 1);
+            layout.Controls.Add(cmbProject, 1, 2);
 
             // Update Type label
             var lblType = new Label
@@ -5458,7 +5793,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 TextAlign = ContentAlignment.MiddleRight,
                 Dock = DockStyle.Fill
             };
-            layout.Controls.Add(lblType, 0, 2);
+            layout.Controls.Add(lblType, 0, 3);
 
             // Update Type combo
             var cmbType = new ComboBox
@@ -5469,7 +5804,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             };
             cmbType.Items.AddRange(new[] { "Difference", "Complete" });
             cmbType.SelectedIndex = 0;
-            layout.Controls.Add(cmbType, 1, 2);
+            layout.Controls.Add(cmbType, 1, 3);
 
             // Buttons panel
             var buttonPanel = new FlowLayoutPanel
@@ -5487,12 +5822,11 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             buttonPanel.Controls.Add(btnCancel);
 
             layout.SetColumnSpan(buttonPanel, 2);
-            layout.Controls.Add(buttonPanel, 0, 3);
+            layout.Controls.Add(buttonPanel, 0, 4);
 
             DialogUpdateHierarchy.Controls.Add(layout);
             DialogUpdateHierarchy.AcceptButton = btnOk;
             DialogUpdateHierarchy.CancelButton = btnCancel;
-
 
             if (DialogUpdateHierarchy.ShowDialog(this) != DialogResult.OK)
                 return;

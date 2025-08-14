@@ -41,6 +41,7 @@
             btnEditProject = new Button();
             btnSave = new Button();
             btnDeleteProject = new Button();
+            chkOffline = new CheckBox();
             SuspendLayout();
             // 
             // label1
@@ -78,7 +79,7 @@
             txtUrl.Font = new Font("Microsoft Sans Serif", 11.25F);
             txtUrl.Location = new Point(145, 25);
             txtUrl.Name = "txtUrl";
-            txtUrl.Size = new Size(430, 24);
+            txtUrl.Size = new Size(499, 24);
             txtUrl.TabIndex = 3;
             // 
             // txtEmail
@@ -86,7 +87,7 @@
             txtEmail.Font = new Font("Microsoft Sans Serif", 11.25F);
             txtEmail.Location = new Point(145, 59);
             txtEmail.Name = "txtEmail";
-            txtEmail.Size = new Size(430, 24);
+            txtEmail.Size = new Size(641, 24);
             txtEmail.TabIndex = 4;
             // 
             // txtToken
@@ -94,7 +95,7 @@
             txtToken.Font = new Font("Microsoft Sans Serif", 11.25F);
             txtToken.Location = new Point(145, 95);
             txtToken.Name = "txtToken";
-            txtToken.Size = new Size(430, 24);
+            txtToken.Size = new Size(641, 24);
             txtToken.TabIndex = 5;
             // 
             // lstProjects
@@ -103,7 +104,7 @@
             lstProjects.FormattingEnabled = true;
             lstProjects.Location = new Point(145, 143);
             lstProjects.Name = "lstProjects";
-            lstProjects.Size = new Size(301, 184);
+            lstProjects.Size = new Size(499, 184);
             lstProjects.TabIndex = 6;
             // 
             // label4
@@ -119,9 +120,9 @@
             // btnAddProject
             // 
             btnAddProject.Font = new Font("Microsoft Sans Serif", 11.25F);
-            btnAddProject.Location = new Point(466, 143);
+            btnAddProject.Location = new Point(650, 143);
             btnAddProject.Name = "btnAddProject";
-            btnAddProject.Size = new Size(109, 40);
+            btnAddProject.Size = new Size(130, 40);
             btnAddProject.TabIndex = 8;
             btnAddProject.Text = "Add";
             btnAddProject.UseVisualStyleBackColor = true;
@@ -129,9 +130,9 @@
             // btnEditProject
             // 
             btnEditProject.Font = new Font("Microsoft Sans Serif", 11.25F);
-            btnEditProject.Location = new Point(466, 189);
+            btnEditProject.Location = new Point(650, 189);
             btnEditProject.Name = "btnEditProject";
-            btnEditProject.Size = new Size(109, 41);
+            btnEditProject.Size = new Size(130, 41);
             btnEditProject.TabIndex = 9;
             btnEditProject.Text = "Modify";
             btnEditProject.UseVisualStyleBackColor = true;
@@ -139,9 +140,9 @@
             // btnSave
             // 
             btnSave.Font = new Font("Microsoft Sans Serif", 11.25F);
-            btnSave.Location = new Point(466, 283);
+            btnSave.Location = new Point(650, 283);
             btnSave.Name = "btnSave";
-            btnSave.Size = new Size(109, 41);
+            btnSave.Size = new Size(130, 41);
             btnSave.TabIndex = 10;
             btnSave.Text = "Save";
             btnSave.UseVisualStyleBackColor = true;
@@ -149,18 +150,31 @@
             // btnDeleteProject
             // 
             btnDeleteProject.Font = new Font("Microsoft Sans Serif", 11.25F);
-            btnDeleteProject.Location = new Point(466, 236);
+            btnDeleteProject.Location = new Point(650, 236);
             btnDeleteProject.Name = "btnDeleteProject";
-            btnDeleteProject.Size = new Size(109, 41);
+            btnDeleteProject.Size = new Size(130, 41);
             btnDeleteProject.TabIndex = 11;
             btnDeleteProject.Text = "Delete";
             btnDeleteProject.UseVisualStyleBackColor = true;
+            // 
+            // chkOffline
+            // 
+            chkOffline.AutoSize = true;
+            chkOffline.Font = new Font("Microsoft Sans Serif", 11.25F);
+            chkOffline.Location = new Point(666, 27);
+            chkOffline.Name = "chkOffline";
+            chkOffline.Size = new Size(111, 22);
+            chkOffline.TabIndex = 13;
+            chkOffline.Text = "Offline Mode";
+            chkOffline.UseVisualStyleBackColor = true;
+            chkOffline.CheckedChanged += chkOffline_CheckedChanged;
             // 
             // frmConfiguration
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(612, 340);
+            ClientSize = new Size(798, 340);
+            Controls.Add(chkOffline);
             Controls.Add(btnDeleteProject);
             Controls.Add(btnSave);
             Controls.Add(btnEditProject);
@@ -198,5 +212,6 @@
         private Button btnEditProject;
         private Button btnSave;
         private Button btnDeleteProject;
+        private CheckBox chkOffline;
     }
 }

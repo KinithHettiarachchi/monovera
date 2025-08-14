@@ -37,7 +37,7 @@ namespace Monovera
         {
             InitializeComponent();
             InitializeUI();
-            this.BackColor= GetCSSColor_Tree_Background(frmMain.cssPath);
+            this.BackColor = GetCSSColor_Tree_Background(frmMain.cssPath);
             this.Load += ConfigForm_Load;
         }
 
@@ -113,7 +113,8 @@ namespace Monovera
             {
                 Url = txtUrl.Text,
                 Email = txtEmail.Text,
-                Token = txtToken.Text
+                Token = txtToken.Text,
+                OfflineMode= chkOffline.Checked
             };
 
             try
@@ -149,6 +150,7 @@ namespace Monovera
                     txtUrl.Text = _config.Jira?.Url ?? "";
                     txtEmail.Text = _config.Jira?.Email ?? "";
                     txtToken.Text = _config.Jira?.Token ?? "";
+                    chkOffline.Checked = _config.Jira?.OfflineMode ?? false;
 
                     // Populate project list
                     lstProjects.Items.Clear();
@@ -162,6 +164,11 @@ namespace Monovera
                     MessageBox.Show("Failed to load configuration: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void chkOffline_CheckedChanged(object sender, EventArgs e)
+        {
+            frmMain.OFFLINE_MODE = chkOffline.Checked;
         }
     }
 }

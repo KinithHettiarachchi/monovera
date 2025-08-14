@@ -175,7 +175,7 @@ public class JiraService
     string linkTypeName = "Blocks",
     bool forceSync = false,
     Action<int, int, double> progressUpdate = null,
-    int maxParallelism = 100,
+    int maxParallelism = 10,
     string updateType = "Complete")
     {
         string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
@@ -207,7 +207,10 @@ public class JiraService
                     SORTINGFIELD TEXT,
                     ISSUETYPE TEXT,
                     PROJECTNAME TEXT,
-                    PROJECTCODE TEXT
+                    PROJECTCODE TEXT,
+                    STATUS TEXT,
+                    HISTORY TEXT,
+                    ATTACHMENTS TEXT
                 );";
                     cmd.ExecuteNonQuery();
                 }
@@ -235,7 +238,7 @@ public class JiraService
             if (updateType == "Difference")
             {
                 // Get max UPDATEDTIME from DB for this project
-                string maxUpdatedTime = null;
+                string latestUpdateTimeOnDdatabase = null;
                 using (var conn = new SqliteConnection(connStr))
                 {
                     conn.Open();
@@ -244,20 +247,20 @@ public class JiraService
                         cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTCODE = @pcode";
                         cmd.Parameters.AddWithValue("@pcode", projectKey);
                         var result = cmd.ExecuteScalar();
-                        maxUpdatedTime = result != DBNull.Value && result != null ? result.ToString() : null;
+                        latestUpdateTimeOnDdatabase = result != DBNull.Value && result != null ? result.ToString() : null;
                     }
                 }
 
-                // Convert maxUpdatedTime to Jira format
-                string jiraTime = null;
-                if (!string.IsNullOrWhiteSpace(maxUpdatedTime) && maxUpdatedTime.Length == 14)
+                // Convert latestUpdateTimeOnDdatabase to Jira format
+                string latestUpdateTimeToCheckInJira = null;
+                if (!string.IsNullOrWhiteSpace(latestUpdateTimeOnDdatabase) && latestUpdateTimeOnDdatabase.Length == 14)
                 {
                     // yyyyMMddHHmmss -> yyyy-MM-dd HH:mm
-                    jiraTime = DateTime.ParseExact(maxUpdatedTime, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
+                    latestUpdateTimeToCheckInJira = DateTime.ParseExact(latestUpdateTimeOnDdatabase, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
                 }
 
-                if (!string.IsNullOrWhiteSpace(jiraTime))
-                    jql = $"project={projectKey} AND (updated >= \"{jiraTime}\" OR created >= \"{jiraTime}\")";
+                if (!string.IsNullOrWhiteSpace(latestUpdateTimeToCheckInJira))
+                    jql = $"project={projectKey} AND (updated > \"{latestUpdateTimeToCheckInJira}\" OR created > \"{latestUpdateTimeToCheckInJira}\")";
                 else
                     jql = $"project={projectKey}";
             }
@@ -296,7 +299,7 @@ public class JiraService
                                      $"&fields={Uri.EscapeDataString(fieldsStr)}";
 
                         using var client = new HttpClient();
-                        client.Timeout = TimeSpan.FromMinutes(5); // Increase timeout to 5 minutes
+                        client.Timeout = TimeSpan.FromMinutes(15); // Increase timeout to 5 minutes
                         client.BaseAddress = new Uri(jiraBaseUrl);
                         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
                             "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
@@ -304,25 +307,52 @@ public class JiraService
 
                         var response = await client.GetStringAsync(url);
                         var json = JObject.Parse(response);
-                        var issues = json["issues"].Select(issue =>
+                        var issues = new List<object[]>();
+
+                        foreach (var issue in json["issues"])
                         {
                             string created = ConvertToDbTimestamp((string)issue["fields"]["created"]);
                             string updated = ConvertToDbTimestamp((string)issue["fields"]["updated"]);
                             string key = (string)issue["key"];
                             string summary = (string)issue["fields"]["summary"];
-                            string description = issue["fields"]["description"]?.ToString() ?? "";
-                            string parentKey = "";
-                            string childrenKeys = "";
-                            string relatesKeys = "";
-                            string sortingFieldValue = null;
+                            string status = (string)issue["fields"]["status"]["name"].ToString();
+                            string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
 
+                            var issueDetailResponse = await client.GetAsync($"/rest/api/2/issue/{key}?expand=renderedFields,changelog");
+                            issueDetailResponse.EnsureSuccessStatusCode();
+                            var issueDetailResponsejson = await issueDetailResponse.Content.ReadAsStringAsync();
+                            using var doc = JsonDocument.Parse(issueDetailResponsejson);
+                            var root = doc.RootElement;
+
+                            // Fetch HTML description using /issue/{key}?expand=renderedFields
+                            string description = issue["fields"]["description"]?.ToString() ?? "";
+                            string htmlDescription = description;
+                            try
+                            {
+                               
+                                if (issueDetailResponse.IsSuccessStatusCode)
+                                {
+                                    var detailJson = JObject.Parse(await issueDetailResponse.Content.ReadAsStringAsync());
+                                    htmlDescription = detailJson["renderedFields"]?["description"]?.ToString() ?? description;
+                                }
+                            }
+                            catch
+                            {
+                                // fallback to raw description if HTML fetch fails
+                            }
+
+                            htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
+                            
+
+                            string sortingFieldValue = null;
                             if (hasSortingField && issue["fields"][sortingField] != null)
                             {
                                 sortingFieldValue = issue["fields"][sortingField].ToString();
-                            }
-
-                            string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
-
+                            }                            
+                                   
+                            string parentKey = "";
+                            string childrenKeys = "";
+                            string relatesKeys = "";
                             if (issue["fields"]["issuelinks"] is JArray linksArray)
                             {
                                 var relates = linksArray
@@ -351,11 +381,35 @@ public class JiraService
                                 parentKey = parentLink != null ? (string)parentLink["inwardIssue"]["key"] : "";
                             }
 
-                            return new object[]
+                            string history = "[]";
+                            if (root.TryGetProperty("changelog", out var changelog) &&
+                                changelog.TryGetProperty("histories", out var histories))
                             {
-                            created, updated, key, summary, description, parentKey, childrenKeys, relatesKeys, sortingFieldValue, issueType, projectName, projectKey
-                            };
-                        }).ToList();
+                                history = histories.ToString();
+                            }
+
+
+                            string attachments = "";
+
+                            issues.Add(new object[]
+                            {
+                                created, 
+                                updated, 
+                                key, 
+                                summary, 
+                                htmlDescription, 
+                                parentKey, 
+                                childrenKeys, 
+                                relatesKeys, 
+                                sortingFieldValue, 
+                                issueType, 
+                                projectName, 
+                                projectKey, 
+                                status,
+                                history,
+                                attachments
+                            });
+                        }
 
                         lock (allIssueRows)
                         {
@@ -405,16 +459,17 @@ public class JiraService
                         string key = (string)row[2];
                         string updated = (string)row[1];
                         bool exists = dbTimes.ContainsKey(key);
-                        bool shouldUpdate = false;
-                        if (exists)
-                        {
-                            string dbUpdated = dbTimes[key];
-                            if (string.Compare(updated, dbUpdated, StringComparison.Ordinal) > 0)
-                                shouldUpdate = true;
-                        }
+                        //bool shouldUpdate = false;
+                        //if (exists)
+                        //{
+                        //    string dbUpdated = dbTimes[key];
+                        //    if (string.Compare(updated, dbUpdated, StringComparison.Ordinal) > 0)
+                        //        shouldUpdate = true;
+                        //}
                         if (!exists)
                             toInsert.Add(row);
-                        else if (shouldUpdate)
+                        //else if (shouldUpdate)
+                        else
                             toUpdate.Add(row);
                     }
 
@@ -427,8 +482,8 @@ public class JiraService
                             {
                                 cmd.CommandText = @"
                                 INSERT INTO issue
-                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE)
-                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode)";
+                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
+                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
                                 foreach (var row in toInsert)
                                 {
                                     cmd.Parameters.Clear();
@@ -447,6 +502,9 @@ public class JiraService
                                     cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
                                     cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
                                     cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
                                     cmd.ExecuteNonQuery();
                                 }
                             }
@@ -473,7 +531,10 @@ public class JiraService
                                     SORTINGFIELD = @sorting,
                                     ISSUETYPE = @issueType,
                                     PROJECTNAME = @pname,
-                                    PROJECTCODE = @pcode
+                                    PROJECTCODE = @pcode,
+                                    STATUS = @status,
+                                    HISTORY = @history, 
+                                    ATTACHMENTS = @attachments
                                 WHERE KEY = @key";
                                 foreach (var row in toUpdate)
                                 {
@@ -493,6 +554,9 @@ public class JiraService
                                     cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
                                     cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
                                     cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                    cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
                                     cmd.ExecuteNonQuery();
                                 }
                             }
@@ -570,35 +634,6 @@ public class JiraService
         if (DateTime.TryParse(jiraDate, out var dt))
             return dt.ToString("yyyyMMddHHmmss");
         return "";
-    }
-
-    /// <summary>
-    /// Gets the total number of issues for a project using Jira REST API and JQL.
-    /// Used for progress reporting and batching.
-    /// Logs the result.
-    /// </summary>
-    /// <param name="projectKey">The Jira project key.</param>
-    /// <returns>Total issue count as integer.</returns>
-    private async Task<int> GetTotalIssueCountAsync(string projectKey)
-    {
-        string jql = $"project={projectKey} ORDER BY key ASC";
-        using var httpClient = new HttpClient();
-        httpClient.BaseAddress = new Uri(jiraBaseUrl);
-
-        var authToken = Convert.ToBase64String(
-            System.Text.Encoding.ASCII.GetBytes($"{username}:{apiToken}"));
-        httpClient.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
-
-        string url = $"/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&maxResults=0";
-
-        var response = await httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
-
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        int total = doc.RootElement.GetProperty("total").GetInt32();
-        return total;
     }
 
     /// <summary>
@@ -715,32 +750,6 @@ public class JiraService
         var issue = await jira.Issues.GetIssueAsync(issueKey);
         var logs = await issue.GetChangeLogsAsync();
         return logs;
-    }
-
-    /// <summary>
-    /// Converts HTML content to Atlassian Document Format (ADF).
-    /// This is a mock implementation; replace with a real converter for production.
-    /// Logs the conversion.
-    /// </summary>
-    /// <param name="html">HTML string to convert.</param>
-    /// <returns>ADF JSON string.</returns>
-    private static string ConvertHtmlToAdf(string html)
-    {
-        return @"{
-            ""version"": 1,
-            ""type"": ""doc"",
-            ""content"": [
-                {
-                    ""type"": ""paragraph"",
-                    ""content"": [
-                        {
-                            ""type"": ""text"",
-                            ""text"": ""Converted HTML to ADF""
-                        }
-                    ]
-                }
-            ]
-        }";
     }
 
     /// <summary>

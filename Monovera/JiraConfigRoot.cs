@@ -44,6 +44,8 @@ namespace Monovera
         /// Jira API token for authentication.
         /// </summary>
         public string Token { get; set; }
+
+        public bool OfflineMode { get; set; }
     }
 
     /// <summary>
