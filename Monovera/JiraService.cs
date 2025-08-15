@@ -175,7 +175,7 @@ public class JiraService
     string linkTypeName = "Blocks",
     bool forceSync = false,
     Action<int, int, double> progressUpdate = null,
-    int maxParallelism = 10,
+    int maxParallelism = 250,
     string updateType = "Complete")
     {
         string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
@@ -237,7 +237,6 @@ public class JiraService
             string jql;
             if (updateType == "Difference")
             {
-                // Get max UPDATEDTIME from DB for this project
                 string latestUpdateTimeOnDdatabase = null;
                 using (var conn = new SqliteConnection(connStr))
                 {
@@ -251,11 +250,9 @@ public class JiraService
                     }
                 }
 
-                // Convert latestUpdateTimeOnDdatabase to Jira format
                 string latestUpdateTimeToCheckInJira = null;
                 if (!string.IsNullOrWhiteSpace(latestUpdateTimeOnDdatabase) && latestUpdateTimeOnDdatabase.Length == 14)
                 {
-                    // yyyyMMddHHmmss -> yyyy-MM-dd HH:mm
                     latestUpdateTimeToCheckInJira = DateTime.ParseExact(latestUpdateTimeOnDdatabase, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
                 }
 
@@ -278,9 +275,28 @@ public class JiraService
                 var pageStarts = Enumerable.Range(0, totalPages).Select(i => i * pageSize).ToList();
 
                 int completed = 0;
-                var allIssueRows = new List<object[]>();
-
                 var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4)); // SQLite: keep parallelism low
+
+                // Use a concurrent dictionary for update time lookup
+                var dbTimes = new Dictionary<string, string>();
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = $"SELECT KEY, UPDATEDTIME FROM issue WHERE PROJECTCODE = @pcode";
+                        cmd.Parameters.AddWithValue("@pcode", projectKey);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                dbTimes[reader.GetString(0)] = reader.GetString(1);
+                            }
+                        }
+                    }
+                }
+
+                // Each batch writes directly to DB after fetch
                 var tasks = pageStarts.Select(async startAt =>
                 {
                     await throttler.WaitAsync();
@@ -299,7 +315,7 @@ public class JiraService
                                      $"&fields={Uri.EscapeDataString(fieldsStr)}";
 
                         using var client = new HttpClient();
-                        client.Timeout = TimeSpan.FromMinutes(15); // Increase timeout to 5 minutes
+                        client.Timeout = TimeSpan.FromMinutes(15);
                         client.BaseAddress = new Uri(jiraBaseUrl);
                         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
                             "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
@@ -324,12 +340,10 @@ public class JiraService
                             using var doc = JsonDocument.Parse(issueDetailResponsejson);
                             var root = doc.RootElement;
 
-                            // Fetch HTML description using /issue/{key}?expand=renderedFields
                             string description = issue["fields"]["description"]?.ToString() ?? "";
                             string htmlDescription = description;
                             try
                             {
-                               
                                 if (issueDetailResponse.IsSuccessStatusCode)
                                 {
                                     var detailJson = JObject.Parse(await issueDetailResponse.Content.ReadAsStringAsync());
@@ -342,14 +356,13 @@ public class JiraService
                             }
 
                             htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
-                            
 
                             string sortingFieldValue = null;
                             if (hasSortingField && issue["fields"][sortingField] != null)
                             {
                                 sortingFieldValue = issue["fields"][sortingField].ToString();
-                            }                            
-                                   
+                            }
+
                             string parentKey = "";
                             string childrenKeys = "";
                             string relatesKeys = "";
@@ -388,37 +401,151 @@ public class JiraService
                                 history = histories.ToString();
                             }
 
-
                             string attachments = "";
 
                             issues.Add(new object[]
                             {
-                                created, 
-                                updated, 
-                                key, 
-                                summary, 
-                                htmlDescription, 
-                                parentKey, 
-                                childrenKeys, 
-                                relatesKeys, 
-                                sortingFieldValue, 
-                                issueType, 
-                                projectName, 
-                                projectKey, 
-                                status,
-                                history,
-                                attachments
+                            created,
+                            updated,
+                            key,
+                            summary,
+                            htmlDescription,
+                            parentKey,
+                            childrenKeys,
+                            relatesKeys,
+                            sortingFieldValue,
+                            issueType,
+                            projectName,
+                            projectKey,
+                            status,
+                            history,
+                            attachments
                             });
+
+                            int currentCompleted = Interlocked.Increment(ref completed);
+                            double percent = totalCount > 0 ? (currentCompleted * 100.0 / totalCount) : 100.0;
+                            progressUpdate?.Invoke(currentCompleted, totalCount, percent);
                         }
 
-                        lock (allIssueRows)
+                        // Batch write for this page
+                        using (var conn = new SqliteConnection(connStr))
                         {
-                            allIssueRows.AddRange(issues);
-                        }
+                            conn.Open();
+                            var toInsert = new List<object[]>();
+                            var toUpdate = new List<object[]>();
 
-                        Interlocked.Add(ref completed, issues.Count);
-                        double percent = totalCount > 0 ? (completed * 100.0 / totalCount) : 100.0;
-                        progressUpdate?.Invoke(completed, totalCount, percent);
+                            foreach (var row in issues)
+                            {
+                                string key = (string)row[2];
+                                string updated = (string)row[1];
+                                bool exists = dbTimes.ContainsKey(key);
+                                if (!exists)
+                                    toInsert.Add(row);
+                                else
+                                    toUpdate.Add(row);
+                            }
+
+                            // Insert batch
+                            if (toInsert.Count > 0)
+                            {
+                                var transaction = conn.BeginTransaction();
+                                using (var cmd = conn.CreateCommand())
+                                {
+                                    cmd.CommandText = @"
+                                    INSERT INTO issue
+                                    (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
+                                    VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
+                                    int batchCount = 0;
+                                    foreach (var row in toInsert)
+                                    {
+                                        cmd.Parameters.Clear();
+                                        cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
+                                        cmd.ExecuteNonQuery();
+
+                                        batchCount++;
+                                        if (batchCount % 100 == 0)
+                                        {
+                                            transaction.Commit();
+                                            transaction.Dispose();
+                                            transaction = conn.BeginTransaction();
+                                        }
+                                    }
+                                    transaction.Commit();
+                                    transaction.Dispose();
+                                }
+                            }
+
+                            // Update batch
+                            if (toUpdate.Count > 0)
+                            {
+                                var transaction = conn.BeginTransaction();
+                                using (var cmd = conn.CreateCommand())
+                                {
+                                    cmd.CommandText = @"
+                                    UPDATE issue SET
+                                        CREATEDTIME = @created,
+                                        UPDATEDTIME = @updated,
+                                        SUMMARY = @summary,
+                                        DESCRIPTION = @desc,
+                                        PARENTKEY = @parent,
+                                        CHILDRENKEYS = @children,
+                                        RELATESKEYS = @relates,
+                                        SORTINGFIELD = @sorting,
+                                        ISSUETYPE = @issueType,
+                                        PROJECTNAME = @pname,
+                                        PROJECTCODE = @pcode,
+                                        STATUS = @status,
+                                        HISTORY = @history, 
+                                        ATTACHMENTS = @attachments
+                                    WHERE KEY = @key";
+                                    int batchCount = 0;
+                                    foreach (var row in toUpdate)
+                                    {
+                                        cmd.Parameters.Clear();
+                                        cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                        cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
+                                        cmd.ExecuteNonQuery();
+
+                                        batchCount++;
+                                        if (batchCount % 100 == 0)
+                                        {
+                                            transaction.Commit();
+                                            transaction.Dispose();
+                                            transaction = conn.BeginTransaction();
+                                        }
+                                    }
+                                    transaction.Commit();
+                                    transaction.Dispose();
+                                }
+                            }
+                        }
                     }
                     finally
                     {
@@ -427,150 +554,12 @@ public class JiraService
                 }).ToList();
 
                 await Task.WhenAll(tasks);
-
-                // Now batch check existence and update times, then batch write
-                using (var conn = new SqliteConnection(connStr))
-                {
-                    conn.Open();
-
-                    // Build a lookup for all keys
-                    var keys = allIssueRows.Select(row => (string)row[2]).Distinct().ToList();
-                    var dbTimes = new Dictionary<string, string>();
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = $"SELECT KEY, UPDATEDTIME FROM issue WHERE KEY IN ({string.Join(",", keys.Select((k, i) => $"@k{i}"))})";
-                        for (int i = 0; i < keys.Count; i++)
-                            cmd.Parameters.AddWithValue($"@k{i}", keys[i]);
-                        using (var reader = cmd.ExecuteReader())
-                        {
-                            while (reader.Read())
-                            {
-                                dbTimes[reader.GetString(0)] = reader.GetString(1);
-                            }
-                        }
-                    }
-
-                    // Prepare batch
-                    var toInsert = new List<object[]>();
-                    var toUpdate = new List<object[]>();
-
-                    foreach (var row in allIssueRows)
-                    {
-                        string key = (string)row[2];
-                        string updated = (string)row[1];
-                        bool exists = dbTimes.ContainsKey(key);
-                        //bool shouldUpdate = false;
-                        //if (exists)
-                        //{
-                        //    string dbUpdated = dbTimes[key];
-                        //    if (string.Compare(updated, dbUpdated, StringComparison.Ordinal) > 0)
-                        //        shouldUpdate = true;
-                        //}
-                        if (!exists)
-                            toInsert.Add(row);
-                        //else if (shouldUpdate)
-                        else
-                            toUpdate.Add(row);
-                    }
-
-                    // Batch insert
-                    if (toInsert.Count > 0)
-                    {
-                        using (var transaction = conn.BeginTransaction())
-                        {
-                            using (var cmd = conn.CreateCommand())
-                            {
-                                cmd.CommandText = @"
-                                INSERT INTO issue
-                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
-                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
-                                foreach (var row in toInsert)
-                                {
-                                    cmd.Parameters.Clear();
-                                    cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
-                                    if (!string.IsNullOrWhiteSpace(sortingField))
-                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
-                                    else
-                                        cmd.Parameters.AddWithValue("@sorting", DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
-                                    cmd.ExecuteNonQuery();
-                                }
-                            }
-                            transaction.Commit();
-                        }
-                    }
-
-                    // Batch update
-                    if (toUpdate.Count > 0)
-                    {
-                        using (var transaction = conn.BeginTransaction())
-                        {
-                            using (var cmd = conn.CreateCommand())
-                            {
-                                cmd.CommandText = @"
-                                UPDATE issue SET
-                                    CREATEDTIME = @created,
-                                    UPDATEDTIME = @updated,
-                                    SUMMARY = @summary,
-                                    DESCRIPTION = @desc,
-                                    PARENTKEY = @parent,
-                                    CHILDRENKEYS = @children,
-                                    RELATESKEYS = @relates,
-                                    SORTINGFIELD = @sorting,
-                                    ISSUETYPE = @issueType,
-                                    PROJECTNAME = @pname,
-                                    PROJECTCODE = @pcode,
-                                    STATUS = @status,
-                                    HISTORY = @history, 
-                                    ATTACHMENTS = @attachments
-                                WHERE KEY = @key";
-                                foreach (var row in toUpdate)
-                                {
-                                    cmd.Parameters.Clear();
-                                    cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
-                                    if (!string.IsNullOrWhiteSpace(sortingField))
-                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
-                                    else
-                                        cmd.Parameters.AddWithValue("@sorting", DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
-                                    cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
-                                    cmd.ExecuteNonQuery();
-                                }
-                            }
-                            transaction.Commit();
-                        }
-                    }
-                }
             }
         }
 
         // Always load all issues for this project from the database for tree display
         var allIssues = new List<JiraIssueDictionary>();
 
-        // Get all project keys from configuration
         var allProjectKeys = config?.Projects?.Select(p => p.Root.Split('-')[0]).Distinct().ToList() ?? new List<string>();
 
         using (var conn = new SqliteConnection(connStr))

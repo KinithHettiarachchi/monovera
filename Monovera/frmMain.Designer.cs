@@ -40,15 +40,22 @@
             mnuReport = new ToolStripMenuItem();
             mnuRecentUpdates = new ToolStripMenuItem();
             mnuSearch = new ToolStripMenuItem();
+            toolStripStatusLabel1 = new ToolStripStatusLabel();
             mnuAI = new ToolStripSplitButton();
             mnuAITestCases = new ToolStripMenuItem();
             mnuPutMeInContext = new ToolStripMenuItem();
+            toolStripStatusLabel2 = new ToolStripStatusLabel();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             mnuConfiguration = new ToolStripMenuItem();
+            toolStripStatusLabel3 = new ToolStripStatusLabel();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
+            toolStripStatusLabel4 = new ToolStripStatusLabel();
             lblJiraUpdateProcessing = new ToolStripStatusLabel();
+            toolStripStatusLabel5 = new ToolStripStatusLabel();
+            lblSyncStatus = new ToolStripStatusLabel();
+            toolStripStatusLabel7 = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
@@ -73,8 +80,7 @@
             // 
             splitContainer1.Panel2.BackColor = Color.White;
             splitContainer1.Panel2.Controls.Add(panelTabs);
-            splitContainer1.Panel2.Controls.Add(statusStrip1);
-            splitContainer1.Size = new Size(1904, 1001);
+            splitContainer1.Size = new Size(1904, 978);
             splitContainer1.SplitterDistance = 540;
             splitContainer1.TabIndex = 0;
             // 
@@ -86,7 +92,7 @@
             tree.Location = new Point(0, 0);
             tree.Name = "tree";
             tree.ShowNodeToolTips = true;
-            tree.Size = new Size(540, 1001);
+            tree.Size = new Size(540, 978);
             tree.TabIndex = 0;
             tree.AfterSelect += Tree_AfterSelect;
             tree.NodeMouseClick += tree_NodeMouseClick;
@@ -102,11 +108,11 @@
             // 
             // statusStrip1
             // 
-            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, mnuAI, mnuSettings, pbProgress, lblProgress, lblJiraUpdateProcessing, lblShortcuts });
+            statusStrip1.Items.AddRange(new ToolStripItem[] { lblUser, mnuActions, toolStripStatusLabel1, mnuAI, toolStripStatusLabel2, mnuSettings, toolStripStatusLabel3, pbProgress, lblProgress, toolStripStatusLabel4, lblJiraUpdateProcessing, toolStripStatusLabel5, lblSyncStatus, toolStripStatusLabel7, lblShortcuts });
             statusStrip1.Location = new Point(0, 978);
             statusStrip1.Name = "statusStrip1";
             statusStrip1.RenderMode = ToolStripRenderMode.Professional;
-            statusStrip1.Size = new Size(1360, 23);
+            statusStrip1.Size = new Size(1904, 23);
             statusStrip1.TabIndex = 0;
             statusStrip1.Text = "statusStrip1";
             // 
@@ -161,6 +167,12 @@
             mnuSearch.Text = "Search...";
             mnuSearch.Click += mnuSearch_Click;
             // 
+            // toolStripStatusLabel1
+            // 
+            toolStripStatusLabel1.Name = "toolStripStatusLabel1";
+            toolStripStatusLabel1.Size = new Size(19, 18);
+            toolStripStatusLabel1.Text = "    ";
+            // 
             // mnuAI
             // 
             mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext });
@@ -182,6 +194,12 @@
             mnuPutMeInContext.Size = new Size(257, 22);
             mnuPutMeInContext.Text = "Put Me In Context (Experimental)";
             mnuPutMeInContext.Click += mnuPutMeInContext_Click;
+            // 
+            // toolStripStatusLabel2
+            // 
+            toolStripStatusLabel2.Name = "toolStripStatusLabel2";
+            toolStripStatusLabel2.Size = new Size(19, 18);
+            toolStripStatusLabel2.Text = "    ";
             // 
             // mnuSettings
             // 
@@ -208,6 +226,12 @@
             mnuConfiguration.Text = "Configuration...";
             mnuConfiguration.Click += configurationToolStripMenuItem_Click;
             // 
+            // toolStripStatusLabel3
+            // 
+            toolStripStatusLabel3.Name = "toolStripStatusLabel3";
+            toolStripStatusLabel3.Size = new Size(19, 18);
+            toolStripStatusLabel3.Text = "    ";
+            // 
             // pbProgress
             // 
             pbProgress.Name = "pbProgress";
@@ -220,11 +244,36 @@
             lblProgress.Size = new Size(24, 18);
             lblProgress.Text = "    ";
             // 
+            // toolStripStatusLabel4
+            // 
+            toolStripStatusLabel4.Name = "toolStripStatusLabel4";
+            toolStripStatusLabel4.Size = new Size(19, 18);
+            toolStripStatusLabel4.Text = "    ";
+            // 
             // lblJiraUpdateProcessing
             // 
             lblJiraUpdateProcessing.Name = "lblJiraUpdateProcessing";
             lblJiraUpdateProcessing.Size = new Size(136, 18);
             lblJiraUpdateProcessing.Text = "No pending Jira Updates";
+            // 
+            // toolStripStatusLabel5
+            // 
+            toolStripStatusLabel5.Name = "toolStripStatusLabel5";
+            toolStripStatusLabel5.Size = new Size(19, 18);
+            toolStripStatusLabel5.Text = "    ";
+            // 
+            // lblSyncStatus
+            // 
+            lblSyncStatus.ForeColor = Color.Gray;
+            lblSyncStatus.Name = "lblSyncStatus";
+            lblSyncStatus.Size = new Size(127, 18);
+            lblSyncStatus.Text = "Checking sync status...";
+            // 
+            // toolStripStatusLabel7
+            // 
+            toolStripStatusLabel7.Name = "toolStripStatusLabel7";
+            toolStripStatusLabel7.Size = new Size(19, 18);
+            toolStripStatusLabel7.Text = "    ";
             // 
             // lblShortcuts
             // 
@@ -244,6 +293,7 @@
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(1904, 1001);
             Controls.Add(splitContainer1);
+            Controls.Add(statusStrip1);
             Icon = (Icon)resources.GetObject("$this.Icon");
             Name = "frmMain";
             StartPosition = FormStartPosition.CenterScreen;
@@ -252,12 +302,12 @@
             Load += frmMain_Load;
             splitContainer1.Panel1.ResumeLayout(false);
             splitContainer1.Panel2.ResumeLayout(false);
-            splitContainer1.Panel2.PerformLayout();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).EndInit();
             splitContainer1.ResumeLayout(false);
             statusStrip1.ResumeLayout(false);
             statusStrip1.PerformLayout();
             ResumeLayout(false);
+            PerformLayout();
         }
 
         #endregion
@@ -283,5 +333,12 @@
         private ToolStripSplitButton mnuAI;
         private ToolStripMenuItem mnuAITestCases;
         private ToolStripMenuItem mnuPutMeInContext;
+        private ToolStripStatusLabel toolStripStatusLabel1;
+        private ToolStripStatusLabel toolStripStatusLabel2;
+        private ToolStripStatusLabel toolStripStatusLabel3;
+        private ToolStripStatusLabel toolStripStatusLabel4;
+        private ToolStripStatusLabel toolStripStatusLabel5;
+        private ToolStripStatusLabel toolStripStatusLabel7;
+        private ToolStripStatusLabel lblSyncStatus;
     }
 }

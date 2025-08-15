@@ -45,6 +45,7 @@ namespace Monovera
         private MouseButtons lastTreeMouseButton = MouseButtons.Left;
         private bool suppressAfterSelect = false;
         public static string SUMMARY_MISSING = "SUMMARY MISSING!";
+        private System.Threading.Timer syncStatusTimer;
 
         /// <summary>
         /// Represents a service for interacting with Jira.
@@ -657,6 +658,78 @@ namespace Monovera
                 string siblingKey = targetNode.Nodes[i].Tag as string;
                 int sequence = i + 1;
                 sequenceUpdateQueue.Enqueue((siblingKey, sequence));
+            }
+        }
+
+
+        private async void CheckSyncStatusAsync(object? state)
+        {
+            try
+            {
+                // 1. Get max UPDATEDTIME for each project from DB
+                var projectMaxTimes = new Dictionary<string, DateTime>();
+                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+                string connStr = $"Data Source={dbPath};";
+                using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    foreach (var project in projectList)
+                    {
+                        string projectKey = project.Split('-')[0];
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTNAME = @pcode";
+                            cmd.Parameters.AddWithValue("@pcode", projectKey);
+                            var result = cmd.ExecuteScalar();
+                            if (result != DBNull.Value && result != null)
+                            {
+                                if (DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                                    projectMaxTimes[projectKey] = dt;
+                            }
+                        }
+                    }
+                }
+
+                // 2. For each project, query JIRA for issues created/updated after max UPDATEDTIME
+                int totalUpdates = 0;
+                foreach (var kvp in projectMaxTimes)
+                {
+                    string projectKey = kvp.Key;
+                    DateTime maxTime = kvp.Value;
+                    string jql = $"project = \"{projectKey}\" AND updated >= \"{maxTime:yyyy-MM-dd HH:mm}\"";
+                    var issues = await jiraService.SearchIssuesAsync(jql);
+                    foreach (var issue in issues ?? Enumerable.Empty<Issue>())
+                    {
+                        if (issue.Updated != null)
+                        {
+                            string issueUpdatedStr = issue.Updated.Value.ToString("yyyyMMddHHmmss");
+                            string maxTimeStr = maxTime.ToString("yyyyMMddHHmmss");
+                            if (string.Compare(issueUpdatedStr, maxTimeStr, StringComparison.Ordinal) > 0)
+                            {
+                                totalUpdates++;
+                            }
+                        }
+                    }
+                }
+
+                // 3. Update lblSyncStatus on UI thread
+                this.Invoke(() =>
+                {
+                    if (totalUpdates > 0)
+                    {
+                        lblSyncStatus.Text = "⚠ Sync needed!";
+                        lblSyncStatus.ForeColor = Color.Red;
+                    }
+                    else
+                    {
+                        lblSyncStatus.Text = "✅ You are in sync!";
+                        lblSyncStatus.ForeColor = Color.Green;
+                    }
+                });
+            }
+            catch
+            {
+                // Optionally handle/log errors
             }
         }
 
@@ -2631,7 +2704,8 @@ namespace Monovera
             // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync(false);
 
-
+            // After tree loading, start sync status timer
+            syncStatusTimer = new System.Threading.Timer(CheckSyncStatusAsync, null, TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
         }
 
         /// <summary>
@@ -2669,8 +2743,11 @@ namespace Monovera
                     var projectsToSync = string.IsNullOrWhiteSpace(project) ? projectList : new List<string> { project };
                     var allIssues = new List<JiraIssue>();
 
+
                     foreach (var projectName in projectsToSync)
                     {
+                        var syncStartTime = DateTime.UtcNow;
+
                         var projectConfig = config.Projects.FirstOrDefault(p => p.Project == projectName);
                         string projectKey = projectConfig?.Root.Split("-")[0] ?? "PROJ";
                         string sortingField = projectConfig?.SortingField ?? "summary";
@@ -2696,6 +2773,8 @@ namespace Monovera
                                 }
                             }
 
+                         
+
                             // Call JiraService with custom JQL
                             issueDictList = await jiraService.UpdateLocalIssueRepositoryAndLoadTree(
                                 projectKey,
@@ -2705,10 +2784,16 @@ namespace Monovera
                                 forceSync: forceSync,
                                 progressUpdate: (completed, total, percent) =>
                                 {
+                                    var elapsed = DateTime.UtcNow - syncStartTime;
+                                    double estimatedTotalSeconds = (elapsed.TotalSeconds / Math.Max(completed, 1)) * Math.Max(total, 1);
+                                    double remainingSeconds = Math.Max(estimatedTotalSeconds - elapsed.TotalSeconds, 0);
+                                    int remainingMinutes = (int)Math.Round(remainingSeconds / 60.0);
+                                    int elapsedMinutes = (int)Math.Round(elapsed.TotalSeconds / 60.0);
+
                                     this.Invoke(() =>
                                     {
                                         pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
-                                        lblProgress.Text = $"Loading project ({projectName}) : {completed}/{total} ({percent:0.0}%)...";
+                                        lblProgress.Text = $"Loading {projectName} project : {completed}/{total} [{percent:0.00}%] Elapsed {elapsedMinutes} min, Remaining {remainingMinutes} min...";
                                     });
                                 },
                                 maxParallelism: 4,
@@ -2718,20 +2803,26 @@ namespace Monovera
                         else // Complete
                         {
                             issueDictList = await jiraService.UpdateLocalIssueRepositoryAndLoadTree(
-                                projectKey,
-                                projectName,
-                                sortingField,
-                                linkTypeName,
-                                forceSync: forceSync,
-                                progressUpdate: (completed, total, percent) =>
+                            projectKey,
+                            projectName,
+                            sortingField,
+                            linkTypeName,
+                            forceSync: forceSync,
+                            progressUpdate: (completed, total, percent) =>
+                            {
+                                var elapsed = DateTime.UtcNow - syncStartTime;
+                                double estimatedTotalSeconds = (elapsed.TotalSeconds / Math.Max(completed, 1)) * Math.Max(total, 1);
+                                double remainingSeconds = Math.Max(estimatedTotalSeconds - elapsed.TotalSeconds, 0);
+                                int remainingMinutes = (int)Math.Round(remainingSeconds / 60.0);
+                                int elapsedMinutes = (int)Math.Round(elapsed.TotalSeconds / 60.0);
+
+                                this.Invoke(() =>
                                 {
-                                    this.Invoke(() =>
-                                    {
-                                        pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
-                                        lblProgress.Text = $"Loading project ({projectName}) : {completed}/{total} ({percent:0.0}%)...";
-                                    });
-                                }
-                            );
+                                    pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
+                                    lblProgress.Text = $"Loading {projectName} project : {completed}/{total} [{percent:0.00}%] Elapsed {elapsedMinutes} min, Remaining {remainingMinutes} min...";
+                                });
+                            }
+                        );
                         }
 
                         foreach (var dto in issueDictList)
@@ -2798,6 +2889,8 @@ namespace Monovera
             finally
             {
                 updateRepoSemaphore.Release();
+                // Run sync status check after hierarchy update
+                CheckSyncStatusAsync(null);
             }
         }
 
@@ -3672,11 +3765,19 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
                 string issueType = GetFieldValueByKey(issueKey, "ISSUETYPE");
 
-                string statusIcon = "";
-
                 string status = GetFieldValueByKey(issueKey, "STATUS");
 
-                string createdDate = DateTime.ParseExact(
+                string statusIcon = "";
+                string iconKeyStatus = GetIconForStatus(status);
+                if (!string.IsNullOrEmpty(iconKeyStatus) && tree.ImageList.Images.ContainsKey(iconKeyStatus))
+                {
+                    using var ms = new MemoryStream();
+                    tree.ImageList.Images[iconKeyStatus].Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    string base64 = Convert.ToBase64String(ms.ToArray());
+                    statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
+                }
+
+                 string createdDate = DateTime.ParseExact(
                                 GetFieldValueByKey(issueKey, "CREATEDTIME"),
                                 "yyyyMMddHHmmss",
                                 CultureInfo.InvariantCulture
@@ -4007,17 +4108,17 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 }
             }
 
-            // --- Parent Section ---
-            string parentKey = GetFieldValueByKey(issueKey, "PARENTKEY");
-            var parentKeys = !string.IsNullOrWhiteSpace(parentKey) ? new List<string> { parentKey } : new List<string>();
-            sb.AppendLine(BuildTable("Parent", parentKeys));
-
             // --- Children Section ---
             string childrenRaw = GetFieldValueByKey(issueKey, "CHILDRENKEYS");
             var childrenKeys = !string.IsNullOrWhiteSpace(childrenRaw)
                 ? childrenRaw.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(k => k.Trim()).Where(k => !string.IsNullOrWhiteSpace(k)).ToList()
                 : new List<string>();
             sb.AppendLine(BuildTable("Children", childrenKeys, sortByField: true));
+
+            // --- Parent Section ---
+            string parentKey = GetFieldValueByKey(issueKey, "PARENTKEY");
+            var parentKeys = !string.IsNullOrWhiteSpace(parentKey) ? new List<string> { parentKey } : new List<string>();
+            sb.AppendLine(BuildTable("Parent", parentKeys));
 
             // --- Related Section ---
             string relatesRaw = GetFieldValueByKey(issueKey, "RELATESKEYS");
@@ -4830,10 +4931,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     <section>{resolvedDesc}</section>
   </details>
 
-    <details open>
-    <summary> ℹ️ Information</summary>
-        <section>
-         <div class='tab-container' style='margin-top:24px;'>
+         <div class='summary' style='margin-top:24px;'>
               <div class='tab-bar'>
                 <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
                 <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
@@ -4861,8 +4959,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             }});
           }});
         </script>
-        </section>
-    </details>
   <script>
     Prism.highlightAll();
 
@@ -6418,37 +6514,56 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             var path = new List<string>();
             string? currentKey = issueKey;
 
-            while (!string.IsNullOrEmpty(currentKey))
+            if (OFFLINE_MODE)
             {
-                // Extract project key (e.g., "PROJ" from "PROJ-123")
-                var dashIdx = currentKey.IndexOf('-');
-                if (dashIdx <= 0) break;
-                var projectKey = currentKey.Substring(0, dashIdx);
+                // Traverse up using PARENTKEY from the local DB
+                while (!string.IsNullOrEmpty(currentKey))
+                {
+                    // Get parent key from DB
+                    string parentKey = GetFieldValueByKey(currentKey, "PARENTKEY");
+                    if (string.IsNullOrEmpty(parentKey))
+                        break;
 
-                // Find the project config for this key
-                var projectConfig = config.Projects
-                    .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
-                if (projectConfig == null || string.IsNullOrEmpty(projectConfig.LinkTypeName))
-                    break;
+                    // Get summary from DB
+                    string summary = GetFieldValueByKey(parentKey, "SUMMARY") ?? SUMMARY_MISSING;
 
-                string hierarchyLinkType = projectConfig.LinkTypeName;
+                    path.Insert(0, $"{System.Web.HttpUtility.HtmlEncode(summary)} [{parentKey}]");
+                    currentKey = parentKey;
+                }
+            }
+            else
+            {
+                // Online mode: use FlatJiraIssueDictionary and config
+                while (!string.IsNullOrEmpty(currentKey))
+                {
+                    if (!FlatJiraIssueDictionary.TryGetValue(currentKey, out var issueDto))
+                        break;
 
-                // Find the parent: an issue that links to currentKey via the project's hierarchy link type
-                var parent = frmMain.FlatJiraIssueDictionary.Values
-                    .FirstOrDefault(issue =>
-                        issue.IssueLinks != null &&
-                        issue.IssueLinks.Any(link =>
-                            link.LinkTypeName == hierarchyLinkType &&
-                            link.OutwardIssueKey == currentKey));
+                    var parentKey = issueDto.ParentKey;
+                    if (string.IsNullOrEmpty(parentKey))
+                        break;
 
-                if (parent == null || string.Equals(parent.Key, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
-                    break;
+                    var dashIdx = parentKey.IndexOf('-');
+                    if (dashIdx <= 0) break;
+                    var projectKey = parentKey.Substring(0, dashIdx);
 
-                path.Insert(0, $"{HttpUtility.HtmlEncode(parent.Summary)} [{parent.Key}]");
-                currentKey = parent.Key;
+                    var projectConfig = config.Projects
+                        .FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) && p.Root.StartsWith(projectKey, StringComparison.OrdinalIgnoreCase));
+                    if (projectConfig == null)
+                        break;
+
+                    if (string.Equals(parentKey, projectConfig.Root, StringComparison.OrdinalIgnoreCase))
+                        break;
+
+                    if (!FlatJiraIssueDictionary.TryGetValue(parentKey, out var parentDto))
+                        break;
+
+                    path.Insert(0, $"{System.Web.HttpUtility.HtmlEncode(parentDto.Summary)} [{parentKey}]");
+                    currentKey = parentKey;
+                }
             }
 
-            return path.Count > 0 ? string.Join(" &gt; ", path) : "";
+            return path.Count > 0 ? string.Join(" ⮞ ", path) : "";
         }
 
         /// <summary>

@@ -498,7 +498,7 @@ table.confluenceTable {
 	box-shadow: 0 6px 24px rgba(33,150,243,0.10);
 	margin-bottom: 24px;
 	overflow: hidden;
-	animation: fadeInTable 0.8s;
+	animation: fadeIn 0.3s;
 	border: 1px solid #b3d4f6;
 }
 
@@ -535,18 +535,16 @@ tr:hover td.confluenceTd {
 	margin: 18px 0;
 	box-shadow: 0 4px 16px rgba(33,150,243,0.08);
 	overflow: hidden;
-	animation: fadeInPanel 0.6s;
+	animation: fadeIn 0.3s;
 }
 
-@keyframes fadeInPanel {
+@keyframes fadeIn {
 	from {
 		opacity: 0;
-		transform: translateY(16px);
 	}
 
 	to {
 		opacity: 1;
-		transform: translateY(0);
 	}
 }
 
@@ -787,7 +785,7 @@ section,
 .history-block,
 .table-wrap,
 .panel {
-	animation: fadeInPanel 1.0s;
+	animation: fadeIn 0.3s;
 }
 
 .change-tag {
@@ -820,7 +818,7 @@ section,
 	border-radius: 10px;
 	box-shadow: 0 2px 8px rgba(33,150,243,0.06);
 	padding: 18px 24px 12px 24px;
-	animation: fadeInPanel 0.8s;
+	animation: fadeIn 0.3s;
 	border: 1px solid #90caf9;
 }
 
@@ -1288,57 +1286,43 @@ section,
 	}
 
 .tab-bar {
+	background: #f2faff;
+	border-bottom: 1px solid #ddd;
 	display: flex;
-	gap: 12px;
-	margin-bottom: 0;
-	background: linear-gradient(90deg, #e1f0ff 60%, #bbdefb 100%);
-	border-radius: 12px 12px 0 0;
-	box-shadow: 0 2px 8px rgba(33,150,243,0.10);
-	padding: 0 14px;
-	align-items: flex-end;
-	min-height: 48px;
+	gap: 2px;
+	padding: 0 8px;
+	font-family: 'IBM Plex Sans', Arial, sans-serif;
 }
 
 .tab-btn {
-	padding: 12px 32px 10px 32px;
-	border: none;
-	background: transparent;
-	color: #1565c0;
-	font-weight: 600;
-	border-radius: 12px 12px 0 0;
+	background: var(--summary-bg, #fff);
+	border: 1px solid #ccc;
+	border-bottom: none;
+	padding: 8px 18px;
+	margin-bottom: -1px;
 	cursor: pointer;
-	outline: none;
-	transition: background 0.2s, color 0.2s, box-shadow 0.2s, border 0.2s;
-	font-size: 1.08em;
-	box-shadow: none;
-	position: relative;
-	letter-spacing: 0.2px;
+	font-weight: 500;
+	color: #333;
+	border-radius: 6px 6px 0 0;
+	transition: background 0.2s, color 0.2s;
 }
 
-	.tab-btn:not(.active):hover,
-	.tab-btn:not(.active):focus {
-		background: linear-gradient(90deg, #f2faff 80%, #e3f2fd 100%);
-		color: #0d47a1;
-		box-shadow: 0 2px 8px rgba(33,150,243,0.12);
-	}
-
 	.tab-btn.active {
-		background: #fff;
+		background: #f2faff;
 		color: #1565c0;
-		border-bottom: 3px solid #1565c0;
-		box-shadow: 0 -2px 8px rgba(33,150,243,0.10);
-		z-index: 2;
+		border-bottom: 2px solid #1565c0;
+		font-weight: 600;
 	}
 
 .tab-content {
-	background: linear-gradient(135deg, #f5faff 70%, #e3f2fd 100%);
-	border: 2px solid #c0daf3;
-	border-radius: 0 0 12px 12px;
-	padding: 28px 28px 22px 28px;
-	box-shadow: 0 2px 8px rgba(33,150,243,0.08);
-	color: #1a3c5d;
-	font-size: 1.04em;
-	animation: fadeInPanel 0.6s;
+	background: #f2faff;
+	border: 1px solid #ddd;
+	border-radius: 0 0 8px 8px;
+	padding: 18px 24px;
+	min-height: 120px;
+	font-size: 1em;
+	color: #222;
+	box-shadow: 0 2px 8px rgba(0,0,0,0.03);
 }
 
 #excludeFormattingCheck {
