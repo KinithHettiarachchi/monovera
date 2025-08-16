@@ -210,7 +210,7 @@ public class JiraService
                     PROJECTCODE TEXT,
                     STATUS TEXT,
                     HISTORY TEXT,
-                    ATTACHMENTS TEXT
+                    ATTACHMENTS BLOB
                 );";
                     cmd.ExecuteNonQuery();
                 }
@@ -224,23 +224,22 @@ public class JiraService
                 conn.Open();
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = $"SELECT COUNT(1) FROM issue WHERE PROJECTCODE='{projectKey}'";
+                    cmd.CommandText = $"SELECT COUNT(1) FROM issue WHERE PROJECTCODE=@pcode";
+                    cmd.Parameters.AddWithValue("@pcode", projectKey);
                     tableEmpty = Convert.ToInt32(cmd.ExecuteScalar()) == 0;
                 }
             }
         }
 
-        int totalCount= 0;
+        int totalCount = 0;
+        List<string> relevantKeys = null;
+        string jql;
 
-        // If DB is empty or forced sync, update DB from Jira
         if (tableEmpty || forceSync)
         {
-            // Build JQL based on updateType
-            string jql;
-            List<string> relevantKeys = null;
             if (updateType == "Difference")
             {
-                string latestUpdateTimeOnDdatabase = null;
+                string latestUpdateTimeOnDatabase = null;
                 using (var conn = new SqliteConnection(connStr))
                 {
                     conn.Open();
@@ -249,14 +248,14 @@ public class JiraService
                         cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTCODE = @pcode";
                         cmd.Parameters.AddWithValue("@pcode", projectKey);
                         var result = cmd.ExecuteScalar();
-                        latestUpdateTimeOnDdatabase = result != DBNull.Value && result != null ? result.ToString() : null;
+                        latestUpdateTimeOnDatabase = result != DBNull.Value && result != null ? result.ToString() : null;
                     }
                 }
 
                 string latestUpdateTimeToCheckInJira = null;
-                if (!string.IsNullOrWhiteSpace(latestUpdateTimeOnDdatabase) && latestUpdateTimeOnDdatabase.Length == 14)
+                if (!string.IsNullOrWhiteSpace(latestUpdateTimeOnDatabase) && latestUpdateTimeOnDatabase.Length == 14)
                 {
-                    latestUpdateTimeToCheckInJira = DateTime.ParseExact(latestUpdateTimeOnDdatabase, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
+                    latestUpdateTimeToCheckInJira = DateTime.ParseExact(latestUpdateTimeOnDatabase, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
                 }
 
                 if (!string.IsNullOrWhiteSpace(latestUpdateTimeToCheckInJira))
@@ -264,7 +263,6 @@ public class JiraService
                 else
                     jql = $"project={projectKey}";
 
-                // Get only the relevant issue keys from Jira
                 relevantKeys = new List<string>();
                 using (var client = new HttpClient())
                 {
@@ -273,9 +271,12 @@ public class JiraService
                         "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
                     );
                     string url = $"{jiraBaseUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=key,updated&maxResults=1000";
-                    var response = await client.GetStringAsync(url);
+                    var response = await RetryWithMessageBoxAsync(
+                        () => client.GetStringAsync(url),
+                        "Failed to fetch issue keys from Jira."
+                    );
                     var json = JObject.Parse(response);
-                    // Build a lookup of DB updated times for all keys in the project
+
                     var dbUpdatedTimes = new Dictionary<string, string>();
                     using (var conn = new SqliteConnection(connStr))
                     {
@@ -294,7 +295,6 @@ public class JiraService
                         }
                     }
 
-                    // Now, only add keys where Jira's updated > DB's updated
                     foreach (var issue in json["issues"])
                     {
                         string key = (string)issue["key"];
@@ -309,14 +309,17 @@ public class JiraService
                         }
                     }
 
-                    totalCount= relevantKeys.Count;
+                    totalCount = relevantKeys.Count;
                 }
             }
             else // Complete
             {
                 jql = $"project={projectKey}";
-                totalCount = await GetTotalIssueCountAsync(projectKey, jql);
-            }            
+                totalCount = await RetryWithMessageBoxAsync(
+                    () => GetTotalIssueCountAsync(projectKey, jql),
+                    "Failed to fetch total issue count from Jira."
+                );
+            }
 
             if (totalCount > 0)
             {
@@ -325,9 +328,26 @@ public class JiraService
                 var pageStarts = Enumerable.Range(0, totalPages).Select(i => i * pageSize).ToList();
 
                 int completed = 0;
-                var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4)); // SQLite: keep parallelism low
+                var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4));
 
-                 // Each batch writes directly to DB after fetch
+                var existingKeys = new HashSet<string>();
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
+                    {
+                        cmd.CommandText = "SELECT KEY FROM issue WHERE PROJECTCODE = @pcode";
+                        cmd.Parameters.AddWithValue("@pcode", projectKey);
+                        using (var reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                existingKeys.Add(reader.GetString(0));
+                            }
+                        }
+                    }
+                }
+
                 var tasks = pageStarts.Select(async startAt =>
                 {
                     await throttler.WaitAsync();
@@ -352,7 +372,10 @@ public class JiraService
                             "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
                         );
 
-                        var response = await client.GetStringAsync(url);
+                        var response = await RetryWithMessageBoxAsync(
+                            () => client.GetStringAsync(url),
+                            "Failed to fetch issues from Jira."
+                        );
                         var json = JObject.Parse(response);
                         var issues = new List<object[]>();
 
@@ -361,7 +384,7 @@ public class JiraService
                             string key = (string)issue["key"];
                             if (updateType == "Difference" && relevantKeys != null && relevantKeys.Count > 0 && !relevantKeys.Contains(key))
                             {
-                                continue; // Skip non-relevant issues
+                                continue;
                             }
 
                             string created = ConvertToDbTimestamp((string)issue["fields"]["created"]);
@@ -370,25 +393,51 @@ public class JiraService
                             string status = (string)issue["fields"]["status"]["name"].ToString();
                             string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
 
-                            var issueDetailResponse = await client.GetAsync($"/rest/api/2/issue/{key}?expand=renderedFields,changelog");
-                            issueDetailResponse.EnsureSuccessStatusCode();
-                            var issueDetailResponsejson = await issueDetailResponse.Content.ReadAsStringAsync();
-                            using var doc = JsonDocument.Parse(issueDetailResponsejson);
-                            var root = doc.RootElement;
+                            // Fetch rendered HTML description and changelog
+                            string htmlDescription = "";
+                            string history = "[]";
+                            string attachments = "";
 
-                            string description = issue["fields"]["description"]?.ToString() ?? "";
-                            string htmlDescription = description;
+                            JObject detailJson = null;
                             try
                             {
-                                if (issueDetailResponse.IsSuccessStatusCode)
+                                var detailResponseStr = await RetryWithMessageBoxAsync(
+                                    () => client.GetStringAsync($"/rest/api/2/issue/{key}?expand=renderedFields,changelog"),
+                                    $"Failed to fetch details for issue {key} from Jira."
+                                );
+                                detailJson = JObject.Parse(detailResponseStr);
+                                htmlDescription = detailJson["renderedFields"]?["description"]?.ToString() ?? issue["fields"]["description"]?.ToString() ?? "";
+
+                                if (detailJson["changelog"]?["histories"] is JArray histories)
                                 {
-                                    var detailJson = JObject.Parse(await issueDetailResponse.Content.ReadAsStringAsync());
-                                    htmlDescription = detailJson["renderedFields"]?["description"]?.ToString() ?? description;
+                                    history = histories.ToString();
+                                }
+
+                                if (detailJson["fields"]?["attachment"] is JArray attachArray && attachArray.Count > 0)
+                                {
+                                    var bytesList = new List<byte>();
+                                    foreach (var att in attachArray)
+                                    {
+                                        string contentUrl = att["content"]?.ToString();
+                                        if (!string.IsNullOrEmpty(contentUrl))
+                                        {
+                                            try
+                                            {
+                                                var attBytes = await RetryWithMessageBoxAsync(
+                                                    () => client.GetByteArrayAsync(contentUrl),
+                                                    $"Failed to download attachment for issue {key}."
+                                                );
+                                                bytesList.AddRange(attBytes);
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                    attachments = Convert.ToBase64String(bytesList.ToArray());
                                 }
                             }
                             catch
                             {
-                                // fallback to raw description if HTML fetch fails
+                                htmlDescription = issue["fields"]["description"]?.ToString() ?? "";
                             }
 
                             htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
@@ -426,15 +475,6 @@ public class JiraService
                                 parentKey = parentLink != null ? (string)parentLink["inwardIssue"]["key"] : "";
                             }
 
-                            string history = "[]";
-                            if (root.TryGetProperty("changelog", out var changelog) &&
-                                changelog.TryGetProperty("histories", out var histories))
-                            {
-                                history = histories.ToString();
-                            }
-
-                            string attachments = "";
-
                             issues.Add(new object[]
                             {
                             created,
@@ -459,7 +499,6 @@ public class JiraService
                             progressUpdate?.Invoke(currentCompleted, totalCount, percent);
                         }
 
-                        // Batch write for this page
                         using (var conn = new SqliteConnection(connStr))
                         {
                             conn.Open();
@@ -469,35 +508,21 @@ public class JiraService
                             foreach (var row in issues)
                             {
                                 string key = (string)row[2];
-                                string updated = (string)row[1];
-
-                                using (var checkConn = new SqliteConnection(connStr))
-                                {
-                                    checkConn.Open();
-                                    using (var checkCmd = checkConn.CreateCommand())
-                                    {
-                                        checkCmd.CommandText = "SELECT 1 FROM issue WHERE PROJECTCODE = @pcode AND KEY = @key LIMIT 1";
-                                        checkCmd.Parameters.AddWithValue("@pcode", projectKey);
-                                        checkCmd.Parameters.AddWithValue("@key", key);
-                                        var exists = checkCmd.ExecuteScalar() != null;
-                                        if (exists)
-                                            toUpdate.Add(row);
-                                        else
-                                            toInsert.Add(row);
-                                    }
-                                }
+                                if (existingKeys.Contains(key))
+                                    toUpdate.Add(row);
+                                else
+                                    toInsert.Add(row);
                             }
 
-                            // Insert batch
                             if (toInsert.Count > 0)
                             {
                                 var transaction = conn.BeginTransaction();
                                 using (var cmd = conn.CreateCommand())
                                 {
                                     cmd.CommandText = @"
-                                    INSERT INTO issue
-                                    (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
-                                    VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
+                                INSERT INTO issue
+                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
+                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
                                     int batchCount = 0;
                                     foreach (var row in toInsert)
                                     {
@@ -532,29 +557,28 @@ public class JiraService
                                 }
                             }
 
-                            // Update batch
                             if (toUpdate.Count > 0)
                             {
                                 var transaction = conn.BeginTransaction();
                                 using (var cmd = conn.CreateCommand())
                                 {
                                     cmd.CommandText = @"
-                                    UPDATE issue SET
-                                        CREATEDTIME = @created,
-                                        UPDATEDTIME = @updated,
-                                        SUMMARY = @summary,
-                                        DESCRIPTION = @desc,
-                                        PARENTKEY = @parent,
-                                        CHILDRENKEYS = @children,
-                                        RELATESKEYS = @relates,
-                                        SORTINGFIELD = @sorting,
-                                        ISSUETYPE = @issueType,
-                                        PROJECTNAME = @pname,
-                                        PROJECTCODE = @pcode,
-                                        STATUS = @status,
-                                        HISTORY = @history, 
-                                        ATTACHMENTS = @attachments
-                                    WHERE KEY = @key";
+                                UPDATE issue SET
+                                    CREATEDTIME = @created,
+                                    UPDATEDTIME = @updated,
+                                    SUMMARY = @summary,
+                                    DESCRIPTION = @desc,
+                                    PARENTKEY = @parent,
+                                    CHILDRENKEYS = @children,
+                                    RELATESKEYS = @relates,
+                                    SORTINGFIELD = @sorting,
+                                    ISSUETYPE = @issueType,
+                                    PROJECTNAME = @pname,
+                                    PROJECTCODE = @pcode,
+                                    STATUS = @status,
+                                    HISTORY = @history, 
+                                    ATTACHMENTS = @attachments
+                                WHERE KEY = @key";
                                     int batchCount = 0;
                                     foreach (var row in toUpdate)
                                     {
@@ -600,9 +624,7 @@ public class JiraService
             }
         }
 
-        // Always load all issues for this project from the database for tree display
         var allIssues = new List<JiraIssueDictionary>();
-
         var allProjectKeys = config?.Projects?.Select(p => p.Root.Split('-')[0]).Distinct().ToList() ?? new List<string>();
 
         using (var conn = new SqliteConnection(connStr))
@@ -635,6 +657,40 @@ public class JiraService
             }
         }
         return allIssues;
+    }
+
+    private async Task<T> RetryWithMessageBoxAsync<T>(Func<Task<T>> action, string errorMessage, int maxAttempts = 3)
+    {
+        int attempt = 0;
+        while (true)
+        {
+            try
+            {
+                return await action();
+            }
+            catch (Exception ex)
+            {
+                attempt++;
+                if (attempt >= maxAttempts)
+                {
+                    var result = System.Windows.Forms.MessageBox.Show(
+                        $"{errorMessage}\n\n{ex.Message}\n\nDo you want to retry?",
+                        "Jira Fetch Error",
+                        System.Windows.Forms.MessageBoxButtons.RetryCancel,
+                        System.Windows.Forms.MessageBoxIcon.Error);
+
+                    if (result == System.Windows.Forms.DialogResult.Retry)
+                    {
+                        attempt = 0; // reset attempts for user-driven retry
+                        continue;
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
     }
 
     // Update GetTotalIssueCountAsync to accept JQL
