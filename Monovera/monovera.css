@@ -1295,7 +1295,7 @@ section,
 }
 
 .tab-btn {
-	background: var(--summary-bg, #fff);
+	background: #f2faff;
 	border: 1px solid #ccc;
 	border-bottom: none;
 	padding: 8px 18px;
@@ -1308,15 +1308,15 @@ section,
 }
 
 	.tab-btn.active {
-		background: #f2faff;
+		background: #ffffff;
 		color: #1565c0;
 		border-bottom: 2px solid #1565c0;
 		font-weight: 600;
 	}
 
 .tab-content {
-	background: #f2faff;
-	border: 1px solid #ddd;
+	background: #ffffff;
+	border: 1px solid #b3d4f6;
 	border-radius: 0 0 8px 8px;
 	padding: 18px 24px;
 	min-height: 120px;

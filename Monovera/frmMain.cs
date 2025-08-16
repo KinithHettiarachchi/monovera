@@ -791,12 +791,12 @@ namespace Monovera
             }
             if (isProcessing)
             {
-                lblJiraUpdateProcessing.Text = "🔴 Processing Jira updates!...";
+                lblJiraUpdateProcessing.Text = "⚠ Sending updates to JIRA...";
                 lblJiraUpdateProcessing.ForeColor = Color.Red;
             }
             else
             {
-                lblJiraUpdateProcessing.Text = "🟢 No pending Jira updates!";
+                lblJiraUpdateProcessing.Text = "✅ No changes to send!";
                 lblJiraUpdateProcessing.ForeColor = Color.Green;
             }
         }
@@ -4253,10 +4253,8 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
         private string BuildHTMLSection_LINKS(JsonElement fields, string title, string linkType, string prop)
         {
             bool isRelatedTable = linkType == "Relates";
-
             var sb = new StringBuilder();
             int matchCount = 0;
-            // Now include sortingField in the tuple
             var issues = new List<(string key, string summary, string issueType, string sortingValue, JsonElement issueElem)>();
 
             if (fields.TryGetProperty("issuelinks", out var links))
@@ -4267,35 +4265,58 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                         typeProp.TryGetProperty("name", out var nameProp) &&
                         nameProp.GetString() == linkType)
                     {
-                        JsonElement issueElem = default;
-
-                        if (prop == null)
+                        // For "Relates", always check both directions
+                        if (isRelatedTable)
                         {
-                            if (!link.TryGetProperty("inwardIssue", out issueElem))
-                                issueElem = link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
+                            foreach (var direction in new[] { "outwardIssue", "inwardIssue" })
+                            {
+                                if (link.TryGetProperty(direction, out var issueElem) && issueElem.ValueKind == JsonValueKind.Object)
+                                {
+                                    var key = issueElem.GetProperty("key").GetString() ?? "";
+                                    var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
+                                    var issueType = issueElem.GetProperty("fields").TryGetProperty("issuetype", out var typeField) && typeField.TryGetProperty("name", out var typeName)
+                                        ? typeName.GetString() ?? ""
+                                        : "";
+
+                                    string sortingValue = "0";
+                                    if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
+                                    {
+                                        sortingValue = dto.SortingField;
+                                    }
+
+                                    issues.Add((key, sum, issueType, sortingValue, issueElem));
+                                }
+                            }
                         }
                         else
                         {
-                            link.TryGetProperty(prop, out issueElem);
-                        }
-
-                        if (issueElem.ValueKind == JsonValueKind.Object)
-                        {
-                            var key = issueElem.GetProperty("key").GetString() ?? "";
-                            var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
-                            var issueType = issueElem.GetProperty("fields").TryGetProperty("issuetype", out var typeField) && typeField.TryGetProperty("name", out var typeName)
-                                ? typeName.GetString() ?? ""
-                                : "";
-
-
-                            // Get sorting field value for this key from FlatJiraIssueDictionary
-                            string sortingValue = "0";
-                            if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
+                            JsonElement issueElem = default;
+                            if (prop == null)
                             {
-                                sortingValue = dto.SortingField;
+                                if (!link.TryGetProperty("inwardIssue", out issueElem))
+                                    issueElem = link.TryGetProperty("outwardIssue", out var outw) ? outw : default;
+                            }
+                            else
+                            {
+                                link.TryGetProperty(prop, out issueElem);
                             }
 
-                            issues.Add((key, sum, issueType, sortingValue, issueElem));
+                            if (issueElem.ValueKind == JsonValueKind.Object)
+                            {
+                                var key = issueElem.GetProperty("key").GetString() ?? "";
+                                var sum = issueElem.GetProperty("fields").TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
+                                var issueType = issueElem.GetProperty("fields").TryGetProperty("issuetype", out var typeField) && typeField.TryGetProperty("name", out var typeName)
+                                    ? typeName.GetString() ?? ""
+                                    : "";
+
+                                string sortingValue = "0";
+                                if (FlatJiraIssueDictionary.TryGetValue(key, out var dto))
+                                {
+                                    sortingValue = dto.SortingField;
+                                }
+
+                                issues.Add((key, sum, issueType, sortingValue, issueElem));
+                            }
                         }
                     }
                 }
@@ -4315,14 +4336,11 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     var projectConfig = config.Projects.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
                     string iconImgInner = "";
 
-                    // Case-insensitive lookup for issueType in projectConfig.Types
                     string fileName = null;
                     if (projectConfig != null && !string.IsNullOrEmpty(i.issueType))
                     {
-                        // Try direct match first
                         if (!projectConfig.Types.TryGetValue(i.issueType, out fileName))
                         {
-                            // Fallback: case-insensitive search
                             var match = projectConfig.Types
                                 .FirstOrDefault(kvp => kvp.Key.Equals(i.issueType, StringComparison.OrdinalIgnoreCase));
                             fileName = match.Value;
@@ -4347,7 +4365,6 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     {
                         iconImgInner = $"<span style='font-size:22px; vertical-align:middle; margin-right:8px;' title='{HttpUtility.HtmlEncode(i.issueType)}'>🟥</span>";
                     }
-
 
                     string pathHtml = "";
                     if (isRelatedTable)
@@ -4416,7 +4433,6 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 </table>");
             }
 
-            //sb.AppendLine("</div>");
             return sb.ToString();
         }
 

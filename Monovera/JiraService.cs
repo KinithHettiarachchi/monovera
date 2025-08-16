@@ -230,11 +230,14 @@ public class JiraService
             }
         }
 
+        int totalCount= 0;
+
         // If DB is empty or forced sync, update DB from Jira
         if (tableEmpty || forceSync)
         {
             // Build JQL based on updateType
             string jql;
+            List<string> relevantKeys = null;
             if (updateType == "Difference")
             {
                 string latestUpdateTimeOnDdatabase = null;
@@ -257,16 +260,63 @@ public class JiraService
                 }
 
                 if (!string.IsNullOrWhiteSpace(latestUpdateTimeToCheckInJira))
-                    jql = $"project={projectKey} AND (updated > \"{latestUpdateTimeToCheckInJira}\" OR created > \"{latestUpdateTimeToCheckInJira}\")";
+                    jql = $"project={projectKey} AND (updated > \"{latestUpdateTimeToCheckInJira}\")";
                 else
                     jql = $"project={projectKey}";
+
+                // Get only the relevant issue keys from Jira
+                relevantKeys = new List<string>();
+                using (var client = new HttpClient())
+                {
+                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                        "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
+                    );
+                    string url = $"{jiraBaseUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=key,updated&maxResults=1000";
+                    var response = await client.GetStringAsync(url);
+                    var json = JObject.Parse(response);
+                    // Build a lookup of DB updated times for all keys in the project
+                    var dbUpdatedTimes = new Dictionary<string, string>();
+                    using (var conn = new SqliteConnection(connStr))
+                    {
+                        conn.Open();
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT KEY, UPDATEDTIME FROM issue WHERE PROJECTCODE = @pcode";
+                            cmd.Parameters.AddWithValue("@pcode", projectKey);
+                            using (var reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
+                                {
+                                    dbUpdatedTimes[reader.GetString(0)] = reader.GetString(1);
+                                }
+                            }
+                        }
+                    }
+
+                    // Now, only add keys where Jira's updated > DB's updated
+                    foreach (var issue in json["issues"])
+                    {
+                        string key = (string)issue["key"];
+                        string jiraUpdated = issue["fields"]["updated"] != null
+                            ? ConvertToDbTimestamp((string)issue["fields"]["updated"])
+                            : null;
+                        string dbUpdated = dbUpdatedTimes.TryGetValue(key, out var val) ? val : null;
+
+                        if (!string.IsNullOrEmpty(jiraUpdated) && (string.IsNullOrEmpty(dbUpdated) || string.Compare(jiraUpdated, dbUpdated, StringComparison.Ordinal) > 0))
+                        {
+                            relevantKeys.Add(key);
+                        }
+                    }
+
+                    totalCount= relevantKeys.Count;
+                }
             }
             else // Complete
             {
                 jql = $"project={projectKey}";
-            }
-
-            int totalCount = await GetTotalIssueCountAsync(projectKey, jql);
+                totalCount = await GetTotalIssueCountAsync(projectKey, jql);
+            }            
 
             if (totalCount > 0)
             {
@@ -277,26 +327,7 @@ public class JiraService
                 int completed = 0;
                 var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4)); // SQLite: keep parallelism low
 
-                // Use a concurrent dictionary for update time lookup
-                var dbTimes = new Dictionary<string, string>();
-                using (var conn = new SqliteConnection(connStr))
-                {
-                    conn.Open();
-                    using (var cmd = conn.CreateCommand())
-                    {
-                        cmd.CommandText = $"SELECT KEY, UPDATEDTIME FROM issue WHERE PROJECTCODE = @pcode";
-                        cmd.Parameters.AddWithValue("@pcode", projectKey);
-                        using (var reader = cmd.ExecuteReader())
-                        {
-                            while (reader.Read())
-                            {
-                                dbTimes[reader.GetString(0)] = reader.GetString(1);
-                            }
-                        }
-                    }
-                }
-
-                // Each batch writes directly to DB after fetch
+                 // Each batch writes directly to DB after fetch
                 var tasks = pageStarts.Select(async startAt =>
                 {
                     await throttler.WaitAsync();
@@ -327,9 +358,14 @@ public class JiraService
 
                         foreach (var issue in json["issues"])
                         {
+                            string key = (string)issue["key"];
+                            if (updateType == "Difference" && relevantKeys != null && relevantKeys.Count > 0 && !relevantKeys.Contains(key))
+                            {
+                                continue; // Skip non-relevant issues
+                            }
+
                             string created = ConvertToDbTimestamp((string)issue["fields"]["created"]);
                             string updated = ConvertToDbTimestamp((string)issue["fields"]["updated"]);
-                            string key = (string)issue["key"];
                             string summary = (string)issue["fields"]["summary"];
                             string status = (string)issue["fields"]["status"]["name"].ToString();
                             string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
@@ -371,26 +407,22 @@ public class JiraService
                                 var relates = linksArray
                                     .Where(link => (string)link["type"]?["name"] == "Relates")
                                     .Select(link =>
-                                        (string)link["outwardIssue"]?["key"] ?? "")
+                                        (string)link["outwardIssue"]?["key"] ?? (string)link["inwardIssue"]?["key"])
                                     .Where(k => !string.IsNullOrWhiteSpace(k))
                                     .Distinct()
                                     .ToList();
                                 relatesKeys = string.Join(",", relates);
 
                                 var children = linksArray
-                                    .Where(link => (string)link["type"]?["name"] == linkTypeName)
-                                    .Select(link =>
-                                        (string)link["outwardIssue"]?["key"])
+                                    .Where(link => (string)link["type"]?["name"] == linkTypeName && link["outwardIssue"]?["key"] != null)
+                                    .Select(link => (string)link["outwardIssue"]["key"])
                                     .Where(k => !string.IsNullOrWhiteSpace(k))
                                     .Distinct()
                                     .ToList();
                                 childrenKeys = string.Join(",", children);
 
                                 var parentLink = linksArray
-                                    .FirstOrDefault(link =>
-                                        (string)link["type"]?["name"] == linkTypeName &&
-                                        link["inwardIssue"]?["key"] != null);
-
+                                    .FirstOrDefault(link => (string)link["type"]?["name"] == linkTypeName && link["inwardIssue"]?["key"] != null);
                                 parentKey = parentLink != null ? (string)parentLink["inwardIssue"]["key"] : "";
                             }
 
@@ -438,11 +470,22 @@ public class JiraService
                             {
                                 string key = (string)row[2];
                                 string updated = (string)row[1];
-                                bool exists = dbTimes.ContainsKey(key);
-                                if (!exists)
-                                    toInsert.Add(row);
-                                else
-                                    toUpdate.Add(row);
+
+                                using (var checkConn = new SqliteConnection(connStr))
+                                {
+                                    checkConn.Open();
+                                    using (var checkCmd = checkConn.CreateCommand())
+                                    {
+                                        checkCmd.CommandText = "SELECT 1 FROM issue WHERE PROJECTCODE = @pcode AND KEY = @key LIMIT 1";
+                                        checkCmd.Parameters.AddWithValue("@pcode", projectKey);
+                                        checkCmd.Parameters.AddWithValue("@key", key);
+                                        var exists = checkCmd.ExecuteScalar() != null;
+                                        if (exists)
+                                            toUpdate.Add(row);
+                                        else
+                                            toInsert.Add(row);
+                                    }
+                                }
                             }
 
                             // Insert batch
