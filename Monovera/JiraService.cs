@@ -55,11 +55,14 @@ public class JiraService
     }
 
     /// <summary>
-    /// Tests the Jira connection by attempting to fetch the current user asynchronously.
-    /// Returns true if connection and authentication are successful; false otherwise.
-    /// Logs the result.
+    /// Asynchronously tests the connection to the configured Jira instance using the Atlassian.Jira SDK.
+    /// Attempts to retrieve the current authenticated user to verify credentials and network connectivity.
+    /// Returns <c>true</c> if the connection and authentication succeed, otherwise <c>false</c>.
+    /// Any exceptions encountered during the process are caught and result in a <c>false</c> return value.
     /// </summary>
-    /// <returns>True if connected successfully; false if failed.</returns>
+    /// <returns>
+    /// <c>true</c> if the Jira connection and authentication are successful; <c>false</c> if an error occurs.
+    /// </returns>
     public async Task<bool> TestConnectionAsync()
     {
         try
@@ -74,11 +77,14 @@ public class JiraService
     }
 
     /// <summary>
-    /// Gets the display name of the currently authenticated Jira user asynchronously.
-    /// Returns null if unable to fetch user info.
-    /// Logs the result.
+    /// Asynchronously retrieves the display name of the currently authenticated Jira user.
+    /// Uses the Atlassian.Jira SDK to fetch user information.
+    /// Returns <c>null</c> if the user information cannot be retrieved due to authentication failure or network issues.
+    /// Any exceptions encountered are caught and result in a <c>null</c> return value.
     /// </summary>
-    /// <returns>The display name of the connected user, or null if failed.</returns>
+    /// <returns>
+    /// The display name of the connected Jira user, or <c>null</c> if the user information cannot be fetched.
+    /// </returns>
     public async Task<string?> GetConnectedUserNameAsync()
     {
         try
@@ -103,15 +109,16 @@ public class JiraService
     }
 
     /// <summary>
-    /// Checks the current user's permissions for creating and editing issues in a specified Jira project.
-    /// Uses the Jira REST API to query "CREATE_ISSUES" and "EDIT_ISSUES" permissions.
-    /// Returns a <see cref="WritePermissionsResult"/> indicating the user's capabilities.
-    /// Logs any errors encountered during the permission check.
+    /// Asynchronously checks the current user's permissions for creating and editing issues in a specified Jira project.
+    /// Uses the Jira REST API to query the "CREATE_ISSUES" and "EDIT_ISSUES" permissions for the given project key.
+    /// Returns a <see cref="WritePermissionsResult"/> object indicating whether the user can create and/or edit issues.
+    /// If the permission check fails due to network errors or authentication issues, returns <c>null</c>.
+    /// All errors are caught and logged for traceability.
     /// </summary>
-    /// <param name="projectKey">The key of the Jira project to check permissions for (e.g., "PROJECT1").</param>
+    /// <param name="projectKey">The key of the Jira project to check permissions for (e.g., "PROJ").</param>
     /// <returns>
-    /// A <see cref="WritePermissionsResult"/> object containing the create and edit permission flags,
-    /// or null if the permission check fails.
+    /// A <see cref="WritePermissionsResult"/> object containing the user's create and edit permission flags,
+    /// or <c>null</c> if the permission check fails.
     /// </returns>
     public async Task<WritePermissionsResult?> GetWritePermissionsAsync(string projectKey)
     {
@@ -154,29 +161,34 @@ public class JiraService
     }
 
     /// <summary>
-    /// Gets all Jira issues for a given project using raw JQL.
-    /// Optionally loads from cache unless forceSync is true.
-    /// Progress is reported via the progressUpdate callback.
-    /// Issues are fetched in parallel batches for performance.
-    /// Logs all major steps and results.
+    /// Asynchronously synchronizes and loads all Jira issues for a specified project into a local SQLite cache.
+    /// Issues are fetched using JQL and retrieved in parallel batches for performance.
+    /// If <paramref name="forceSync"/> is <c>true</c>, the cache is ignored and all issues are fetched from Jira.
+    /// If <paramref name="updateType"/> is "Difference", only issues updated since the last sync are fetched.
+    /// Progress is reported via the <paramref name="progressUpdate"/> callback, which receives completed count, total count, and percent complete.
+    /// Issues are stored in the local database, and the method returns a list of <see cref="JiraIssueDictionary"/> objects representing the issues.
+    /// All major steps, errors, and results are logged for traceability.
     /// </summary>
-    /// <param name="projectKey">The Jira project key.</param>
-    /// <param name="fields">Fields to retrieve (SDK retrieves most by default).</param>
-    /// <param name="sortingField">Field used for sorting (default: "created").</param>
-    /// <param name="linkTypeName">Type of issue link to include (default: "Blocks").</param>
-    /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
-    /// <param name="progressUpdate">Callback for progress reporting (completed, total, percent).</param>
-    /// <param name="maxParallelism">Maximum parallel requests to Jira.</param>
-    /// <returns>List of JiraIssueDictionary objects for the project.</returns>
+    /// <param name="projectKey">The Jira project key (e.g., "PROJ").</param>
+    /// <param name="projectName">The display name of the Jira project.</param>
+    /// <param name="sortingField">The field used for sorting issues (e.g., "created" or a custom field).</param>
+    /// <param name="linkTypeName">The type of issue link to include (default: "Blocks").</param>
+    /// <param name="forceSync">If <c>true</c>, ignores the local cache and fetches all issues from Jira.</param>
+    /// <param name="progressUpdate">Optional callback for reporting progress: (completed, total, percent).</param>
+    /// <param name="maxParallelism">Maximum number of parallel requests to Jira (default: 250).</param>
+    /// <param name="updateType">Type of update: "Complete" for full sync, "Difference" for incremental sync.</param>
+    /// <returns>
+    /// A list of <see cref="JiraIssueDictionary"/> objects representing the issues in the project.
+    /// </returns>
     public async Task<List<JiraIssueDictionary>> UpdateLocalIssueRepositoryAndLoadTree(
-    string projectKey,
-    string projectName,
-    string sortingField,
-    string linkTypeName = "Blocks",
-    bool forceSync = false,
-    Action<int, int, double> progressUpdate = null,
-    int maxParallelism = 250,
-    string updateType = "Complete")
+        string projectKey,
+        string projectName,
+        string sortingField,
+        string linkTypeName = "Blocks",
+        bool forceSync = false,
+        Action<int, int, double> progressUpdate = null,
+        int maxParallelism = 250,
+        string updateType = "Complete")
     {
         string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
         string connStr = $"Data Source={dbPath};";
@@ -410,30 +422,30 @@ public class JiraService
 
                                 if (detailJson["changelog"]?["histories"] is JArray histories)
                                 {
-                                    history = histories.ToString();
+                                    history = BuildSlimChangelog(histories);
                                 }
 
-                                if (detailJson["fields"]?["attachment"] is JArray attachArray && attachArray.Count > 0)
-                                {
-                                    var bytesList = new List<byte>();
-                                    foreach (var att in attachArray)
-                                    {
-                                        string contentUrl = att["content"]?.ToString();
-                                        if (!string.IsNullOrEmpty(contentUrl))
-                                        {
-                                            try
-                                            {
-                                                var attBytes = await RetryWithMessageBoxAsync(
-                                                    () => client.GetByteArrayAsync(contentUrl),
-                                                    $"Failed to download attachment for issue {key}."
-                                                );
-                                                bytesList.AddRange(attBytes);
-                                            }
-                                            catch { }
-                                        }
-                                    }
-                                    attachments = Convert.ToBase64String(bytesList.ToArray());
-                                }
+                                //if (detailJson["fields"]?["attachment"] is JArray attachArray && attachArray.Count > 0)
+                                //{
+                                //    var bytesList = new List<byte>();
+                                //    foreach (var att in attachArray)
+                                //    {
+                                //        string contentUrl = att["content"]?.ToString();
+                                //        if (!string.IsNullOrEmpty(contentUrl))
+                                //        {
+                                //            try
+                                //            {
+                                //                var attBytes = await RetryWithMessageBoxAsync(
+                                //                    () => client.GetByteArrayAsync(contentUrl),
+                                //                    $"Failed to download attachment for issue {key}."
+                                //                );
+                                //                bytesList.AddRange(attBytes);
+                                //            }
+                                //            catch { }
+                                //        }
+                                //    }
+                                //    attachments = Convert.ToBase64String(bytesList.ToArray());
+                                //}
                             }
                             catch
                             {
@@ -659,6 +671,53 @@ public class JiraService
         return allIssues;
     }
 
+    private static string BuildSlimChangelog(JArray histories)
+    {
+        var slim = new JArray();
+
+        foreach (var h in histories.OfType<JObject>())
+        {
+            var o = new JObject();
+
+            // Top-level fields
+            if (h.TryGetValue("id", out var id)) o["id"] = id;
+            if (h.TryGetValue("created", out var created)) o["created"] = created;
+
+            // Author -> displayName only
+            if (h["author"] is JObject author &&
+                author.TryGetValue("displayName", out var displayName))
+            {
+                o["author"] = new JObject
+                {
+                    ["displayName"] = displayName
+                };
+            }
+
+            // Items -> keep only specific properties
+            if (h["items"] is JArray items)
+            {
+                var slimItems = new JArray();
+                foreach (var it in items.OfType<JObject>())
+                {
+                    var itObj = new JObject();
+                    foreach (var name in new[] { "field", "fieldtype", "fieldId", "from", "fromString", "to", "toString" })
+                    {
+                        if (it.TryGetValue(name, out var val))
+                        {
+                            itObj[name] = val;
+                        }
+                    }
+                    slimItems.Add(itObj);
+                }
+                o["items"] = slimItems;
+            }
+
+            slim.Add(o);
+        }
+
+        return slim.ToString(Newtonsoft.Json.Formatting.None);
+    }
+
     private async Task<T> RetryWithMessageBoxAsync<T>(Func<Task<T>> action, string errorMessage, int maxAttempts = 3)
     {
         int attempt = 0;
@@ -737,12 +796,16 @@ public class JiraService
     }
 
     /// <summary>
-    /// Searches for issues using a raw JQL query string asynchronously.
-    /// Returns a list of matching issues.
-    /// Logs the query and result count.
+    /// Asynchronously searches for Jira issues using a raw JQL (Jira Query Language) query string.
+    /// Returns a list of <see cref="Issue"/> objects matching the query.
+    /// All queries and result counts are logged for traceability.
+    /// Throws if the JQL is invalid or the search fails.
     /// </summary>
-    /// <param name="jql">Jira Query Language (JQL) string.</param>
-    /// <returns>A list of issues matching the query.</returns>
+    /// <param name="jql">The JQL query string to execute.</param>
+    /// <returns>
+    /// A list of <see cref="Issue"/> objects matching the JQL query.
+    /// </returns>
+    /// <exception cref="JiraException">Thrown if the search fails or the JQL is invalid.</exception>
     public async Task<List<Issue>> SearchIssuesAsync(string jql)
     {
         var results = await jira.Issues.GetIssuesFromJqlAsync(jql);
@@ -750,12 +813,14 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates the summary field of a specified Jira issue.
-    /// Commits changes to Jira server asynchronously.
-    /// Logs the update.
+    /// Asynchronously updates the summary field of a specified Jira issue.
+    /// Retrieves the issue, sets the new summary, and commits the change to the Jira server.
+    /// All updates are logged for traceability.
+    /// Throws if the issue cannot be found or the update fails.
     /// </summary>
-    /// <param name="key">Issue key.</param>
-    /// <param name="newSummary">New summary text.</param>
+    /// <param name="key">The Jira issue key to update.</param>
+    /// <param name="newSummary">The new summary text to set.</param>
+    /// <exception cref="JiraException">Thrown if the update fails or the issue cannot be found.</exception>
     public async Task UpdateSummaryAsync(string key, string newSummary)
     {
         var issue = await jira.Issues.GetIssueAsync(key);
@@ -764,12 +829,14 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates the description field of a Jira issue using Atlassian Document Format (ADF).
-    /// Commits changes to Jira server asynchronously.
-    /// Logs the update.
+    /// Asynchronously updates the description field of a Jira issue using Atlassian Document Format (ADF).
+    /// Retrieves the issue, sets the new ADF JSON description, and commits the change to the Jira server.
+    /// All updates are logged for traceability.
+    /// Throws if the issue cannot be found or the update fails.
     /// </summary>
-    /// <param name="key">Issue key.</param>
-    /// <param name="adfDescription">ADF JSON string representing the description.</param>
+    /// <param name="key">The Jira issue key to update.</param>
+    /// <param name="adfDescription">The ADF JSON string representing the new description.</param>
+    /// <exception cref="JiraException">Thrown if the update fails or the issue cannot be found.</exception>
     public async Task UpdateDescriptionAsync(string key, string adfDescription)
     {
         var issue = await jira.Issues.GetIssueAsync(key);
@@ -778,13 +845,16 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates a single custom or standard field for a Jira issue.
-    /// Commits changes to Jira server asynchronously.
-    /// Logs the update.
+    /// Asynchronously updates a single custom or standard field for a Jira issue.
+    /// Retrieves the issue, sets the specified field to the provided value, and commits the change to the Jira server.
+    /// The value is converted to a string before assignment.
+    /// All updates are logged for traceability.
+    /// Throws if the issue cannot be found or the update fails.
     /// </summary>
-    /// <param name="key">Issue key.</param>
-    /// <param name="fieldName">Field name or custom field ID.</param>
-    /// <param name="value">Value to set; converted to string.</param>
+    /// <param name="key">The Jira issue key to update.</param>
+    /// <param name="fieldName">The name of the field or custom field ID to update.</param>
+    /// <param name="value">The value to set for the field.</param>
+    /// <exception cref="JiraException">Thrown if the update fails or the issue cannot be found.</exception>
     public async Task UpdateFieldAsync(string key, string fieldName, object value)
     {
         var issue = await jira.Issues.GetIssueAsync(key);
@@ -793,12 +863,15 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates multiple fields of a Jira issue at once.
-    /// Commits changes to Jira server asynchronously.
-    /// Logs each field update.
+    /// Asynchronously updates multiple fields of a Jira issue in a single operation.
+    /// Retrieves the issue, sets each field in the provided dictionary to its corresponding value, and commits the changes to the Jira server.
+    /// Each value is converted to a string before assignment.
+    /// All field updates are logged for traceability.
+    /// Throws if the issue cannot be found or the update fails.
     /// </summary>
-    /// <param name="key">Issue key.</param>
-    /// <param name="fields">Dictionary of field names and values.</param>
+    /// <param name="key">The Jira issue key to update.</param>
+    /// <param name="fields">A dictionary mapping field names or custom field IDs to their new values.</param>
+    /// <exception cref="JiraException">Thrown if the update fails or the issue cannot be found.</exception>
     public async Task UpdateFieldsAsync(string key, Dictionary<string, object> fields)
     {
         var issue = await jira.Issues.GetIssueAsync(key);
@@ -810,12 +883,18 @@ public class JiraService
     }
 
     /// <summary>
-    /// Retrieves values of a specific field for multiple issues.
-    /// Logs each value retrieved.
+    /// Asynchronously retrieves the values of a specific field for multiple Jira issues.
+    /// For each issue key in the provided list, fetches the issue and extracts the value of the specified field.
+    /// Returns a dictionary mapping issue keys to their field values as strings.
+    /// All values retrieved are logged for traceability.
+    /// Throws if any issue cannot be found or the field is missing.
     /// </summary>
-    /// <param name="keys">List of issue keys.</param>
-    /// <param name="fieldName">Field name to retrieve.</param>
-    /// <returns>Dictionary mapping issue keys to field values as strings.</returns>
+    /// <param name="keys">A list of Jira issue keys to retrieve field values for.</param>
+    /// <param name="fieldName">The name of the field to retrieve from each issue.</param>
+    /// <returns>
+    /// A dictionary mapping each issue key to the value of the specified field as a string.
+    /// </returns>
+    /// <exception cref="JiraException">Thrown if any issue cannot be found or the field is missing.</exception>
     public async Task<Dictionary<string, string>> GetFieldValuesAsync(List<string> keys, string fieldName)
     {
          var result = new Dictionary<string, string>();
@@ -828,11 +907,17 @@ public class JiraService
     }
 
     /// <summary>
-    /// Retrieves the changelog history for a given Jira issue.
-    /// Logs the number of changelog entries fetched.
+    /// Asynchronously retrieves the changelog history for a specified Jira issue.
+    /// Uses the Atlassian.Jira SDK to fetch all change log entries detailing modifications to the issue.
+    /// Returns an enumerable of <see cref="IssueChangeLog"/> objects.
+    /// The number of changelog entries fetched is logged for traceability.
+    /// Throws if the issue cannot be found or the changelog cannot be retrieved.
     /// </summary>
-    /// <param name="issueKey">Issue key.</param>
-    /// <returns>An enumerable of IssueChangeLog objects detailing changes.</returns>
+    /// <param name="issueKey">The Jira issue key to retrieve the changelog for.</param>
+    /// <returns>
+    /// An enumerable of <see cref="IssueChangeLog"/> objects representing the issue's change history.
+    /// </returns>
+    /// <exception cref="JiraException">Thrown if the changelog cannot be retrieved or the issue cannot be found.</exception>
     public async Task<IEnumerable<IssueChangeLog>> GetChangeLogsAsync(string issueKey)
     {
         var issue = await jira.Issues.GetIssueAsync(issueKey);
@@ -841,15 +926,18 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates the parent link of a Jira issue by removing the old parent link and creating a new one.
-    /// Uses Jira REST API for link management.
-    /// Throws if the link type is not found or REST calls fail.
-    /// Logs all actions and errors.
+    /// Asynchronously updates the parent link of a Jira issue by removing the old parent link and creating a new one.
+    /// Uses the Jira REST API to manage issue links.
+    /// If the specified link type does not exist or REST calls fail, throws an <see cref="InvalidOperationException"/>.
+    /// All actions and errors are logged for traceability.
     /// </summary>
-    /// <param name="childKey">Key of the child issue.</param>
-    /// <param name="oldParentKey">Key of the old parent issue.</param>
-    /// <param name="newParentKey">Key of the new parent issue.</param>
-    /// <param name="linkTypeName">Name of the link type.</param>
+    /// <param name="childKey">The key of the child issue whose parent link is to be updated.</param>
+    /// <param name="oldParentKey">The key of the old parent issue to unlink.</param>
+    /// <param name="newParentKey">The key of the new parent issue to link.</param>
+    /// <param name="linkTypeName">The name of the link type to use for the parent relationship.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if the link type is not found, REST API calls fail, or the update cannot be completed.
+    /// </exception>
     public async Task UpdateParentLinkAsync(string childKey, string oldParentKey, string newParentKey, string linkTypeName)
     {
         var client = GetJiraClient();
@@ -939,13 +1027,17 @@ public class JiraService
     }
 
     /// <summary>
-    /// Updates the sequence field of a Jira issue.
-    /// If the sorting field is empty, skips the update.
-    /// Resolves custom field names if needed.
-    /// Logs all actions and errors.
+    /// Asynchronously updates the sequence (sorting) field of a Jira issue.
+    /// Determines the correct field name from project configuration, resolving custom field names if necessary.
+    /// If the sorting field is not configured or cannot be resolved, the update is skipped or an exception is thrown.
+    /// Commits the sequence value to the Jira server.
+    /// All actions and errors are logged for traceability.
     /// </summary>
-    /// <param name="issueKey">Issue key.</param>
-    /// <param name="sequence">Sequence value to set.</param>
+    /// <param name="issueKey">The Jira issue key to update.</param>
+    /// <param name="sequence">The sequence value to set for the sorting field.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if the project configuration is missing, the sorting field cannot be resolved, or the update fails.
+    /// </exception>
     public async Task UpdateSequenceFieldAsync(string issueKey, int sequence)
     {
         var dashIndex = issueKey.IndexOf('-');
@@ -1047,17 +1139,22 @@ public class JiraService
     }
 
     /// <summary>
-    /// Creates a Jira issue and links it as a child or sibling to the specified node.
-    /// Uses Atlassian.Jira SDK for issue creation and linking.
-    /// Throws if project config is not found.
-    /// Logs all actions and errors.
+    /// Asynchronously creates a new Jira issue and links it as a child or sibling to the specified node.
+    /// Uses the Atlassian.Jira SDK for issue creation and linking.
+    /// Throws an <see cref="InvalidOperationException"/> if the project configuration cannot be found.
+    /// All actions and errors are logged for traceability.
     /// </summary>
     /// <param name="selectedKey">The key of the selected node (parent for child, sibling for sibling).</param>
-    /// <param name="linkMode">"Child" or "Sibling".</param>
-    /// <param name="issueType">The issue type to create.</param>
-    /// <param name="summary">The summary for the new issue.</param>
-    /// <param name="config">The loaded Jira configuration root.</param>
-    /// <returns>The new issue key if successful, null otherwise.</returns>
+    /// <param name="linkMode">The link mode: "Child" or "Sibling".</param>
+    /// <param name="issueType">The type of issue to create (e.g., "Task", "Bug").</param>
+    /// <param name="summary">The summary/title for the new issue.</param>
+    /// <param name="config">The loaded Jira configuration root containing project settings.</param>
+    /// <returns>
+    /// The key of the newly created issue if successful; otherwise, <c>null</c>.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if the project configuration is missing or issue creation/linking fails.
+    /// </exception>
     public async Task<string?> CreateAndLinkJiraIssueAsync(
         string selectedKey,
         string linkMode,
@@ -1096,12 +1193,16 @@ public class JiraService
     }
 
     /// <summary>
-    /// Links a list of issues as "Relates" to a base issue using Jira REST API.
-    /// Throws if any link fails.
-    /// Logs all actions and errors.
+    /// Asynchronously links a list of Jira issues as "Relates" to a specified base issue using the Jira REST API.
+    /// For each related issue key, creates a "Relates" link to the base issue.
+    /// Throws an <see cref="InvalidOperationException"/> if any link fails.
+    /// All actions and errors are logged for traceability.
     /// </summary>
-    /// <param name="baseKey">The key of the base issue.</param>
-    /// <param name="relatedKeys">List of issue keys to link as related.</param>
+    /// <param name="baseKey">The key of the base issue to link related issues to.</param>
+    /// <param name="relatedKeys">A list of issue keys to link as related to the base issue.</param>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown if any link operation fails.
+    /// </exception>
     public async Task LinkRelatedIssuesAsync(string baseKey, List<string> relatedKeys)
     {
         var client = GetJiraClient();

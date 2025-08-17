@@ -5311,74 +5311,13 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             foreach (var span in nodes.ToList()) // clone to avoid collection modification
             {
                 var key = span.GetAttributeValue("data-jira-key", null);
-                var summary = span.Descendants("a").FirstOrDefault()?.GetAttributeValue("title", null);
-                var issueType = "";
-                var icon = null as string;
+                var summaryHint = span.Descendants("a").FirstOrDefault()?.GetAttributeValue("title", null);
 
-                if (string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issue))
-                {
-                    summary = issue.Summary;
-                    issueType = issue.Type;
-                    icon = GetIconForType(issueType); // returns image URL or base64 string
-                }
-                else if (!string.IsNullOrWhiteSpace(summary) && !string.IsNullOrWhiteSpace(key) && issueDict.TryGetValue(key, out var issueRertry))
-                {
-                    summary = issueRertry.Summary;
-                    issueType = issueRertry.Type;
-                    icon = GetIconForType(issueType); // returns image URL or base64 string
-                }
+                var (summary, issueType) = ResolveIssueSummaryAndType(key, summaryHint);
+                string iconHtml = GetIssueTypeIconHtml(issueType);
 
-                if (string.IsNullOrWhiteSpace(summary))
-                {
-                    summary = SUMMARY_MISSING;
-                }
-
-                if (summary == SUMMARY_MISSING)
-                {
-                    try
-                    {
-                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                        using var client = new HttpClient();
-                        client.BaseAddress = new Uri(jiraBaseUrl);
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                        var response = client.GetAsync($"/rest/api/3/issue/{key}?fields=summary").Result;
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var json = response.Content.ReadAsStringAsync().Result;
-                            using var docForSummary = JsonDocument.Parse(json);
-                            var fields = docForSummary.RootElement.GetProperty("fields");
-                            if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
-                            {
-                                summary = summaryProp.GetString() ?? SUMMARY_MISSING;
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        summary = SUMMARY_MISSING;
-                    }
-                }
-
-                string iconHtml = "";
-
-                // Get icon HTML
-                if (!string.IsNullOrEmpty(issueType) && frmMain.typeIcons.TryGetValue(issueType, out var fileName))
-                {
-                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                    if (File.Exists(fullPath))
-                    {
-                        try
-                        {
-                            byte[] bytes = File.ReadAllBytes(fullPath);
-                            string base64 = Convert.ToBase64String(bytes);
-                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px;' title='{HttpUtility.HtmlEncode(issueType)}' />";
-                        }
-                        catch { }
-                    }
-                }
-
-                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
+                var newLink = HtmlNode.CreateNode(
+                    $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
 
                 span.ParentNode.ReplaceChild(newLink, span);
             }
@@ -5428,212 +5367,160 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 if (!keyMatch.Success) continue;
 
                 var key = keyMatch.Groups[1].Value;
-                var issueType = "";
-                var icon = null as string;
+                var titleHint = node.GetAttributeValue("title", null);
 
-                string title = node.GetAttributeValue("title", null);
-                if (string.IsNullOrWhiteSpace(title) && issueDict.TryGetValue(key, out var issue))
-                {
-                    title = issue.Summary;
-                    issueType = issue.Type;
-                    icon = GetIconForType(issueType); // returns image URL or base64 string
-                }
-                else if (!string.IsNullOrWhiteSpace(title) && issueDict.TryGetValue(key, out var issueRertry))
-                {
-                    issueType = issueRertry.Type;
-                    icon = GetIconForType(issueType); // returns image URL or base64 string
-                }
+                var (title, issueType) = ResolveIssueSummaryAndType(key, titleHint);
+                string iconHtml = GetIssueTypeIconHtml(issueType);
 
-                if (string.IsNullOrWhiteSpace(title)){ 
-                    title = SUMMARY_MISSING;
-                }
-
-                if (title == SUMMARY_MISSING)
-                {
-                    try
-                    {
-                        // Build REST API URL for summary
-                        string url = $"{jiraBaseUrl}/rest/api/3/issue/{key}?fields=summary";
-                        using var client = new HttpClient();
-                        var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                        var response = client.GetAsync(url).Result;
-                        if (response.IsSuccessStatusCode)
-                        {
-                            var json = response.Content.ReadAsStringAsync().Result;
-                            using var docForSummary = JsonDocument.Parse(json);
-                            var fields = docForSummary.RootElement.GetProperty("fields");
-                            if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
-                            {
-                                title = summaryProp.GetString() ?? SUMMARY_MISSING;
-                            }
-                            else
-                            {
-                                title = SUMMARY_MISSING;
-                            }
-                        }
-                        else
-                        {
-                            title = SUMMARY_MISSING;
-                        }
-                    }
-                    catch
-                    {
-                        title = SUMMARY_MISSING;
-                    }
-                }
-                string iconHtml = "";
-
-                // Get icon HTML
-                if (!string.IsNullOrEmpty(issueType) && frmMain.typeIcons.TryGetValue(issueType, out var fileName))
-                {
-                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                    if (File.Exists(fullPath))
-                    {
-                        try
-                        {
-                            byte[] bytes = File.ReadAllBytes(fullPath);
-                            string base64 = Convert.ToBase64String(bytes);
-                            iconHtml = $"<img src='data:image/png;base64,{base64}' style='width:14px; height:14px; vertical-align:middle; margin-right:6px; border-radius:4px;' title='{HttpUtility.HtmlEncode(issueType)}' />";
-                        }
-                        catch { }
-                    }
-                }
-
-                var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(title)} [{key}]</a>");
+                var newLink = HtmlNode.CreateNode(
+                    $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(title)} [{key}]</a>");
                 node.ParentNode.ReplaceChild(newLink, node);
             }
         }
 
         private static void ReplaceWikiStyleLinks(HtmlAgilityPack.HtmlDocument doc, Dictionary<string, JiraIssue> issueDict)
         {
-            // Step 1: Replace real <a> external Jira links
+            // 1) Replace real <a> external Jira links first
             var linkNodes = doc.DocumentNode.SelectNodes("//a[contains(@class, 'external-link') and (@data-key or contains(@href, '/browse/'))]");
             if (linkNodes != null)
             {
                 foreach (var node in linkNodes.ToList())
                 {
-                    string key = null;
-
-                    // Try to get key from data-key attribute
-                    if (node.Attributes["data-key"] != null)
-                    {
-                        key = node.Attributes["data-key"].Value;
-                    }
-                    else
+                    string key = node.Attributes["data-key"]?.Value;
+                    if (string.IsNullOrEmpty(key))
                     {
                         var href = node.GetAttributeValue("href", "");
-                        var match = Regex.Match(href, @"/browse/([A-Z]+-\d+)");
-                        if (match.Success)
-                            key = match.Groups[1].Value;
+                        var m = Regex.Match(href, @"/browse/([A-Z]+-\d+)");
+                        if (m.Success) key = m.Groups[1].Value;
                     }
+                    if (string.IsNullOrEmpty(key)) continue;
 
-                    if (string.IsNullOrEmpty(key))
-                        continue;
-
-                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : node.InnerText.Trim();
-                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    var innerText = node.InnerText?.Trim();
+                    var (summary, issueType) = ResolveIssueSummaryAndType(key, innerText);
                     string iconHtml = GetIssueTypeIconHtml(issueType);
 
-                    var newLink = HtmlNode.CreateNode($"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
+                    var newLink = HtmlNode.CreateNode(
+                        $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>");
                     node.ParentNode.ReplaceChild(newLink, node);
                 }
             }
 
-            // Step 2: Handle wiki-style links and smart-link anchors
+            // 2) Handle font-wrapped wiki links: [ <font...>Title [KEY]</font> | https://... ]
             var REGEX_FONT_WRAPPED_LINK = new Regex(@"\[\s*<font[^>]*>(.*?\[([A-Z]+-\d+)\].*?)<\/font>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            // 3) Handle anchor-wrapped wiki links: [Title <a data-key="KEY">[KEY]</a> | https://...]
             var REGEX_ANCHOR_WRAPPED_LINK = new Regex(@"\[(.*?)<a[^>]+data-key\s*=\s*""([A-Z]+-\d+)""[^>]*>.*?\[([A-Z]+-\d+)\].*?</a>\s*\|https:\/\/[^\]]+\]", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+            // 4) Handle hardcoded smart-link anchors: <a ... data-key="KEY" ...>... smart-link [KEY] ...</a>
             var REGEX_SMART_LINK = new Regex(@"<a[^>]+data-key\s*=\s*""(?<key>[A-Z]+-\d+)""[^>]*>.*?smart-link\s*\[\k<key>\]\s*</a>", RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
             var targetNodes = doc.DocumentNode
-                                            .SelectNodes("//*")
-                                            ?.Where(n => !new[] { "script", "style" }.Contains(n.Name.ToLower()))
-                                            ?? Enumerable.Empty<HtmlNode>();
+                                 .SelectNodes("//*")
+                                 ?.Where(n => !new[] { "script", "style" }.Contains(n.Name.ToLower()))
+                                 ?? Enumerable.Empty<HtmlNode>();
 
             foreach (var node in targetNodes)
             {
                 var html = node.InnerHtml;
+                bool changed = false;
 
-                // === 1. Handle font-wrapped wiki links ===
-                foreach (Match match in REGEX_FONT_WRAPPED_LINK.Matches(html))
+                // 2) font-wrapped
+                html = REGEX_FONT_WRAPPED_LINK.Replace(html, match =>
                 {
-                    string fullMatch = match.Value;
                     string title = match.Groups[1].Value.Trim();
                     string key = match.Groups[2].Value.Trim();
                     title = title.Replace($"[{key}]", "").Trim();
 
-                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : title;
-                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    var (summary, issueType) = ResolveIssueSummaryAndType(key, title);
                     string iconHtml = GetIssueTypeIconHtml(issueType);
+                    string displayTitle = $"{summary} [{key}]";
+                    changed = true;
+                    return $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                });
 
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(summary)} [{key}]</a>";
-                    html = html.Replace(fullMatch, replacement);
-                }
-
-                // === 2. Handle anchor-wrapped wiki links ===
-                foreach (Match match in REGEX_ANCHOR_WRAPPED_LINK.Matches(html))
+                // 3) anchor-wrapped
+                html = REGEX_ANCHOR_WRAPPED_LINK.Replace(html, match =>
                 {
-                    string fullMatch = match.Value;
                     string titleBeforeAnchor = match.Groups[1].Value.Trim();
                     string key = match.Groups[2].Value.Trim();
 
-                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : titleBeforeAnchor;
-                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    var (summary, issueType) = ResolveIssueSummaryAndType(key, titleBeforeAnchor);
                     string iconHtml = GetIssueTypeIconHtml(issueType);
-
                     string displayTitle = $"{summary} [{key}]";
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
-                    html = html.Replace(fullMatch, replacement);
-                }
+                    changed = true;
+                    return $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                });
 
-                // === 3. Handle hardcoded smart-link anchors ===
-                foreach (Match match in REGEX_SMART_LINK.Matches(html))
+                // 4) smart-link anchors
+                html = REGEX_SMART_LINK.Replace(html, match =>
                 {
-                    string fullMatch = match.Value;
                     string key = match.Groups["key"].Value.Trim();
-
-                    string summary = issueDict.TryGetValue(key, out var issue) ? issue.Summary : SUMMARY_MISSING;
-
-                    if (summary == SUMMARY_MISSING)
-                    {
-                        try
-                        {
-                            var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                            using var client = new HttpClient();
-                            client.BaseAddress = new Uri(jiraBaseUrl);
-                            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
-
-                            var response = client.GetAsync($"/rest/api/3/issue/{key}?fields=summary").Result;
-                            if (response.IsSuccessStatusCode)
-                            {
-                                var json = response.Content.ReadAsStringAsync().Result;
-                                using var docForSummary = JsonDocument.Parse(json);
-                                var fields = docForSummary.RootElement.GetProperty("fields");
-                                if (fields.TryGetProperty("summary", out var summaryProp) && summaryProp.ValueKind == JsonValueKind.String)
-                                {
-                                    summary = summaryProp.GetString() ?? SUMMARY_MISSING;
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            summary = SUMMARY_MISSING;
-                        }
-                    }
-
-                    string issueType = issueDict.TryGetValue(key, out var issue2) ? issue2.Type : "";
+                    var (summary, issueType) = ResolveIssueSummaryAndType(key, SUMMARY_MISSING);
                     string iconHtml = GetIssueTypeIconHtml(issueType);
-
                     string displayTitle = $"{summary} [{key}]";
-                    string replacement = $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
-                    html = html.Replace(fullMatch, replacement);
-                }
+                    changed = true;
+                    return $"<a class='issue-link' href=\"#\" data-key=\"{key}\">{iconHtml}{HttpUtility.HtmlEncode(displayTitle)}</a>";
+                });
 
-                node.InnerHtml = html;
+                if (changed)
+                    node.InnerHtml = html;
             }
         }
 
+        // Helper: resolve summary + issuetype via cache, fallback to REST (fields=summary,issuetype)
+        private static (string summary, string issueType) ResolveIssueSummaryAndType(string key, string? summaryHint = null)
+        {
+            string summary = summaryHint ?? SUMMARY_MISSING;
+            string issueType = "";
+
+            // Try in-memory cache first
+            if (!string.IsNullOrWhiteSpace(key) && issueDict != null && issueDict.TryGetValue(key, out var cached))
+            {
+                if (!string.IsNullOrWhiteSpace(cached?.Summary))
+                    summary = cached.Summary;
+                if (!string.IsNullOrWhiteSpace(cached?.Type))
+                    issueType = cached.Type;
+            }
+
+            // If either missing, fallback to REST and fetch BOTH summary and issuetype
+            if ((string.IsNullOrWhiteSpace(summary) || summary == SUMMARY_MISSING || string.IsNullOrWhiteSpace(issueType)) && !string.IsNullOrWhiteSpace(key))
+            {
+                try
+                {
+                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    using var client = new HttpClient();
+                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+
+                    // Fetch summary + issuetype together
+                    var resp = client.GetAsync($"/rest/api/3/issue/{key}?fields=summary,issuetype").Result;
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        var json = resp.Content.ReadAsStringAsync().Result;
+                        using var docIssue = JsonDocument.Parse(json);
+                        var fields = docIssue.RootElement.GetProperty("fields");
+
+                        if ((string.IsNullOrWhiteSpace(summary) || summary == SUMMARY_MISSING) &&
+                            fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String)
+                            summary = s.GetString() ?? SUMMARY_MISSING;
+
+                        if (string.IsNullOrWhiteSpace(issueType) &&
+                            fields.TryGetProperty("issuetype", out var it) &&
+                            it.TryGetProperty("name", out var itName) && itName.ValueKind == JsonValueKind.String)
+                            issueType = itName.GetString() ?? "";
+                    }
+                }
+                catch
+                {
+                    // leave best-effort values
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(summary))
+                summary = SUMMARY_MISSING;
+
+            return (summary, issueType ?? "");
+        }
 
         private static void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc)
         {
