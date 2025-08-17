@@ -4988,7 +4988,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     string createdDate,
     string lastUpdated,
     string issueUrl,
-    string resolvedDesc,
+    string descriptionHtml,
     string attachmentsHtml,
     int attachmentCount,
     string linksHtml,
@@ -5026,20 +5026,20 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     <div>📅 <strong>Updated:</strong> {lastUpdated}</div>
     <div>🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a></div>
   </div>
+ <hr/>
 
-  <details open>
-    <summary> 📜 Description</summary>
-    <section>{resolvedDesc}</section>
-  </details>
-
-  <div class='summary' style='margin-top:24px;'>
+  <section>
     <div class='tab-bar'>
-      <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
+      <button class='tab-btn active' data-tab='descriptionTab'>📜 Description</button>
+      <button class='tab-btn' data-tab='linksTab'>⛓ Links</button>
       <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
       <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
       {responseTabTitle}
     </div>
-    <div class='tab-content' id='linksTab' style='display:block;'>
+    <div class='tab-content' id='descriptionTab' style='display:block;'>
+      {descriptionHtml}
+    </div>
+    <div class='tab-content' id='linksTab' style='display:none;'>
       {linksHtml}
     </div>
     <div class='tab-content' id='historyTab' style='display:none;'>
@@ -5050,6 +5050,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     </div>
     {responseTabHtml}
   </div>
+ </section>
   <script>
     document.querySelectorAll('.tab-btn').forEach(btn => {{
       btn.addEventListener('click', function() {{
