@@ -1,16 +1,20 @@
 ﻿using Atlassian.Jira;
+using Microsoft.Data.Sqlite;
+using Monovera;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Data.SQLite;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Linq;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using static Monovera.frmMain;
-using Monovera;
-using System.Data.SQLite;
-using Microsoft.Data.Sqlite;
 
 /// <summary>
 /// Service class to interact with Jira via Atlassian.Jira SDK and REST API.
@@ -181,14 +185,14 @@ public class JiraService
     /// A list of <see cref="JiraIssueDictionary"/> objects representing the issues in the project.
     /// </returns>
     public async Task<List<JiraIssueDictionary>> UpdateLocalIssueRepositoryAndLoadTree(
-        string projectKey,
-        string projectName,
-        string sortingField,
-        string linkTypeName = "Blocks",
-        bool forceSync = false,
-        Action<int, int, double> progressUpdate = null,
-        int maxParallelism = 250,
-        string updateType = "Complete")
+    string projectKey,
+    string projectName,
+    string sortingField,
+    string linkTypeName = "Blocks",
+    bool forceSync = false,
+    Action<int, int, double> progressUpdate = null,
+    int maxParallelism = 250,
+    string updateType = "Complete")
     {
         string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
         string connStr = $"Data Source={dbPath};";
@@ -405,10 +409,10 @@ public class JiraService
                             string status = (string)issue["fields"]["status"]["name"].ToString();
                             string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
 
-                            // Fetch rendered HTML description and changelog
+                            // Fetch rendered HTML description, changelog, and offline attachments section (stored to DB)
                             string htmlDescription = "";
                             string history = "[]";
-                            string attachments = "";
+                            string attachmentsHtml = "";
 
                             JObject detailJson = null;
                             try
@@ -425,33 +429,85 @@ public class JiraService
                                     history = BuildSlimChangelog(histories);
                                 }
 
-                                //if (detailJson["fields"]?["attachment"] is JArray attachArray && attachArray.Count > 0)
-                                //{
-                                //    var bytesList = new List<byte>();
-                                //    foreach (var att in attachArray)
-                                //    {
-                                //        string contentUrl = att["content"]?.ToString();
-                                //        if (!string.IsNullOrEmpty(contentUrl))
-                                //        {
-                                //            try
-                                //            {
-                                //                var attBytes = await RetryWithMessageBoxAsync(
-                                //                    () => client.GetByteArrayAsync(contentUrl),
-                                //                    $"Failed to download attachment for issue {key}."
-                                //                );
-                                //                bytesList.AddRange(attBytes);
-                                //            }
-                                //            catch { }
-                                //        }
-                                //    }
-                                //    attachments = Convert.ToBase64String(bytesList.ToArray());
-                                //}
+                                // Handle attachments: ensure directories exist, then download and overwrite files (no deletion)
+                                if (detailJson["fields"]?["attachment"] is JArray attachArray)
+                                {
+                                    string appDir = AppDomain.CurrentDomain.BaseDirectory;
+                                    string attachmentsRoot = Path.Combine(appDir, "attachments");
+                                    string issueDir = Path.Combine(attachmentsRoot, key);
+
+                                    // Ensure directories exist (do not delete existing content)
+                                    Directory.CreateDirectory(attachmentsRoot);
+                                    Directory.CreateDirectory(issueDir);
+
+                                    if (attachArray.Count > 0)
+                                    {
+                                        var relPaths = new List<string>();
+
+                                        foreach (var att in attachArray)
+                                        {
+                                            string filename = att["filename"]?.ToString() ?? "attachment";
+                                            string id = att["id"]?.ToString() ?? "";
+                                            string contentUrl = att["content"]?.ToString();
+
+                                            if (string.IsNullOrWhiteSpace(filename))
+                                                filename = "attachment";
+
+                                            string safeName = SanitizeFileName(filename);
+                                            string uniqueName = (!string.IsNullOrEmpty(id) ? $"{id}_" : "") + safeName;
+                                            string absPath = Path.Combine(issueDir, uniqueName);
+
+                                            if (!string.IsNullOrWhiteSpace(contentUrl))
+                                            {
+                                                try
+                                                {
+                                                    var attBytes = await RetryWithMessageBoxAsync(
+                                                        () => client.GetByteArrayAsync(contentUrl),
+                                                        $"Failed to download attachment for issue {key}."
+                                                    );
+
+                                                    // Overwrite existing if present
+                                                    await File.WriteAllBytesAsync(absPath, attBytes);
+
+                                                    // Generate/overwrite thumbnail for images
+                                                    if (IsImageExtension(uniqueName))
+                                                    {
+                                                        TryGenerateThumbnail(absPath, Path.Combine(issueDir, ".thumbs"), 320);
+                                                    }
+                                                }
+                                                catch
+                                                {
+                                                    // continue with other files
+                                                }
+                                            }
+
+                                            if (File.Exists(absPath))
+                                            {
+                                                // Store only relative path from attachments folder
+                                                string relPath = $"{key}/{uniqueName}";
+                                                relPaths.Add(relPath);
+                                            }
+                                        }
+
+                                        attachmentsHtml = BuildOfflineAttachmentsHtml(relPaths);
+                                    }
+                                    else
+                                    {
+                                        attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
+                                    }
+                                }
+                                else
+                                {
+                                    attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
+                                }
                             }
                             catch
                             {
                                 htmlDescription = issue["fields"]["description"]?.ToString() ?? "";
+                                attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                             }
 
+                            // Transform description HTML
                             htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
 
                             string sortingFieldValue = null;
@@ -503,7 +559,7 @@ public class JiraService
                             projectKey,
                             status,
                             history,
-                            attachments
+                            attachmentsHtml
                             });
 
                             int currentCompleted = Interlocked.Increment(ref completed);
@@ -668,7 +724,368 @@ public class JiraService
                 }
             }
         }
+
+        // Kick off background cleanup: keep only files referenced in DB DESCRIPTION/ATTACHMENTS
+        StartAttachmentsCleanupFromDb(connStr);
+
         return allIssues;
+
+        // Local helpers
+        static string SanitizeFileName(string name)
+        {
+            foreach (var c in Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name;
+        }
+
+        static string GetMimeTypeByExtension(string fileName)
+        {
+            string ext = Path.GetExtension(fileName).ToLowerInvariant();
+            return ext switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".bmp" => "image/bmp",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                ".pdf" => "application/pdf",
+                ".txt" => "text/plain",
+                ".csv" => "text/csv",
+                ".json" => "application/json",
+                ".xml" => "application/xml",
+                ".zip" => "application/zip",
+                ".rar" => "application/vnd.rar",
+                ".7z" => "application/x-7z-compressed",
+                ".doc" => "application/msword",
+                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xls" => "application/vnd.ms-excel",
+                ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".ppt" => "application/vnd.ms-powerpoint",
+                ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                _ => "application/octet-stream"
+            };
+        }
+
+        // Images only (no base64; show relative thumbnail if available)
+        string BuildOfflineAttachmentsHtml(List<string> relPaths)
+        {
+            if (relPaths == null || relPaths.Count == 0)
+                return "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
+
+            string attachmentsRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "attachments");
+            var sb = new StringBuilder();
+            sb.AppendLine(@"
+    <div class='attachments-strip-wrapper'>
+      <button class='scroll-btn left' onclick='scrollAttachments(-1)' aria-label='Scroll left'>&#8592;</button>
+      <div class='attachments-strip' id='attachmentsStrip'>
+");
+
+            foreach (var relPath in relPaths)
+            {
+                string absPath = Path.Combine(attachmentsRoot, relPath);
+                string filename = Path.GetFileName(absPath);
+                string mimeType = GetMimeTypeByExtension(filename);
+                string created = "";
+                string sizeStr = "";
+                try
+                {
+                    var fi = new FileInfo(absPath);
+                    if (fi.Exists)
+                    {
+                        created = fi.CreationTime.ToString("yyyy-MM-dd HH:mm:ss");
+                        sizeStr = fi.Length.ToString("N0");
+                    }
+                }
+                catch { }
+
+                string previewHtml;
+                if (IsImageExtension(filename))
+                {
+                    string thumbAbs = Path.Combine(Path.GetDirectoryName(absPath) ?? "", ".thumbs", Path.GetFileName(absPath));
+                    string thumbRel = relPath.Replace(filename, $".thumbs/{filename}");
+                    if (File.Exists(thumbAbs))
+                    {
+                        previewHtml = $@"
+<a href='#' class='offline-preview-image' data-src='attachments/{relPath}'>
+  <img src='attachments/{thumbRel}' class='attachment-img' alt='{System.Net.WebUtility.HtmlEncode(filename)}' />
+</a>";
+                    }
+                    else
+                    {
+                        previewHtml = $@"<div class='attachment-icon' title='{System.Net.WebUtility.HtmlEncode(filename)}' style='font-size:36px;line-height:36px;'>🖼️</div>";
+                    }
+                }
+                else
+                {
+                    string icon = GetUnicodeIconByExtension(filename);
+                    previewHtml = $@"<div class='attachment-icon' title='{System.Net.WebUtility.HtmlEncode(filename)}' style='font-size:36px;line-height:36px;'>{icon}</div>";
+                }
+
+                // Use relative path in href and data-filepath
+                string relHref = $"attachments/{relPath}";
+
+                sb.AppendLine($@"
+<div class='attachment-card'>
+  {previewHtml}
+  <div class='attachment-filename'>{System.Net.WebUtility.HtmlEncode(filename)}</div>
+  <div class='attachment-meta'>
+    <span>Type: {System.Net.WebUtility.HtmlEncode(mimeType)}</span><br/>
+    <span>Size: {sizeStr} bytes</span><br/>
+    <span>Created: {System.Net.WebUtility.HtmlEncode(created)}</span>
+  </div>
+  <a href='{relHref}' class='download-btn' data-filepath='{relHref}'>Download</a>
+</div>");
+            }
+
+            sb.AppendLine(@"
+      </div>
+      <button class='scroll-btn right' onclick='scrollAttachments(1)' aria-label='Scroll right'>&#8594;</button>
+    </div>
+
+    <!-- Lightbox for image preview (offline) -->
+    <div id='attachmentLightbox' class='attachment-lightbox' style='display:none;' onclick='closeAttachmentLightbox()'>
+      <img id='lightboxImg' src='' alt='Preview' />
+    </div>
+
+<script>
+  function scrollAttachments(direction) {
+    var strip = document.getElementById('attachmentsStrip');
+    if (strip) {
+      strip.scrollLeft += direction * 220;
+    }
+  }
+
+  // Offline preview handler (no host messaging)
+  document.querySelectorAll('.offline-preview-image').forEach(link => {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      var src = link.getAttribute('data-src'); // relative
+      var lightbox = document.getElementById('attachmentLightbox');
+      var img = document.getElementById('lightboxImg');
+      img.src = src;
+      lightbox.style.display = 'flex';
+    });
+  });
+
+  function closeAttachmentLightbox() {
+    document.getElementById('attachmentLightbox').style.display = 'none';
+    document.getElementById('lightboxImg').src = '';
+  }
+</script>
+");
+            return sb.ToString();
+        }
+
+        static bool IsImageExtension(string fileName)
+        {
+            string ext = Path.GetExtension(fileName).ToLowerInvariant();
+            return ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp";
+        }
+
+        static string GetUnicodeIconByExtension(string fileName)
+        {
+            string ext = Path.GetExtension(fileName).ToLowerInvariant();
+            return ext switch
+            {
+                ".pdf" => "📕",
+                ".doc" or ".docx" => "📝",
+                ".xls" or ".xlsx" => "📊",
+                ".ppt" or ".pptx" => "📽️",
+                ".zip" or ".rar" or ".7z" => "🗜️",
+                ".mp4" or ".mov" or ".avi" or ".mkv" or ".webm" => "🎬",
+                ".mp3" or ".wav" or ".flac" => "🎵",
+                _ => "📄"
+            };
+        }
+
+        // Generate a thumbnail for images into {issueDir}/.thumbs/{fileName}
+        static void TryGenerateThumbnail(string sourceAbsPath, string thumbsAbsDir, int targetWidth)
+        {
+            try
+            {
+                Directory.CreateDirectory(thumbsAbsDir);
+                string thumbPath = Path.Combine(thumbsAbsDir, Path.GetFileName(sourceAbsPath));
+
+                using var src = Image.FromFile(sourceAbsPath);
+                int w = src.Width, h = src.Height;
+                if (w <= targetWidth)
+                {
+                    // No upscaling; copy original as thumbnail
+                    File.Copy(sourceAbsPath, thumbPath, overwrite: true);
+                    return;
+                }
+
+                int newW = targetWidth;
+                int newH = (int)Math.Round(h * (targetWidth / (double)w));
+
+                using var bmp = new Bitmap(newW, newH);
+                using (var g = Graphics.FromImage(bmp))
+                {
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    g.SmoothingMode = SmoothingMode.HighQuality;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(src, new Rectangle(0, 0, newW, newH));
+                }
+
+                bmp.Save(thumbPath, ImageFormat.Jpeg);
+            }
+            catch
+            {
+                // Ignore thumbnail errors; UI will fallback to icon.
+            }
+        }
+    }
+
+    // Add to JiraService class (near other private helpers)
+
+    private static readonly object AttachmentsCleanupSync = new();
+
+    private void StartAttachmentsCleanupFromDb(string connStr)
+    {
+        // Run asynchronously; serialize runs to avoid overlapping cleanups
+        Task.Run(() =>
+        {
+            lock (AttachmentsCleanupSync)
+            {
+                try { CleanupAttachmentsFolderFromDbReferences(connStr); }
+                catch { /* swallow cleanup errors */ }
+            }
+        });
+    }
+
+    private void CleanupAttachmentsFolderFromDbReferences(string connStr)
+    {
+        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+        string attachmentsRoot = Path.Combine(baseDir, "attachments");
+        if (!Directory.Exists(attachmentsRoot))
+            return;
+
+        var keepSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // 1) Collect all referenced "attachments/..." paths from DB
+        using (var conn = new SqliteConnection(connStr))
+        {
+            conn.Open();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT DESCRIPTION, ATTACHMENTS FROM issue";
+                using (var reader = cmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string desc = reader.IsDBNull(0) ? null : reader.GetString(0);
+                        string att = reader.IsDBNull(1) ? null : reader.GetString(1);
+
+                        foreach (var rel in ExtractAttachmentRelativeUrls(desc))
+                        {
+                            var abs = SafeAbsUnderAttachments(attachmentsRoot, rel);
+                            if (abs != null) keepSet.Add(abs);
+                        }
+                        foreach (var rel in ExtractAttachmentRelativeUrls(att))
+                        {
+                            var abs = SafeAbsUnderAttachments(attachmentsRoot, rel);
+                            if (abs != null) keepSet.Add(abs);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2) Delete any file under attachmentsRoot not referenced
+        foreach (var file in Directory.EnumerateFiles(attachmentsRoot, "*", SearchOption.AllDirectories))
+        {
+            // If keepSet empty, avoid nuking everything by mistake
+            if (keepSet.Count == 0) break;
+
+            if (!keepSet.Contains(file))
+            {
+                try { File.Delete(file); } catch { /* ignore */ }
+            }
+        }
+
+        // 3) Remove empty directories
+        PruneEmptyDirectories(attachmentsRoot);
+
+        // Helper to resolve a relative "attachments/..." into absolute under attachments root
+        static string SafeAbsUnderAttachments(string attachmentsRoot, string relativeUrl)
+        {
+            if (string.IsNullOrWhiteSpace(relativeUrl)) return null;
+
+            // Normalize prefix
+            string rel = relativeUrl.Trim();
+            if (rel.StartsWith("./", StringComparison.Ordinal)) rel = rel.Substring(2);
+            if (!rel.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            // Strip leading "attachments/"
+            string tail = rel.Substring("attachments/".Length);
+
+            // URL decode and normalize separators
+            tail = WebUtility.UrlDecode(tail).Replace('/', Path.DirectorySeparatorChar);
+
+            // Compose absolute path and ensure it is within attachmentsRoot
+            string abs = Path.GetFullPath(Path.Combine(attachmentsRoot, tail));
+            string rootFull = Path.GetFullPath(attachmentsRoot);
+            if (!abs.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            return abs;
+        }
+    }
+
+    // Extracts every attachments/... occurrence from arbitrary HTML (src, href, data-*, and plain)
+    private static IEnumerable<string> ExtractAttachmentRelativeUrls(string html)
+    {
+        var results = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(html)) return results;
+
+        // Grab from common attributes first
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                     html, @"(?i)(?:src|href|data-src|data-filepath)\s*=\s*['""](?<u>[^'""]+)['""]"))
+        {
+            var val = m.Groups["u"].Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(val) &&
+                (val.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase) ||
+                 val.StartsWith("./attachments/", StringComparison.OrdinalIgnoreCase)))
+            {
+                results.Add(val);
+            }
+        }
+
+        // Also catch any plain occurrences in text
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(
+                     html, @"(?i)attachments\/[^\s'""<>]+"))
+        {
+            var val = m.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(val))
+                results.Add(val);
+        }
+
+        return results;
+    }
+
+    private static void PruneEmptyDirectories(string root)
+    {
+        try
+        {
+            // Delete deepest-first to allow parents to become empty
+            var dirs = Directory
+                .EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                .OrderByDescending(d => d.Length)
+                .ToList();
+
+            foreach (var dir in dirs)
+            {
+                try
+                {
+                    if (!Directory.EnumerateFileSystemEntries(dir).Any())
+                        Directory.Delete(dir, false);
+                }
+                catch { /* ignore */ }
+            }
+        }
+        catch { /* ignore */ }
     }
 
     private static string BuildSlimChangelog(JArray histories)

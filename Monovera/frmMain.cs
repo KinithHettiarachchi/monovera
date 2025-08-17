@@ -9,7 +9,6 @@ using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Drawing;
-using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Globalization;
@@ -32,6 +31,7 @@ using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 using ComboBox = System.Windows.Forms.ComboBox;
 using Font = System.Drawing.Font;
 using Image = System.Drawing.Image;
+using System.Drawing.Imaging;
 
 namespace Monovera
 {
@@ -3791,7 +3791,11 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
                 string issueUrl = $"{jiraBaseUrl}/browse/{issueKey}";
 
-                string HTML_SECTION_DESCRIPTION = GetFieldValueByKey(issueKey,"DESCRIPTION");
+                // In Tree_AfterSelect_Internal, OFFLINE_MODE block, after loading description:
+                string HTML_SECTION_DESCRIPTION = GetFieldValueByKey(issueKey, "DESCRIPTION");
+
+                // Normalize relative paths for offline file:// navigation
+                HTML_SECTION_DESCRIPTION = FixOfflineAttachmentUrls(HTML_SECTION_DESCRIPTION);
 
                 string linksHtml = BuildHTMLSection_LINKS_Offline(issueKey);
 
@@ -3799,11 +3803,39 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 JsonElement historyElement = JsonDocument.Parse(historyString).RootElement;
                 string HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(historyElement);
 
-                string HTML_SECTION_ATTACHMENTS = "";
+                // Inside Tree_AfterSelect_Internal, offline block, right after fetching ATTACHMENTS
+                string HTML_SECTION_ATTACHMENTS = GetFieldValueByKey(issueKey, "ATTACHMENTS");
 
-                string responseHTML = "";
+                // Normalize relative paths like attachments/MON-34/... to file:///... URIs
+                HTML_SECTION_ATTACHMENTS = FixOfflineAttachmentUrls(HTML_SECTION_ATTACHMENTS);
 
                 int attachmentCount = 0;
+                if (!string.IsNullOrWhiteSpace(HTML_SECTION_ATTACHMENTS))
+                {
+                    // If placeholder "no-attachments" exists, count is 0
+                    if (HTML_SECTION_ATTACHMENTS.IndexOf("class='no-attachments'", StringComparison.OrdinalIgnoreCase) >= 0
+                        || HTML_SECTION_ATTACHMENTS.IndexOf("class=\"no-attachments\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        attachmentCount = 0;
+                    }
+                    else
+                    {
+                        // Count how many attachment-card blocks exist
+                        try
+                        {
+                            var attachDoc = new HtmlAgilityPack.HtmlDocument();
+                            attachDoc.LoadHtml(HTML_SECTION_ATTACHMENTS);
+                            var nodes = attachDoc.DocumentNode.SelectNodes("//div[contains(@class,'attachment-card')]");
+                            attachmentCount = nodes?.Count ?? 0;
+                        }
+                        catch
+                        {
+                            attachmentCount = 0;
+                        }
+                    }
+                }
+
+                string responseHTML = "";
 
                 string tempFolderPath = Path.Combine(System.Windows.Forms.Application.StartupPath, "temp");
                 string htmlFilePath2 = Path.Combine(tempFolderPath, $"{issueKey}.html");
@@ -3895,6 +3927,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                         int attachmentCount = 0;
                         if (fields.TryGetProperty("attachment", out var attachments) && attachments.ValueKind == JsonValueKind.Array)
                             attachmentCount = attachments.GetArrayLength();
+
                         string HTML_SECTION_ATTACHMENTS = BuildHTMLSection_ATTACHMENTS(fields, issueKey);
 
                         string HTML_SECTION_DESCRIPTION_ORIGINAL = "";
@@ -3955,6 +3988,59 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 });
             }
                 
+        }
+
+        // Add this helper inside frmMain
+        private static string FixOfflineAttachmentUrls(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return html;
+
+            try
+            {
+                var doc = new HtmlAgilityPack.HtmlDocument();
+                doc.LoadHtml(html);
+
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+
+                static bool IsRelativeAttachment(string s)
+                    => !string.IsNullOrWhiteSpace(s)
+                       && !Uri.IsWellFormedUriString(s, UriKind.Absolute)
+                       && (s.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase)
+                           || s.StartsWith("./attachments/", StringComparison.OrdinalIgnoreCase));
+
+                static string ToFileUri(string baseDir, string rel)
+                {
+                    var full = Path.Combine(baseDir, rel.Replace('/', Path.DirectorySeparatorChar));
+                    return new Uri(full).AbsoluteUri;
+                }
+
+                foreach (var node in doc.DocumentNode.SelectNodes("//*[@src]") ?? Enumerable.Empty<HtmlNode>())
+                {
+                    var src = node.GetAttributeValue("src", null);
+                    if (IsRelativeAttachment(src))
+                        node.SetAttributeValue("src", ToFileUri(baseDir, src));
+                }
+
+                foreach (var node in doc.DocumentNode.SelectNodes("//*[@href]") ?? Enumerable.Empty<HtmlNode>())
+                {
+                    var href = node.GetAttributeValue("href", null);
+                    if (IsRelativeAttachment(href))
+                        node.SetAttributeValue("href", ToFileUri(baseDir, href));
+                }
+
+                foreach (var node in doc.DocumentNode.SelectNodes("//*[@data-src]") ?? Enumerable.Empty<HtmlNode>())
+                {
+                    var ds = node.GetAttributeValue("data-src", null);
+                    if (IsRelativeAttachment(ds))
+                        node.SetAttributeValue("data-src", ToFileUri(baseDir, ds));
+                }
+
+                return doc.DocumentNode.InnerHtml;
+            }
+            catch
+            {
+                return html; // best effort
+            }
         }
 
         /// <summary>
@@ -4909,8 +4995,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     string historyHtml,
     string encodedJson)
         {
-
-
             var responseTabTitle = string.IsNullOrWhiteSpace(encodedJson)
                                    ? ""
                                    : @"<button class='tab-btn' data-tab='ResponseTab'>🗨️ Response</button>";
@@ -4918,8 +5002,8 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             var responseTabHtml = string.IsNullOrWhiteSpace(encodedJson)
                                     ? ""
                                     : @"<div class='tab-content' id='ResponseTab' style='display:none;'>
-                                        <pre class='language-json'><code>" + encodedJson + @"</code></pre>
-                                      </div>";
+                                <pre class='language-json'><code>" + encodedJson + @"</code></pre>
+                              </div>";
 
             return $@"
 <!DOCTYPE html>
@@ -4931,8 +5015,9 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet' />
-<link rel='stylesheet' href='{cssHref}' />
-</head
+  <link rel='stylesheet' href='{cssHref}' />
+</head>
+<body>
   <h2>{headerLine}</h2>
   <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
     <div>🧰 <strong>Type:</strong> {issueType}</div>
@@ -4947,44 +5032,46 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     <section>{resolvedDesc}</section>
   </details>
 
-         <div class='summary' style='margin-top:24px;'>
-              <div class='tab-bar'>
-                <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
-                <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
-                <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
-                {responseTabTitle}
-              </div>
-              <div class='tab-content' id='linksTab' style='display:block;'>
-                {linksHtml}
-              </div>
-              <div class='tab-content' id='historyTab' style='display:none;'>
-                {historyHtml}
-              </div>
-              <div class='tab-content' id='attachmentsTab' style='display:none;'>
-                {attachmentsHtml}
-              </div>
-              {responseTabHtml}
-            </div>
-        <script>
-          document.querySelectorAll('.tab-btn').forEach(btn => {{
-            btn.addEventListener('click', function() {{
-              document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-              btn.classList.add('active');
-              document.querySelectorAll('.tab-content').forEach(tc => tc.style.display = 'none');
-              document.getElementById(btn.dataset.tab).style.display = 'block';
-            }});
-          }});
-        </script>
+  <div class='summary' style='margin-top:24px;'>
+    <div class='tab-bar'>
+      <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
+      <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
+      <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
+      {responseTabTitle}
+    </div>
+    <div class='tab-content' id='linksTab' style='display:block;'>
+      {linksHtml}
+    </div>
+    <div class='tab-content' id='historyTab' style='display:none;'>
+      {historyHtml}
+    </div>
+    <div class='tab-content' id='attachmentsTab' style='display:none;'>
+      {attachmentsHtml}
+    </div>
+    {responseTabHtml}
+  </div>
+  <script>
+    document.querySelectorAll('.tab-btn').forEach(btn => {{
+      btn.addEventListener('click', function() {{
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.tab-content').forEach(tc => tc.style.display = 'none');
+        const tgt = document.getElementById(btn.dataset.tab);
+        if (tgt) tgt.style.display = 'block';
+      }});
+    }});
+  </script>
   <script>
     Prism.highlightAll();
 
     document.querySelectorAll('a').forEach(link => {{
       link.addEventListener('click', e => {{
+        // Let attachment handlers and downloads run
+        if (link.classList.contains('download-btn') || link.classList.contains('preview-image') || link.classList.contains('offline-preview-image')) return;
+
         e.preventDefault();
-        if (link.classList.contains('download-btn') || link.classList.contains('preview-image'))
-          return;
         let key = link.dataset.key || link.innerText.match(/\\b[A-Z]+-\\d+\\b/)?.[0];
-        if (key && window.chrome && window.chrome.webview) {{
+        if (key && window.chrome?.webview) {{
           window.chrome.webview.postMessage(key);
         }}
       }});
@@ -4999,29 +5086,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
         }}
       }});
     }});
-
-    document.querySelectorAll('.preview-image').forEach(link => {{
-      link.addEventListener('click', e => {{
-        e.preventDefault();
-        const src = link.dataset.src;
-        if (window.chrome?.webview && src) {{
-          window.chrome.webview.postMessage(JSON.stringify({{ type: 'preview', path: src }}));
-        }} else {{
-          const overlay = document.createElement('div');
-          overlay.className = 'lightbox-overlay';
-          overlay.style.display = 'flex';
-          overlay.innerHTML = `<img src='${{src}}' alt='Preview' />`;
-          overlay.onclick = () => overlay.remove();
-          document.body.appendChild(overlay);
-        }}
-      }});
-    }});
-
-    function scrollStrip(direction) {{
-      const strip = document.getElementById('attachmentStrip');
-      const scrollAmount = 160;
-      strip.scrollLeft += direction * scrollAmount;
-    }}
 
     function openInBrowser(url) {{
       if (window.chrome?.webview) {{
@@ -5231,7 +5295,10 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             ReplaceJiraIssueMacros(doc);
             ReplaceJiraAnchorLinks(doc, issueDict);
             ReplaceWikiStyleLinks(doc, issueDict);
-            ReplaceJiraAttachments(doc);
+
+            // Save description images to attachments/<key>/desc and rewrite <img src="...">
+            ReplaceJiraAttachments(doc, key);
+
             ReplaceSvnFeatures(doc, issueDict);
 
             return doc.DocumentNode.InnerHtml;
@@ -5522,50 +5589,219 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             return (summary, issueType ?? "");
         }
 
-        private static void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc)
+        // Store description images locally under attachments/<issueKey>/desc and rewrite <img src>
+        private static void ReplaceJiraAttachments(HtmlAgilityPack.HtmlDocument doc, string issueKey)
         {
-            var nodes = doc.DocumentNode.SelectNodes("//img[contains(@src, '/rest/api/3/attachment/content/')]");
-            if (nodes == null) return;
+            var imgNodes = doc.DocumentNode.SelectNodes("//img[@src]");
+            if (imgNodes == null || imgNodes.Count == 0) return;
 
-            foreach (var node in nodes.ToList())
+            string appDir = AppDomain.CurrentDomain.BaseDirectory;
+            string attachmentsRoot = Path.Combine(appDir, "attachments");
+            string issueDir = Path.Combine(attachmentsRoot, issueKey);
+            string descDir = Path.Combine(issueDir, "desc");
+
+            Directory.CreateDirectory(attachmentsRoot);
+            Directory.CreateDirectory(issueDir);
+            Directory.CreateDirectory(descDir);
+
+            // For reuse of already-downloaded attachments: look for files starting with {id}_...
+            string TryReuseAttachmentById(string id)
             {
-                var src = node.GetAttributeValue("src", null);
-                if (string.IsNullOrEmpty(src)) continue;
-
-                var match = Regex.Match(src, @"/attachment/content/(\d+)");
-                if (!match.Success) continue;
-
-                string attachmentId = match.Groups[1].Value;
-
                 try
                 {
-                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
+                    var match = Directory.EnumerateFiles(issueDir, id + "_*").FirstOrDefault();
+                    if (!string.IsNullOrEmpty(match))
+                    {
+                        string target = Path.Combine(descDir, Path.GetFileName(match));
+                        if (!File.Exists(target))
+                            File.Copy(match, target, overwrite: true);
+                        return target;
+                    }
+                }
+                catch { }
+                return null;
+            }
+
+            // Download helper
+            string DownloadToDesc(string absoluteUrl, string candidateFileName, string idHint = null)
+            {
+                try
+                {
                     using var client = new HttpClient();
-                    client.BaseAddress = new Uri(jiraBaseUrl);
+                    var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
-                    var response = client.GetAsync(src).Result;
-                    response.EnsureSuccessStatusCode();
-                    var imageBytes = response.Content.ReadAsByteArrayAsync().Result;
+                    using var resp = client.GetAsync(absoluteUrl).Result;
+                    resp.EnsureSuccessStatusCode();
 
-                    string base64 = Convert.ToBase64String(imageBytes);
-                    string contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+                    // Determine file name
+                    string fileName = null;
+                    if (resp.Content.Headers.ContentDisposition?.FileName != null)
+                        fileName = resp.Content.Headers.ContentDisposition.FileName.Trim('"');
 
-                    var newNode = HtmlNode.CreateNode(
-                        $"<img src=\"data:{contentType};base64,{base64}\" style=\"max-width:100%;border-radius:4px;border:1px solid #ccc;\" />");
+                    if (string.IsNullOrWhiteSpace(fileName))
+                        fileName = candidateFileName;
 
-                    node.ParentNode.ReplaceChild(newNode, node);
+                    var mime = resp.Content.Headers.ContentType?.MediaType;
+                    var ext = GetExtensionFromMime(mime);
+                    if (string.IsNullOrWhiteSpace(fileName))
+                        fileName = (idHint ?? "descimg") + ext;
+                    if (Path.GetExtension(fileName) == string.Empty && !string.IsNullOrWhiteSpace(ext))
+                        fileName += ext;
+
+                    fileName = (string.IsNullOrEmpty(idHint) ? "" : (idHint + "_")) + SanitizeFileName(fileName);
+                    string target = Path.Combine(descDir, fileName);
+
+                    using (var fs = File.Create(target))
+                    {
+                        resp.Content.CopyToAsync(fs).Wait();
+                    }
+                    return target;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    var errorNode = HtmlNode.CreateNode(
-                        $"<div style='color:red;'>⚠ Failed to load attachment ID {attachmentId}: {HttpUtility.HtmlEncode(ex.Message)}</div>");
-                    node.ParentNode.ReplaceChild(errorNode, node);
+                    return null;
                 }
+            }
+
+            int dataUriIndex = 0;
+            var jiraHost = SafeGetHost(jiraBaseUrl);
+
+            foreach (var img in imgNodes.ToList())
+            {
+                var src = img.GetAttributeValue("src", null);
+                if (string.IsNullOrWhiteSpace(src))
+                    continue;
+
+                // 1) data:image/*;base64,...
+                if (src.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var m = Regex.Match(src, @"^data:(?<mime>[^;]+);base64,(?<data>.+)$", RegexOptions.Singleline);
+                        if (!m.Success) continue;
+
+                        var mime = m.Groups["mime"].Value.Trim();
+                        var base64 = m.Groups["data"].Value.Trim();
+                        byte[] bytes = Convert.FromBase64String(base64);
+
+                        var ext = GetExtensionFromMime(mime);
+                        string fileName = $"desc_{++dataUriIndex}{ext}";
+                        string dest = Path.Combine(descDir, fileName);
+                        File.WriteAllBytes(dest, bytes);
+
+                        string rel = $"attachments/{issueKey}/desc/{fileName}";
+                        img.SetAttributeValue("src", rel);
+                    }
+                    catch
+                    {
+                        // leave as-is on failure
+                    }
+                    continue;
+                }
+
+                // Normalize to absolute if Jira-relative
+                string absolute = src;
+                if (src.StartsWith("/", StringComparison.OrdinalIgnoreCase))
+                {
+                    absolute = jiraBaseUrl.TrimEnd('/') + src;
+                }
+
+                // 2) /rest/api/3/attachment/content/{id}
+                var mContent = Regex.Match(absolute, @"/attachment/content/(?<id>\d+)", RegexOptions.IgnoreCase);
+                if (mContent.Success)
+                {
+                    string id = mContent.Groups["id"].Value;
+
+                    // Reuse if we already downloaded this id under attachments/<issueKey>
+                    var reused = TryReuseAttachmentById(id);
+                    string finalPath = reused;
+
+                    if (string.IsNullOrEmpty(finalPath))
+                    {
+                        // No reuse possible; download now
+                        finalPath = DownloadToDesc(absolute, null, id);
+                    }
+
+                    if (!string.IsNullOrEmpty(finalPath))
+                    {
+                        string rel = $"attachments/{issueKey}/desc/{Path.GetFileName(finalPath)}";
+                        img.SetAttributeValue("src", rel);
+                    }
+                    continue;
+                }
+
+                // 3) /secure/attachment/{id}/{name}
+                var mSecure = Regex.Match(absolute, @"/secure/attachment/(?<id>\d+)/(?<name>[^/?#]+)", RegexOptions.IgnoreCase);
+                if (mSecure.Success)
+                {
+                    string id = mSecure.Groups["id"].Value;
+                    string name = SanitizeFileName(WebUtility.UrlDecode(mSecure.Groups["name"].Value ?? "image"));
+
+                    var reused = TryReuseAttachmentById(id);
+                    string finalPath = reused;
+
+                    if (string.IsNullOrEmpty(finalPath))
+                    {
+                        string candidate = $"{id}_{name}";
+                        finalPath = DownloadToDesc(absolute, candidate, id);
+                    }
+
+                    if (!string.IsNullOrEmpty(finalPath))
+                    {
+                        string rel = $"attachments/{issueKey}/desc/{Path.GetFileName(finalPath)}";
+                        img.SetAttributeValue("src", rel);
+                    }
+                    continue;
+                }
+
+                // 4) Other absolute URLs under Jira host: attempt to download; otherwise keep as-is
+                if (Uri.TryCreate(absolute, UriKind.Absolute, out var uri) && string.Equals(uri.Host, jiraHost, StringComparison.OrdinalIgnoreCase))
+                {
+                    string candidate = Path.GetFileName(uri.LocalPath);
+                    candidate = string.IsNullOrWhiteSpace(candidate) ? "image" : candidate;
+
+                    string finalPath = DownloadToDesc(absolute, candidate, null);
+                    if (!string.IsNullOrEmpty(finalPath))
+                    {
+                        string rel = $"attachments/{issueKey}/desc/{Path.GetFileName(finalPath)}";
+                        img.SetAttributeValue("src", rel);
+                    }
+                }
+                // else: external hosts left as-is
+            }
+
+            static string SafeGetHost(string url)
+            {
+                try { return new Uri(url).Host; } catch { return ""; }
             }
         }
 
+        // Minimal mime->extension mapper
+        private static string GetExtensionFromMime(string mime)
+        {
+            if (string.IsNullOrWhiteSpace(mime)) return ".bin";
+            mime = mime.ToLowerInvariant();
+            return mime switch
+            {
+                "image/png" => ".png",
+                "image/jpeg" => ".jpg",
+                "image/jpg" => ".jpg",
+                "image/gif" => ".gif",
+                "image/bmp" => ".bmp",
+                "image/webp" => ".webp",
+                "image/svg+xml" => ".svg",
+                _ => ".bin"
+            };
+        }
 
+        private static string SanitizeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return "file";
+            foreach (var c in Path.GetInvalidFileNameChars())
+                name = name.Replace(c, '_');
+            return name;
+        } 
 
         /// <summary>
         /// Selects and loads a tree node by its Jira issue key.
