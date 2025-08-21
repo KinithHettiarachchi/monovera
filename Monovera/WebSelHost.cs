@@ -123,7 +123,20 @@ namespace Monovera
                             if (context.Request.Query.TryGetValue("days", out var vals))
                                 int.TryParse(vals.FirstOrDefault(), out days);
 
-                            string html = BuildRecentUpdatesHtml(days);
+                            // 1) Return loader page (spinner + JS) immediately
+                            string loader = BuildRecentUpdatesHtml(days);
+                            context.Response.ContentType = "text/html; charset=utf-8";
+                            await context.Response.WriteAsync(loader);
+                        });
+
+                        // Final heavy page; the loader fetches this and replaces the document
+                        endpoints.MapGet("/api/recent/updated/final", async context =>
+                        {
+                            int days = 14;
+                            if (context.Request.Query.TryGetValue("days", out var vals))
+                                int.TryParse(vals.FirstOrDefault(), out days);
+
+                            string html = BuildRecentUpdatesHtmlFinal(days);
                             context.Response.ContentType = "text/html; charset=utf-8";
                             await context.Response.WriteAsync(html);
                         });
@@ -286,47 +299,172 @@ namespace Monovera
             await webHost.StartAsync();
         }
 
-        // Builds the HTML for the Recent Updates tab using the local SQLite cache
+        // Loader page: shows spinner (same look as desktop) then swaps in the final HTML
         private static string BuildRecentUpdatesHtml(int days)
         {
-            // Threshold as DB string yyyyMMddHHmmss
-            var min = DateTime.UtcNow.AddDays(-Math.Abs(days));
-            string minStr = min.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+            var cssHref = "/static/monovera.css";
+            return $@"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link rel='stylesheet' href='{cssHref}' />
+  <style>
+    html,body {{ height:100%; margin:0; }}
+    body {{ display:flex; align-items:center; justify-content:center; background:#fff; }}
+  </style>
+</head>
+<body>
+  <div class='spinner' aria-label='Loading Recent Updates...' title='Loading Recent Updates...'></div>
+  <script>
+    (function() {{
+      var url = '/api/recent/updated/final?days=' + encodeURIComponent({days});
+      fetch(url).then(r => r.text()).then(html => {{
+        document.open(); document.write(html); document.close();
+      }}).catch(err => {{
+        document.body.innerHTML = ""<div style='padding:20px;color:#b00;font:14px Segoe UI'>Failed to load Recent Updates: "" +
+          (err && err.message ? err.message : 'Unknown error') + ""</div>"";
+      }});
+    }})();
+  </script>
+</body>
+</html>";
+        }
 
-            var rows = new List<(string Key, string Summary, string Type, string Status, DateTime UpdatedUtc)>();
+        // Builds the HTML for the Recent Updates tab using Jira REST (mirrors frmMain.ShowRecentlyUpdatedIssuesAsync)
+        private static string BuildRecentUpdatesHtmlFinal(int days)
+        {
 
+            // Search Jira for recently created/updated issues across configured projects
+            // JQL: (project = "P1" OR project = "P2") AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC
+            var rows = new List<(string Key, string Summary, string Type, string Status, DateTime Updated, DateTime? Created, List<string> Tags)>();
             try
             {
-                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-                string connStr = $"Data Source={dbPath};";
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = @"
-            SELECT KEY, SUMMARY, ISSUETYPE, STATUS, 
-                   COALESCE(UPDATEDTIME, CREATEDTIME) as TS
-            FROM issue
-            WHERE (UPDATEDTIME IS NOT NULL AND UPDATEDTIME >= @min)
-               OR (CREATEDTIME IS NOT NULL AND CREATEDTIME >= @min)
-            ORDER BY TS DESC";
-                cmd.Parameters.AddWithValue("@min", minStr);
+                string jql = $"({string.Join(" OR ", frmMain.projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC";
+                string baseUrl = frmMain.jiraBaseUrl?.TrimEnd('/') ?? "";
+                string authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{frmMain.jiraEmail}:{frmMain.jiraToken}"));
 
-                using var r = cmd.ExecuteReader();
-                while (r.Read())
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+
+                // Paginate /rest/api/3/search
+                int startAt = 0;
+                const int maxResults = 100;
+                var searchIssues = new List<(string Key, string Summary, string Type, string Status, DateTime Updated, DateTime? Created)>();
+
+                while (true)
                 {
-                    string key = r["KEY"]?.ToString() ?? "";
-                    string summary = r["SUMMARY"]?.ToString() ?? frmMain.SUMMARY_MISSING;
-                    string type = r["ISSUETYPE"]?.ToString() ?? "";
-                    string status = r["STATUS"]?.ToString() ?? "";
-                    string ts = r["TS"]?.ToString() ?? "";
-                    if (!DateTime.TryParseExact(ts, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt))
-                        continue;
-                    rows.Add((key, summary, type, status, DateTime.SpecifyKind(dt, DateTimeKind.Utc)));
+                    var url = $"{baseUrl}/rest/api/3/search?jql={WebUtility.UrlEncode(jql)}&fields=summary,issuetype,status,updated,created&startAt={startAt}&maxResults={maxResults}";
+                    var resp = client.GetAsync(url).Result;
+                    if (!resp.IsSuccessStatusCode) break;
+
+                    var json = resp.Content.ReadAsStringAsync().Result;
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    int total = root.TryGetProperty("total", out var totalProp) ? totalProp.GetInt32() : 0;
+                    if (!root.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array) break;
+                    int count = 0;
+
+                    foreach (var issue in issues.EnumerateArray())
+                    {
+                        count++;
+                        var key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+
+                        string summary = "";
+                        string type = "";
+                        string status = "";
+                        DateTime updated = DateTime.MinValue;
+                        DateTime? created = null;
+
+                        if (issue.TryGetProperty("fields", out var fields))
+                        {
+                            if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String)
+                                summary = s.GetString() ?? "";
+
+                            if (fields.TryGetProperty("issuetype", out var it) && it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String)
+                                type = itn.GetString() ?? "";
+
+                            if (fields.TryGetProperty("status", out var st) && st.TryGetProperty("name", out var stn) && stn.ValueKind == JsonValueKind.String)
+                                status = stn.GetString() ?? "";
+
+                            if (fields.TryGetProperty("updated", out var up) && up.ValueKind == JsonValueKind.String && DateTime.TryParse(up.GetString(), out var dtUp))
+                                updated = dtUp;
+
+                            if (fields.TryGetProperty("created", out var cr) && cr.ValueKind == JsonValueKind.String && DateTime.TryParse(cr.GetString(), out var dtCr))
+                                created = dtCr;
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(key) && updated != DateTime.MinValue)
+                            searchIssues.Add((key, summary, type, status, updated, created));
+                    }
+
+                    startAt += count;
+                    if (count == 0 || startAt >= total) break;
+                }
+
+                // For each issue: fetch changelog to derive "Changes" tags for the day of its Updated date
+                foreach (var it in searchIssues)
+                {
+                    var tags = new List<string>();
+                    try
+                    {
+                        var issueUrl = $"{baseUrl}/rest/api/3/issue/{WebUtility.UrlEncode(it.Key)}?expand=changelog&fields=created";
+                        var resp = client.GetAsync(issueUrl).Result;
+                        if (resp.IsSuccessStatusCode)
+                        {
+                            var json = resp.Content.ReadAsStringAsync().Result;
+                            using var doc = JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+
+                            var updatedLocalDate = it.Updated.ToLocalTime().Date;
+                            DateTime? createdUtc = it.Created;
+
+                            // Created tag if created same local date as update day
+                            if (createdUtc.HasValue && createdUtc.Value.ToLocalTime().Date == updatedLocalDate)
+                                tags.Add("Created");
+
+                            if (root.TryGetProperty("changelog", out var changelog) &&
+                                changelog.TryGetProperty("histories", out var histories) &&
+                                histories.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var h in histories.EnumerateArray())
+                                {
+                                    if (!h.TryGetProperty("created", out var hCreated) || hCreated.ValueKind != JsonValueKind.String) continue;
+                                    if (!DateTime.TryParse(hCreated.GetString(), out var histCreated)) continue;
+                                    if (histCreated.Date != updatedLocalDate) continue;
+
+                                    if (!h.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) continue;
+                                    foreach (var item in items.EnumerateArray())
+                                    {
+                                        if (!item.TryGetProperty("field", out var fieldProp) || fieldProp.ValueKind != JsonValueKind.String) continue;
+                                        var field = fieldProp.GetString() ?? "";
+                                        var lower = field.ToLowerInvariant();
+                                        if (lower.Contains("issue sequence"))
+                                            tags.Add("order");
+                                        else if (lower.Contains("issuetype"))
+                                            tags.Add("type");
+                                        else if (!string.IsNullOrWhiteSpace(field))
+                                            tags.Add(field);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch { /* best effort */ }
+
+                    // Distinct + normalize
+                    tags = tags
+                        .Where(t => !string.IsNullOrWhiteSpace(t))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    rows.Add((it.Key, it.Summary, it.Type, it.Status, it.Updated, it.Created, tags));
                 }
             }
             catch
             {
-                // Swallow; will render fallback
+                // fall through; rows may be empty
             }
 
             var sb = new StringBuilder();
@@ -337,6 +475,12 @@ namespace Monovera
 <head>
   <meta charset='UTF-8'>
   <link rel='stylesheet' href='{cssHref}' />
+  <style>
+    .recent-update-tag {{
+      display:inline-block; padding:2px 6px; margin:2px 4px 0 0; border-radius:4px;
+      background:#e3f2fd; color:#0d47a1; font-size:.85em; border:1px solid #b3d4f6;
+    }}
+  </style>
 </head>
 <body>
   <h2>Recent Updates</h2>
@@ -348,9 +492,71 @@ namespace Monovera
                 return sb.ToString();
             }
 
-            // Group by updated date (local date)
+            // Collect filters
+            var allIssueTypesGlobal = rows
+                .Select(r => r.Type)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var allChangeTypesGlobal = rows
+                .SelectMany(r => r.Tags)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Filter panel: hidden by default; toggled by button
+            sb.Append($@"
+<button id='show-filter-btn'>Apply Filter</button>
+
+<div id='floating-filter-container' style='display:none; position:fixed; left:10px; right:10px; top:10px; z-index:9999; padding:8px; background:#ffffffcc; backdrop-filter:saturate(1.2) blur(2px); border:1px solid #b3d4f6; border-radius:8px;'>
+  <div style='display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;'>
+
+    <div class='filter-panel' style='display:inline-block; padding:8px; border:1px solid #b3d4f6; background:#f9fcff; border-radius:6px;'>
+      <div class='filter-panel-title' style='font-weight:600;color:#1565c0;margin-bottom:6px;'>Issue Types</div>
+      <div id='issue-type-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
+        <label><input type='checkbox' class='issue-type-checkbox-all change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+        {string.Join("\n", allIssueTypesGlobal.Select(t =>
+                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='issue-type-checkbox change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+      </div>
+    </div>
+
+    {(allChangeTypesGlobal.Count == 0 ? "" : $@"
+    <div class='filter-panel' style='display:inline-block; padding:8px; border:1px solid #b3d4f6; background:#f9fcff; border-radius:6px;'>
+      <div class='filter-panel-title' style='font-weight:600;color:#1565c0;margin-bottom:6px;'>Change Types</div>
+      <div id='change-type-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
+        <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+        {string.Join("\n", allChangeTypesGlobal.Select(t =>
+                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+      </div>
+    </div>")}
+
+    <div style='display:flex; align-items:center; gap:8px;'>
+      <button id='hide-filter-btn'>Close</button>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const panel = document.getElementById('floating-filter-container');
+  const showBtn = document.getElementById('show-filter-btn');
+  const hideBtn = document.getElementById('hide-filter-btn');
+  function showPanel() {{ panel.style.display = 'block'; }}
+  function hidePanel() {{ panel.style.display = 'none'; }}
+  showBtn.addEventListener('click', (e) => {{ e.stopPropagation(); panel.style.display === 'none' || panel.style.display === '' ? showPanel() : hidePanel(); }});
+  if (hideBtn) hideBtn.addEventListener('click', (e) => {{ e.stopPropagation(); hidePanel(); }});
+  document.addEventListener('click', (event) => {{
+    if (!panel.contains(event.target) && !showBtn.contains(event.target)) hidePanel();
+  }});
+</script>
+");
+
+            // Group by updated date (local)
             foreach (var group in rows
-                .GroupBy(x => x.UpdatedUtc.ToLocalTime().Date)
+                .GroupBy(x => x.Updated.ToLocalTime().Date)
                 .OrderByDescending(g => g.Key))
             {
                 sb.Append($@"
@@ -363,7 +569,8 @@ namespace Monovera
           <tr>
             <th class='confluenceTh' style='width:36px;'>Type</th>
             <th class='confluenceTh'>Summary</th>
-            <th class='confluenceTh' style='width:100px;'>Updated</th>
+            <th class='confluenceTh'>Changes</th>
+            <th class='confluenceTh' style='width:110px;'>Updated</th>
           </tr>
         </thead>
         <tbody>");
@@ -375,7 +582,8 @@ namespace Monovera
                         ? $"<img src='{iconUrl}' style='height:24px;width:24px;vertical-align:middle;margin-right:8px;border-radius:4px;' title='{WebUtility.HtmlEncode(item.Type)}' />"
                         : "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
 
-                    string updatedLocal = item.UpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                    string updatedLocal = item.Updated.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+
                     string pathHtml = "";
                     try
                     {
@@ -385,8 +593,18 @@ namespace Monovera
                     }
                     catch { }
 
+                    string tagsHtml = item.Tags.Count > 0
+                        ? $"<div class='recent-update-tags'>{string.Join(" ", item.Tags.Select(t => $"<span class='recent-update-tag' data-changetype='{WebUtility.HtmlEncode(t)}'>{WebUtility.HtmlEncode(t)}</span>"))}</div>"
+                        : "";
+
+                    string changeTypeAttr = item.Tags.Count > 0
+                        ? $"data-changetypes='{WebUtility.HtmlEncode(string.Join(",", item.Tags))}'"
+                        : "data-changetypes=''";
+
+                    string issueTypeAttr = $"data-issuetype='{WebUtility.HtmlEncode(item.Type ?? "")}'";
+
                     sb.Append($@"
-<tr>
+<tr {issueTypeAttr} {changeTypeAttr}>
   <td class='confluenceTd'>{iconHtml}</td>
   <td class='confluenceTd'>
     <a href='#' data-key='{WebUtility.HtmlEncode(item.Key)}' class='recent-link'>
@@ -394,6 +612,7 @@ namespace Monovera
     </a>
     {pathHtml}
   </td>
+  <td class='confluenceTd'>{tagsHtml}</td>
   <td class='confluenceTd'>{WebUtility.HtmlEncode(updatedLocal)}</td>
 </tr>");
                 }
@@ -406,9 +625,66 @@ namespace Monovera
 </details>");
             }
 
-            // Bridge link clicks to SPA
+            // Filtering + navigation to SPA
             sb.Append(@"
 <script>
+function applyGlobalFilter() {
+  var typeBoxes = Array.from(document.querySelectorAll('#issue-type-checkboxes .change-type-checkbox'));
+  var checkedIssueTypes = typeBoxes.filter(x => x.checked).map(x => x.value);
+  var changeTypeBoxes = Array.from(document.querySelectorAll('#change-type-checkboxes .change-type-checkbox'));
+  var checkedChangeTypes = changeTypeBoxes.filter(x => x.checked).map(x => x.value);
+
+  document.querySelectorAll('table.confluenceTable tbody tr').forEach(function(row) {
+    var rowIssueType = row.getAttribute('data-issuetype') || '';
+    var rowChangeTypes = (row.getAttribute('data-changetypes') || '').split(',').filter(Boolean);
+
+    var show = true;
+    if (typeBoxes.length > 0 && checkedIssueTypes.length > 0 && !checkedIssueTypes.includes(rowIssueType)) show = false;
+
+    if (changeTypeBoxes.length > 0 && checkedChangeTypes.length > 0) {
+      var anyMatch = rowChangeTypes.some(t => checkedChangeTypes.includes(t));
+      if (!anyMatch) show = false;
+    }
+
+    row.style.display = show ? '' : 'none';
+  });
+}
+
+// Wire up 'All' + individual checkboxes
+(function(){
+  const typeAll = document.querySelector('#issue-type-checkboxes .change-type-checkbox-all');
+  const typeBoxes = document.querySelectorAll('#issue-type-checkboxes .change-type-checkbox');
+  if (typeAll) {
+    typeAll.addEventListener('change', function () {
+      const checked = this.checked; typeBoxes.forEach(cb => cb.checked = checked); applyGlobalFilter();
+    });
+  }
+  typeBoxes.forEach(cb => {
+    cb.addEventListener('change', function () {
+      if (typeAll) typeAll.checked = Array.from(typeBoxes).every(x => x.checked);
+      applyGlobalFilter();
+    });
+  });
+
+  const changeAll = document.querySelector('#change-type-checkboxes .change-type-checkbox-all');
+  const changeBoxes = document.querySelectorAll('#change-type-checkboxes .change-type-checkbox');
+  if (changeAll) {
+    changeAll.addEventListener('change', function () {
+      const checked = this.checked; changeBoxes.forEach(cb => cb.checked = checked); applyGlobalFilter();
+    });
+  }
+  changeBoxes.forEach(cb => {
+    cb.addEventListener('change', function () {
+      if (changeAll) changeAll.checked = Array.from(changeBoxes).every(x => x.checked);
+      applyGlobalFilter();
+    });
+  });
+
+  // Initial apply
+  applyGlobalFilter();
+})();
+
+// Bridge clicks to parent SPA
 document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
   link.addEventListener('click', e => {
     e.preventDefault();

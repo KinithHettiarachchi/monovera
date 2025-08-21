@@ -2713,6 +2713,10 @@ namespace Monovera
             // After tree loading, start sync status timer
             syncStatusTimer = new System.Threading.Timer(CheckSyncStatusAsync, null, TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
 
+
+            // Show a tab with recently updated issuesup
+            ShowRecentlyUpdatedIssuesAsync(tabDetails);
+
             // Start the self-hosted web server
             try
             {
@@ -2730,8 +2734,6 @@ namespace Monovera
                 System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
             }
 
-            // Show a tab with recently updated issuesup
-            ShowRecentlyUpdatedIssuesAsync(tabDetails);
         }
 
         // Add inside the frmMain class
