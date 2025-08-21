@@ -641,8 +641,8 @@ namespace Monovera
 
 /* Layout: prevent page scroll; keep status visible */
 html, body {{ height: 100%; margin: 0; }}
-body {{ overflow: hidden; }}              /* stop page scrollbars */
-.layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }} /* lock to viewport */
+body {{ overflow: hidden; }}
+.layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }}
 .main {{ display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
 
 /* Sidebar: make tree area scroll, not the page */
@@ -650,6 +650,7 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
   border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff;
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
 }}
+
 /* Tree overrides (isolate from monovera.css bullets) */
 #tree, #tree ul, #tree li {{
   list-style: none !important;
@@ -658,23 +659,52 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
   margin: 0;
   padding-left: 12px;
 }}
-#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}  /* scrollbars here */
+#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}
 #tree li::marker {{ content: '' !important; color: transparent !important; }}
 #tree li::before {{ content: none !important; }}
 #tree li {{ background: none !important; margin: 2px 0; }}
-#tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; }}
+#tree a {{
+  cursor: pointer; text-decoration: none; color: #1565c0;
+  padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;
+}}
+#tree a.selected {{
+  background: #e3f2fd; color: #0d47a1; outline: 1px solid #b3d4f6;
+}}
 #tree .expander {{
   display:inline-block; width: 16px; text-align:center; margin-right: 6px;
   cursor: pointer; user-select: none; color: #0d47a1; font-weight: 700; font-family: Consolas, monospace;
 }}
-.node-icon {{ width: 18px; height: 18px; vertical-align: middle; margin-right: 6px; border-radius: 3px; }}
+.node-icon {{ width: 18px; height: 18px; vertical-align: middle; border-radius: 3px; }}
 
 /* Right side: prevent it from forcing page scroll */
 .workspace {{ display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
 .tabs {{ display: flex; gap: 4px; border-bottom: 1px solid #b3d4f6; padding: 6px 6px 0 6px; background: #f2faff; }}
 .tab {{ background: #ffffff; border: 1px solid #b3d4f6; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; }}
 .tab.active {{ background: #fff; color: #1565c0; font-weight: 600; border-bottom: 2px solid #1565c0; }}
-.tab .close {{ color: #888; cursor: pointer; }}
+
+/* Close button: small red square 'x' with tooltip */
+.tab .close {{
+  margin-left: 6px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  color: #fff !important;
+  background: #d32f2f;
+  border: 1px solid #b71c1c;
+  border-radius: 0; /* square */
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  user-select: none;
+}}
+.tab .close:hover {{
+  background: #b71c1c;
+  border-color: #8a1111;
+}}
 .tab .tab-key {{ font-weight: 600; }}
 
 .views {{ flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }}
@@ -707,11 +737,29 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
 </body>
 </html>";
 
-            // JS unchanged
+            // JS with close aria-label (unchanged otherwise)
             string webJs = @"(async function () {
   const treeEl = document.getElementById('tree');
   const tabsEl = document.getElementById('tabs');
   const viewsEl = document.getElementById('views');
+
+  let selectedAnchor = null;
+  function setSelected(a) {
+    if (selectedAnchor) {
+      selectedAnchor.classList.remove('selected');
+      selectedAnchor.setAttribute('aria-selected', 'false');
+    }
+    selectedAnchor = a;
+    if (selectedAnchor) {
+      selectedAnchor.classList.add('selected');
+      selectedAnchor.setAttribute('aria-selected', 'true');
+      selectedAnchor.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
+  function highlightTreeSelection(key) {
+    const a = document.querySelector(`#tree a[data-key='${key}']`);
+    if (a) setSelected(a);
+  }
 
   async function refreshStatus() {
     try {
@@ -748,11 +796,11 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
 
     a.addEventListener('click', (e) => {
       e.preventDefault();
+      setSelected(a);
       openTab(key, text, icon);
     });
 
     const ul = document.createElement('ul');
-    ul.className = 'tree';
     ul.style.display = 'none';
 
     exp.addEventListener('click', async () => {
@@ -791,6 +839,7 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
     const vid = makeViewId(key);
     [...tabsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === id));
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
+    highlightTreeSelection(key);
   }
 
   async function openTab(key, title, icon) {
@@ -801,6 +850,7 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
       const tab = document.createElement('div');
       tab.className = 'tab';
       tab.id = tabId;
+      tab.dataset.key = key;
       tab.title = title;
 
       if (icon) {
@@ -820,6 +870,7 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
       close.className = 'close';
       close.textContent = '×';
       close.title = 'Close';
+      close.setAttribute('aria-label', 'Close');
       close.addEventListener('click', (e) => {
         e.stopPropagation();
         const t = document.getElementById(tabId);
@@ -827,11 +878,17 @@ body {{ overflow: hidden; }}              /* stop page scrollbars */
         if (t) tabsEl.removeChild(t);
         if (v) viewsEl.removeChild(v);
         const last = tabsEl.lastElementChild;
-        if (last) activate(last.id.replace(/^tab-/, ''));
+        if (last) {
+          const lastKey = last.dataset.key || last.id.replace(/^tab-/, '');
+          activate(lastKey);
+        }
+      });
+
+      tab.addEventListener('click', () => {
+        activate(key);
       });
 
       tab.appendChild(close);
-      tab.addEventListener('click', () => activate(key));
       tabsEl.appendChild(tab);
 
       const view = document.createElement('div');
