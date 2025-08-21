@@ -436,9 +436,12 @@ public class JiraService
                                     string attachmentsRoot = Path.Combine(appDir, "attachments");
                                     string issueDir = Path.Combine(attachmentsRoot, key);
 
-                                    // Ensure directories exist (do not delete existing content)
-                                    Directory.CreateDirectory(attachmentsRoot);
-                                    Directory.CreateDirectory(issueDir);
+                                    // Ensure directories exist (do not delete existing content) ONLY if there are attachments
+                                    if (attachArray.Count > 0)
+                                    {
+                                        Directory.CreateDirectory(attachmentsRoot);
+                                        Directory.CreateDirectory(issueDir);
+                                    }
 
                                     if (attachArray.Count > 0)
                                     {

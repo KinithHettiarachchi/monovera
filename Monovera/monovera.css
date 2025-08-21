@@ -25,9 +25,30 @@ body {
 	line-height: 1.5;
 }
 
+h1 {
+	color: #1b4e8c;
+	font-size: 1.9em;
+	margin-bottom: 20px;
+	text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
+}
+
 h2 {
 	color: #1b4e8c;
 	font-size: 1.6em;
+	margin-bottom: 20px;
+	text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
+}
+
+h3 {
+	color: #1b4e8c;
+	font-size: 1.3em;
+	margin-bottom: 20px;
+	text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
+}
+
+h4 {
+	color: #1b4e8c;
+	font-size: 1.1em;
 	margin-bottom: 20px;
 	text-shadow: 0 1px 1px rgba(0, 64, 128, 0.1);
 }
@@ -110,15 +131,57 @@ a {
 		color: #0d47a1;
 	}
 
+/* Prism code blocks */
 pre[class*='language-'] {
-	background: #eaf4fe;
-	padding: 16px;
-	border-radius: 8px;
-	box-shadow: inset 0 1px 2px rgba(0, 32, 64, 0.05);
-	overflow-x: auto;
-	font-size: 0.9em;
+	background: linear-gradient(135deg, #f5faff 60%, #eaf4fe 100%);
 	color: #1a3c5d;
+	padding: 16px 20px;
+	border: 1px solid #b3d4f6;
+	border-radius: 10px;
+	box-shadow: 0 4px 12px rgba(0, 64, 128, 0.06), /* outer */
+	inset 0 1px 2px rgba(0, 32, 64, 0.05); /* inner */
+	overflow: auto;
+	font-family: 'IBM Plex Mono', 'Consolas', monospace;
+	font-size: 0.95em;
+	line-height: 1.6;
+	tab-size: 2;
+	-moz-tab-size: 2;
 }
+
+	/* Keep code transparent to let the pre background show through */
+	pre[class*='language-'] code {
+		background: transparent;
+		color: inherit;
+		font-family: inherit;
+		font-size: inherit;
+		line-height: inherit;
+	}
+
+	/* Subtle focus/hover accent consistent with buttons/panels */
+	pre[class*='language-']:hover,
+	pre[class*='language-']:focus-within {
+		border-color: #90caf9;
+		box-shadow: 0 6px 16px rgba(33,150,243,0.12), inset 0 1px 2px rgba(0, 32, 64, 0.05);
+	}
+
+	/* Optional: nicer horizontal scrollbar for wide code */
+	pre[class*='language-']::-webkit-scrollbar {
+		height: 10px;
+	}
+
+	pre[class*='language-']::-webkit-scrollbar-track {
+		background: #eaf4fe;
+		border-radius: 10px;
+	}
+
+	pre[class*='language-']::-webkit-scrollbar-thumb {
+		background: #b3d4f6;
+		border-radius: 10px;
+	}
+
+		pre[class*='language-']::-webkit-scrollbar-thumb:hover {
+			background: #90caf9;
+		}
 
 .history-day {
 	margin: 24px 0;
@@ -603,22 +666,92 @@ tr:hover td.confluenceTd {
 }
 
 /* Lists */
+/* --- Enhanced Lists (bulleted and numbered) --- */
 ul, ol {
-	margin: 16px 0 16px 32px;
-	padding-left: 18px;
+	margin: 14px 0;
+	padding-left: 0; /* we add our own padding on li */
 }
 
-	ul ul, ol ol, ul ol, ol ul {
-		margin-top: 4px;
-		margin-bottom: 4px;
-		padding-left: 18px;
+	ul li,
+	ol li {
+		position: relative;
+		margin: 6px 0 6px 0;
+		line-height: 1.7;
+		padding-left: 34px; /* space for custom marker/badge */
+		color: #0d47a1;
 	}
 
-li {
-	margin-bottom: 6px;
-	font-size: 1em;
-	line-height: 1.6;
+/* Bulleted lists: soft rounded dot with subtle gradient and shadow */
+ul {
+	list-style: none;
 }
+
+	ul li::before {
+		content: '';
+		position: absolute;
+		left: 8px;
+		top: 1em; /* vertically centers against first line */
+		transform: translateY(-50%);
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: #0d47a1;
+		border: 2px solid #90caf9;
+		box-shadow: 0 0 6px rgba(33,150,243,0.25);
+	}
+
+	ul ul li {
+		padding-left: 28px;
+	}
+
+		ul ul li::before {
+			left: 6px;
+			width: 8px;
+			height: 8px;
+			background: #90caf9;
+			border-color: #b3d4f6;
+			box-shadow: 0 0 4px rgba(33,150,243,0.18);
+		}
+
+/* Numbered lists: counter badges (supporting nested 1.1, 1.2, ...) */
+ol {
+	list-style: none;
+	counter-reset: mono; /* reset for hierarchical numbering */
+}
+
+	ol li {
+		counter-increment: mono;
+	}
+
+		ol li::before {
+			content: counters(mono, ".") ".";
+			position: absolute;
+			left: 6px;
+			top: 0.15em;
+			color: #0d47a1;
+			min-width: 22px;
+			text-align: center;
+			font-weight: 600;
+		}
+
+	ol ol {
+		counter-reset: mono;
+	}
+
+		ol ol li {
+			padding-left: 40px;
+		}
+
+			ol ol li::before {
+				border-color: #b3d4f6;
+			}
+
+	/* Hover accent on list items without affecting text decoration */
+	ul li:hover,
+	ol li:hover {
+		background: linear-gradient(90deg, rgba(225,240,255,0.25) 0%, rgba(221,238,255,0.15) 100%);
+		border-radius: 6px;
+	}
 
 /* User hover link */
 a.user-hover {
@@ -1364,3 +1497,100 @@ section,
 			border-width: 0 4px 4px 0;
 			transform: rotate(45deg);
 		}
+
+/* --- Fix: don't override Prism inside pre blocks --- */
+pre[class*="language-"] code,
+pre[class^="code-"] code,
+pre[class*=" code-"] code {
+	background: transparent !important;
+	color: inherit !important;
+	padding: 0 !important;
+	border-radius: 0 !important;
+}
+
+/* --- Confluence-exported code blocks look like Prism blocks --- */
+pre[class^="code-"],
+pre[class*=" code-"],
+.code.panel .codeContent pre {
+	background: linear-gradient(135deg, #f5faff 60%, #eaf4fe 100%);
+	color: #1a3c5d;
+	padding: 16px 20px;
+	border: 1px solid #b3d4f6;
+	border-radius: 10px;
+	box-shadow: 0 4px 12px rgba(0, 64, 128, 0.06), inset 0 1px 2px rgba(0, 32, 64, 0.05);
+	overflow: auto;
+	font-family: 'IBM Plex Mono', 'Consolas', monospace;
+	font-size: 0.95em;
+	line-height: 1.6;
+	tab-size: 2;
+	-moz-tab-size: 2;
+	margin: 0;
+}
+
+/* Optional: panel chrome (Confluence “code panel”) */
+.code.panel {
+	border: 1px solid #b3d4f6;
+	border-radius: 10px;
+	background: linear-gradient(135deg, #f5faff 60%, #eaf4fe 100%);
+	box-shadow: 0 4px 12px rgba(0, 64, 128, 0.06);
+	overflow: hidden;
+}
+
+	.code.panel .codeContent.panelContent {
+		padding: 0;
+		background: transparent;
+	}
+
+/* --- Confluence spans -> token-like colors (fallback if Prism not applied) --- */
+.code-quote {
+	color: #2e7d32;
+}
+/* strings */
+.code-keyword {
+	color: #0d47a1;
+	font-weight: 600;
+}
+
+.code-number {
+	color: #8e24aa;
+}
+
+.code-boolean, .code-null {
+	color: #ef6c00;
+}
+
+.code-object, .code-property {
+	color: #1565c0;
+}
+
+.code-comment {
+	color: #6a859f;
+	font-style: italic;
+}
+
+.code-punctuation {
+	color: #40617d;
+}
+
+/* Scrollbar polish for wide code */
+pre[class^="code-"]::-webkit-scrollbar,
+pre[class*=" code-"]::-webkit-scrollbar {
+	height: 10px;
+}
+
+pre[class^="code-"]::-webkit-scrollbar-track,
+pre[class*=" code-"]::-webkit-scrollbar-track {
+	background: #eaf4fe;
+	border-radius: 10px;
+}
+
+pre[class^="code-"]::-webkit-scrollbar-thumb,
+pre[class*=" code-"]::-webkit-scrollbar-thumb {
+	background: #b3d4f6;
+	border-radius: 10px;
+}
+
+	pre[class^="code-"]::-webkit-scrollbar-thumb:hover,
+	pre[class*=" code-"]::-webkit-scrollbar-thumb:hover {
+		background: #90caf9;
+	}

@@ -41,7 +41,7 @@ namespace Monovera
     public partial class frmMain : Form
     {
         public static bool OFFLINE_MODE = true;
-        bool editorMode = true;
+        bool editorMode = false;
         private MouseButtons lastTreeMouseButton = MouseButtons.Left;
         private bool suppressAfterSelect = false;
         public static string SUMMARY_MISSING = "SUMMARY MISSING!";
@@ -4745,6 +4745,7 @@ function escapeHtml(text) {
                .replace(/'/g, '&#039;');
 }
 
+
 // --- Diff Overlay Toggle and Rendering Logic ---
 let diffViewMode = 'inline'; // Default view
 
@@ -5015,10 +5016,11 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-gherkin.min.js'></script>
   <script src='https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js'></script>
   <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet' />
+  <script src=""monovera.prism-bridge.js""></script>
   <link rel='stylesheet' href='{cssHref}' />
 </head>
 <body>
-  <h2>{headerLine}</h2>
+  {headerLine}
   <div style='margin-bottom: 20px; font-size: 0.95em; color: #444; display: flex; gap: 40px; align-items: center;'>
     <div>🧰 <strong>Type:</strong> {issueType}</div>
     <div>{statusIcon} <strong>Status:</strong> {System.Web.HttpUtility.HtmlEncode(status)}</div>
@@ -5026,31 +5028,31 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
     <div>📅 <strong>Updated:</strong> {lastUpdated}</div>
     <div>🔗 <a href='{issueUrl}' onclick='openInBrowser(this.href)'>Open in Browser</a></div>
   </div>
- <hr/>
+  <hr/>
+  <details open>
+    <summary>📜 Description</summary>
+    <section>
+        {descriptionHtml}
+    </section>
+  </details>
 
-  <section>
-    <div class='tab-bar'>
-      <button class='tab-btn active' data-tab='descriptionTab'>📜 Description</button>
-      <button class='tab-btn' data-tab='linksTab'>⛓ Links</button>
-      <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
-      <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
-      {responseTabTitle}
-    </div>
-    <div class='tab-content' id='descriptionTab' style='display:block;'>
-      {descriptionHtml}
-    </div>
-    <div class='tab-content' id='linksTab' style='display:none;'>
-      {linksHtml}
-    </div>
-    <div class='tab-content' id='historyTab' style='display:none;'>
-      {historyHtml}
-    </div>
-    <div class='tab-content' id='attachmentsTab' style='display:none;'>
-      {attachmentsHtml}
-    </div>
-    {responseTabHtml}
+  <div class='tab-bar'>
+    <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
+    <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
+    <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
+    {responseTabTitle}
   </div>
- </section>
+  <div class='tab-content' id='linksTab' style='display:block;'>
+    {linksHtml}
+  </div>
+  <div class='tab-content' id='historyTab' style='display:none;'>
+    {historyHtml}
+  </div>
+  <div class='tab-content' id='attachmentsTab' style='display:none;'>
+    {attachmentsHtml}
+  </div>
+  {responseTabHtml}
+
   <script>
     document.querySelectorAll('.tab-btn').forEach(btn => {{
       btn.addEventListener('click', function() {{
@@ -5061,15 +5063,12 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
         if (tgt) tgt.style.display = 'block';
       }});
     }});
-  </script>
-  <script>
+
     Prism.highlightAll();
 
     document.querySelectorAll('a').forEach(link => {{
       link.addEventListener('click', e => {{
-        // Let attachment handlers and downloads run
         if (link.classList.contains('download-btn') || link.classList.contains('preview-image') || link.classList.contains('offline-preview-image')) return;
-
         e.preventDefault();
         let key = link.dataset.key || link.innerText.match(/\\b[A-Z]+-\\d+\\b/)?.[0];
         if (key && window.chrome?.webview) {{
