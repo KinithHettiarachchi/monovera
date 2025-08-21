@@ -613,7 +613,6 @@ namespace Monovera
         }
 
         // Write index.html (embedded monovera.css) and monovera.web.js to wwwroot
-        // Write index.html (embedded monovera.css) and monovera.web.js to wwwroot
         private static async Task EnsureWebAssetsAsync(string wwwroot)
         {
             string css = "";
@@ -631,7 +630,7 @@ namespace Monovera
             }
             catch { css = ""; }
 
-            // index.html with embedded CSS, 1/3 tree, scrollbars, no bullets
+            // index.html with embedded CSS
             string indexHtml = $@"<!DOCTYPE html>
 <html>
 <head>
@@ -640,12 +639,17 @@ namespace Monovera
   <style>
 {css}
 
-/* SPA layout */
+/* Layout: prevent page scroll; keep status visible */
 html, body {{ height: 100%; margin: 0; }}
-.layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100%; }}
-.main {{ display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 8px; box-sizing: border-box; }}
-.sidebar {{ border: 1px solid #c0daf3; border-radius: 8px; overflow: auto; background: #f5faff; }}
+body {{ overflow: hidden; }}              /* stop page scrollbars */
+.layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }} /* lock to viewport */
+.main {{ display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
 
+/* Sidebar: make tree area scroll, not the page */
+.sidebar {{
+  border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff;
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}}
 /* Tree overrides (isolate from monovera.css bullets) */
 #tree, #tree ul, #tree li {{
   list-style: none !important;
@@ -654,28 +658,26 @@ html, body {{ height: 100%; margin: 0; }}
   margin: 0;
   padding-left: 12px;
 }}
+#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}  /* scrollbars here */
 #tree li::marker {{ content: '' !important; color: transparent !important; }}
 #tree li::before {{ content: none !important; }}
-#tree li {{ background: none !important; }}
-#tree {{ padding: 8px; white-space: nowrap; }}
-#tree li {{ margin: 2px 0; }}
+#tree li {{ background: none !important; margin: 2px 0; }}
 #tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; }}
 #tree .expander {{
   display:inline-block; width: 16px; text-align:center; margin-right: 6px;
   cursor: pointer; user-select: none; color: #0d47a1; font-weight: 700; font-family: Consolas, monospace;
 }}
-
 .node-icon {{ width: 18px; height: 18px; vertical-align: middle; margin-right: 6px; border-radius: 3px; }}
 
-/* Right side */
-.workspace {{ display: flex; flex-direction: column; min-width: 0; overflow: hidden; }}
+/* Right side: prevent it from forcing page scroll */
+.workspace {{ display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
 .tabs {{ display: flex; gap: 4px; border-bottom: 1px solid #b3d4f6; padding: 6px 6px 0 6px; background: #f2faff; }}
 .tab {{ background: #ffffff; border: 1px solid #b3d4f6; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; }}
 .tab.active {{ background: #fff; color: #1565c0; font-weight: 600; border-bottom: 2px solid #1565c0; }}
 .tab .close {{ color: #888; cursor: pointer; }}
 .tab .tab-key {{ font-weight: 600; }}
 
-.views {{ flex: 1; position: relative; }}
+.views {{ flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }}
 .view {{ position: absolute; inset: 0; display: none; }}
 .view.active {{ display: block; }}
 .view iframe {{ width: 100%; height: 100%; border: none; background: #fff; }}
@@ -705,7 +707,7 @@ html, body {{ height: 100%; margin: 0; }}
 </body>
 </html>";
 
-            // Verbatim string, doubled quotes inside HTML fragments
+            // JS unchanged
             string webJs = @"(async function () {
   const treeEl = document.getElementById('tree');
   const tabsEl = document.getElementById('tabs');
@@ -799,7 +801,7 @@ html, body {{ height: 100%; margin: 0; }}
       const tab = document.createElement('div');
       tab.className = 'tab';
       tab.id = tabId;
-      tab.title = title; // tooltip shows summary [KEY]
+      tab.title = title;
 
       if (icon) {
         const img = document.createElement('img');
