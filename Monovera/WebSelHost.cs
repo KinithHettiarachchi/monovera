@@ -36,7 +36,6 @@ namespace Monovera
             var wwwroot = Path.Combine(baseDir, "wwwroot");
             Directory.CreateDirectory(wwwroot);
 
-            // Generate index.html and monovera.web.js at runtime with embedded monovera.css
             await EnsureWebAssetsAsync(wwwroot);
 
             webHost = new WebHostBuilder()
@@ -50,7 +49,6 @@ namespace Monovera
                 })
                 .Configure(app =>
                 {
-                    // Static files for SPA
                     app.UseDefaultFiles(new DefaultFilesOptions
                     {
                         DefaultFileNames = new List<string> { "index.html" },
@@ -62,7 +60,6 @@ namespace Monovera
                         RequestPath = ""
                     });
 
-                    // Expose images/ as static so tree icons can be used by the web UI
                     var imagesDir = Path.Combine(baseDir, "images");
                     if (Directory.Exists(imagesDir))
                     {
@@ -73,7 +70,6 @@ namespace Monovera
                         });
                     }
 
-                    // Expose attachments/ so description and attachment images load inside iframe
                     var attachmentsDir = Path.Combine(baseDir, "attachments");
                     if (Directory.Exists(attachmentsDir))
                     {
@@ -89,7 +85,6 @@ namespace Monovera
 
                     app.UseEndpoints(endpoints =>
                     {
-                        // Serve desktop CSS directly (not used by SPA; SPA embeds CSS)
                         endpoints.MapGet("/static/monovera.css", async context =>
                         {
                             context.Response.ContentType = "text/css; charset=utf-8";
@@ -105,7 +100,6 @@ namespace Monovera
                             }
                         });
 
-                        // Status info
                         endpoints.MapGet("/api/status", async context =>
                         {
                             var payload = new
@@ -119,7 +113,53 @@ namespace Monovera
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
                         });
 
-                        // Root nodes (camelCase + icon + robust roots)
+                        // New: returns [rootKey, ..., targetKey] for SPA expansion
+                        endpoints.MapGet("/api/tree/path/{key}", async context =>
+                        {
+                            var targetKey = context.Request.RouteValues["key"]?.ToString() ?? "";
+                            var chain = new List<string>();
+                            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            var cur = targetKey;
+
+                            while (!string.IsNullOrWhiteSpace(cur) && seen.Add(cur))
+                            {
+                                if (frmMain.issueDict != null && frmMain.issueDict.TryGetValue(cur, out var issue))
+                                {
+                                    chain.Add(issue.Key);
+                                    cur = issue.ParentKey;
+                                }
+                                else
+                                {
+                                    // best-effort: include the key even if not known
+                                    chain.Add(cur);
+                                    break;
+                                }
+                            }
+                            chain.Reverse();
+
+                            // Trim to configured roots so SPA only expands from visible roots
+                            var configuredRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            if (frmMain.config?.Projects != null)
+                            {
+                                foreach (var p in frmMain.config.Projects)
+                                    if (!string.IsNullOrWhiteSpace(p?.Root))
+                                        configuredRoots.Add(p.Root.Trim());
+                            }
+                            if (configuredRoots.Count == 0 && !string.IsNullOrWhiteSpace(frmMain.root_key))
+                            {
+                                foreach (var k in frmMain.root_key.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                                    configuredRoots.Add(k);
+                            }
+                            if (configuredRoots.Count > 0)
+                            {
+                                int idx = chain.FindIndex(k => configuredRoots.Contains(k));
+                                if (idx > 0) chain = chain.Skip(idx).ToList();
+                            }
+
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(chain));
+                        });
+
                         endpoints.MapGet("/api/tree/roots", async context =>
                         {
                             var configuredRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -183,7 +223,6 @@ namespace Monovera
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
                         });
 
-                        // Children of a parent key (sorted + camelCase + icon)
                         endpoints.MapGet("/api/tree/children/{parentKey}", async context =>
                         {
                             var parentKey = context.Request.RouteValues["parentKey"]?.ToString() ?? "";
@@ -220,7 +259,6 @@ namespace Monovera
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
                         });
 
-                        // Full rendered issue HTML (uses your builders to match desktop)
                         endpoints.MapGet("/api/issue/{key}/html", async context =>
                         {
                             var key = context.Request.RouteValues["key"]?.ToString() ?? "";
@@ -370,12 +408,43 @@ namespace Monovera
       }});
     }});
     Prism.highlightAll();
+
+    // Bridge clicks on issue links to parent SPA to open/select that issue
+    (function() {{
+      function findKeyFromAnchor(a) {{
+        if (!a) return null;
+        if (a.dataset && a.dataset.key) return a.dataset.key;
+        const t = (a.textContent || '').trim();
+        let m = t.match(/([A-Z][A-Z0-9]+-\\d+)/);
+        if (m && m[1]) return m[1];
+        const h = a.getAttribute('href') || '';
+        m = h.match(/([A-Z][A-Z0-9]+-\\d+)/);
+        if (m && m[1]) return m[1];
+        return null;
+      }}
+      document.addEventListener('click', function(ev) {{
+        const a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
+        if (!a) return;
+        if (a.target === '_blank') return; // allow external 'Open in Browser'
+        const key = findKeyFromAnchor(a);
+        if (!key) return;
+        const title = (a.textContent || ('[' + key + ']')).trim();
+        try {{
+          if (window.parent && window.parent !== window) {{
+            window.parent.postMessage({{ type: 'open-issue', key: key, title: title }}, '*');
+            ev.preventDefault();
+            ev.stopPropagation();
+          }}
+        }} catch (e) {{}}
+      }}, true);
+    }})();
   </script>
 </body>
 </html>");
             return sb.ToString();
         }
-// Static clone of BuildHTMLSection_LINKS_Offline (with icons like frmMain)
+
+        // Static clone of BuildHTMLSection_LINKS_Offline (with icons like frmMain)
         private static string BuildLinksOffline(string issueKey)
         {
             var sb = new StringBuilder();
@@ -619,18 +688,13 @@ namespace Monovera
             try
             {
                 if (!string.IsNullOrWhiteSpace(frmMain.cssPath) && File.Exists(frmMain.cssPath))
-                {
                     css = await File.ReadAllTextAsync(frmMain.cssPath, Encoding.UTF8);
-                }
                 else if (!string.IsNullOrWhiteSpace(frmMain.cssHref))
-                {
-                    using var hc = new HttpClient();
-                    css = await hc.GetStringAsync(frmMain.cssHref);
-                }
+                    using (var hc = new HttpClient()) css = await hc.GetStringAsync(frmMain.cssHref);
             }
             catch { css = ""; }
 
-            // index.html with embedded CSS + draggable splitter
+            // Full CSS (layout + splitter + tree + tabs)
             string indexHtml = $@"<!DOCTYPE html>
 <html>
 <head>
@@ -638,41 +702,14 @@ namespace Monovera
   <title>Monovera (Web)</title>
   <style>
 {css}
-
-/* Layout: prevent page scroll; keep status visible */
-html, body {{ height: 100%; margin: 0; }}
-body {{ overflow: hidden; }}
+html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
 .layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }}
-
-/* 3-column grid: left (tree), splitter, right (content) */
-.main {{
-  --left: 33%;
-  display: grid;
-  grid-template-columns: var(--left) 6px 1fr;
-  gap: 8px;
-  padding: 8px;
-  box-sizing: border-box;
-  min-height: 0;
-}}
-
-/* Splitter (draggable) */
-.splitter {{
-  grid-column: 2;
-  background: linear-gradient(to right, transparent, #cbd8ea, transparent);
-  cursor: col-resize;
-  user-select: none;
-}}
+.main {{ --left: 33%; display: grid; grid-template-columns: var(--left) 6px 1fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
+.splitter {{ grid-column: 2; background: linear-gradient(to right, transparent, #cbd8ea, transparent); cursor: col-resize; user-select: none; }}
 .splitter:hover {{ background: linear-gradient(to right, transparent, #b6c9e4, transparent); }}
-body.resizing * {{ cursor: col-resize !important; user-select: none !important; }}
+.sidebar {{ grid-column: 1; border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }}
 
-/* Sidebar: make tree area scroll, not the page */
-.sidebar {{
-  grid-column: 1;
-  border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff;
-  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
-}}
-
-/* Tree overrides (isolate from monovera.css bullets) */
+/* Tree: bullet removal is enforced with !important and ::marker reset */
 #tree, #tree ul, #tree li {{
   list-style: none !important;
   list-style-type: none !important;
@@ -680,63 +717,25 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
   margin: 0;
   padding-left: 12px;
 }}
-#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}
 #tree li::marker {{ content: '' !important; color: transparent !important; }}
 #tree li::before {{ content: none !important; }}
-#tree li {{ background: none !important; margin: 2px 0; }}
-#tree a {{
-  cursor: pointer; text-decoration: none; color: #1565c0;
-  padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px;
-}}
-#tree a.selected {{
-  background: #e3f2fd; color: #0d47a1; outline: 1px solid #b3d4f6;
-}}
-#tree .expander {{
-  display:inline-block; width: 16px; text-align:center; margin-right: 6px;
-  cursor: pointer; user-select: none; color: #0d47a1; font-weight: 700; font-family: Consolas, monospace;
-}}
-.node-icon {{ width: 18px; height: 18px; vertical-align: middle; border-radius: 3px; }}
 
-/* Right side: prevent it from forcing page scroll */
-.workspace {{
-  grid-column: 3;
-  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
-}}
-.tabs {{ display: flex; gap: 4px; border-bottom: 1px solid #b3d4f6; padding: 6px 6px 0 6px; background: #f2faff; }}
-.tab {{ background: #ffffff; border: 1px solid #b3d4f6; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; }}
-.tab.active {{ background: #fff; color: #1565c0; font-weight: 600; border-bottom: 2px solid #1565c0; }}
+#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}
+#tree li {{ margin: 2px 0; }}
+#tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; }}
+#tree a.selected {{ background:#e3f2fd; color:#0d47a1; outline:1px solid #b3d4f6; }}
+#tree .expander {{ display:inline-block; width:16px; text-align:center; margin-right:6px; cursor:pointer; user-select:none; color:#0d47a1; font-weight:700; font-family:Consolas,monospace; }}
+.node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
 
-/* Close button: small red square 'x' with tooltip */
-.tab .close {{
-  margin-left: 6px;
-  width: 16px;
-  height: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 12px;
-  line-height: 1;
-  color: #fff !important;
-  background: #d32f2f;
-  border: 1px solid #b71c1c;
-  border-radius: 0; /* square */
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0,0,0,.2);
-  user-select: none;
-}}
-.tab .close:hover {{
-  background: #b71c1c;
-  border-color: #8a1111;
-}}
-.tab .tab-key {{ font-weight: 600; }}
-
-.views {{ flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }}
-.view {{ position: absolute; inset: 0; display: none; }}
-.view.active {{ display: block; }}
-.view iframe {{ width: 100%; height: 100%; border: none; background: #fff; }}
-
-.status {{ display: flex; align-items: center; padding: 0 12px; border-top: 1px solid #b3d4f6; background: #f2faff; color: #1565c0; gap: 16px; }}
+.workspace {{ grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
+.tabs {{ display:flex; gap:4px; border-bottom:1px solid #b3d4f6; padding:6px 6px 0 6px; background:#f2faff; }}
+.tab {{ background:#fff; border:1px solid #b3d4f6; border-bottom:none; border-radius:6px 6px 0 0; padding:6px 10px; cursor:pointer; display:flex; align-items:center; gap:8px; }}
+.tab.active {{ font-weight:600; color:#1565c0; border-bottom:2px solid #1565c0; }}
+.tab .close {{ margin-left:6px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; line-height:1; color:#fff; background:#d32f2f; border:1px solid #b71c1c; border-radius:0; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.2); }}
+.views {{ flex:1 1 auto; position:relative; min-height:0; overflow:hidden; }}
+.view {{ position:absolute; inset:0; display:none; }} .view.active {{ display:block; }}
+.view iframe {{ width:100%; height:100%; border:none; background:#fff; }}
+.status {{ display:flex; align-items:center; padding:0 12px; border-top:1px solid #b3d4f6; background:#f2faff; color:#1565c0; gap:16px; }}
   </style>
 </head>
 <body>
@@ -762,7 +761,7 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
 </body>
 </html>";
 
-            // JS: bidirectional selection sync + draggable splitter with persistence
+            // JS: adds collapse toggle and keeps SPA-only expand/select behavior
             string webJs = @"(async function () {
   const treeEl = document.getElementById('tree');
   const tabsEl = document.getElementById('tabs');
@@ -770,105 +769,20 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
   const mainEl = document.querySelector('.main');
   const splitter = document.getElementById('splitter');
 
-  // --- Resizer setup ---
-  const MIN_LEFT = 220;   // px
-  const MIN_RIGHT = 360;  // px
-
-  function setLeftWidth(px) {
-    mainEl.style.setProperty('--left', px + 'px');
-    splitter.setAttribute('aria-valuenow', String(px));
+  // --- Resizer ---
+  const MIN_LEFT = 220, MIN_RIGHT = 360;
+  function setLeftWidth(px){ mainEl.style.setProperty('--left', px + 'px'); splitter.setAttribute('aria-valuenow', String(px)); }
+  function clampWidth(px){ const r = mainEl.getBoundingClientRect(); const max = Math.max(MIN_LEFT, r.width - MIN_RIGHT); return Math.max(MIN_LEFT, Math.min(px, max)); }
+  function startDrag(e){ e.preventDefault(); const r = mainEl.getBoundingClientRect(); document.body.classList.add('resizing');
+    const move = (ev)=>{ const x = (ev.touches?.[0]?.clientX ?? ev.clientX) - r.left; setLeftWidth(clampWidth(x)); };
+    const up = ()=>{ document.body.classList.remove('resizing'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); window.removeEventListener('touchmove', move); window.removeEventListener('touchend', up); };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); window.addEventListener('touchmove', move, { passive:false }); window.addEventListener('touchend', up);
   }
-  function saveLeftWidth(px) {
-    try { localStorage.setItem('treeWidthPx', String(px)); } catch {}
-  }
-  function loadLeftWidth() {
-    try { return parseInt(localStorage.getItem('treeWidthPx') || '0', 10) || 0; } catch { return 0; }
-  }
-  function clampWidth(px) {
-    const rect = mainEl.getBoundingClientRect();
-    const max = Math.max(MIN_LEFT, rect.width - MIN_RIGHT);
-    return Math.max(MIN_LEFT, Math.min(px, max));
-  }
-  function startDrag(e) {
-    e.preventDefault();
-    const rect = mainEl.getBoundingClientRect();
-    document.body.classList.add('resizing');
-
-    const move = (ev) => {
-      const clientX = (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
-      const x = clientX - rect.left;
-      const w = clampWidth(x);
-      setLeftWidth(w);
-    };
-    const up = () => {
-      document.body.classList.remove('resizing');
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
-      window.removeEventListener('touchmove', move);
-      window.removeEventListener('touchend', up);
-      const val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
-      const px = parseInt(val, 10);
-      if (!Number.isNaN(px)) saveLeftWidth(px);
-    };
-
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
-    window.addEventListener('touchmove', move, { passive: false });
-    window.addEventListener('touchend', up);
-  }
-
   splitter.addEventListener('mousedown', startDrag);
-  splitter.addEventListener('touchstart', startDrag, { passive: false });
+  splitter.addEventListener('touchstart', startDrag, { passive:false });
 
-  // Keyboard resizing on splitter
-  splitter.addEventListener('keydown', (e) => {
-    const step = e.shiftKey ? 32 : 16;
-    let val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
-    let px = parseInt(val, 10);
-    if (Number.isNaN(px)) px = 360;
-    if (e.key === 'ArrowLeft') { px = clampWidth(px - step); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
-    if (e.key === 'ArrowRight') { px = clampWidth(px + step); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
-    if (e.key === 'Home') { px = clampWidth(MIN_LEFT); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
-    if (e.key === 'End') { const rect = mainEl.getBoundingClientRect(); px = clampWidth(rect.width - MIN_RIGHT); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
-  });
-
-  // Restore saved width or default to ~33%
-  function initLeftWidth() {
-    const rect = mainEl.getBoundingClientRect();
-    let px = loadLeftWidth();
-    if (!px) px = clampWidth(Math.round(rect.width * 0.33));
-    setLeftWidth(px);
-  }
-  window.addEventListener('resize', () => {
-    const rect = mainEl.getBoundingClientRect();
-    const val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
-    let px = parseInt(val, 10);
-    if (Number.isNaN(px)) return;
-    const clamped = clampWidth(px);
-    if (clamped !== px) { setLeftWidth(clamped); saveLeftWidth(clamped); }
-  });
-  initLeftWidth();
-
-  // --- Tree selection sync ---
-  let selectedAnchor = null;
-  function setSelected(a) {
-    if (selectedAnchor) {
-      selectedAnchor.classList.remove('selected');
-      selectedAnchor.setAttribute('aria-selected', 'false');
-    }
-    selectedAnchor = a;
-    if (selectedAnchor) {
-      selectedAnchor.classList.add('selected');
-      selectedAnchor.setAttribute('aria-selected', 'true');
-      selectedAnchor.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    }
-  }
-  function highlightTreeSelection(key) {
-    const a = document.querySelector(`#tree a[data-key='${key}']`);
-    if (a) setSelected(a);
-  }
-
-  async function refreshStatus() {
+  // --- Status ---
+  async function refreshStatus(){
     try {
       const s = await (await fetch('/api/status')).json();
       document.getElementById('statusUser').textContent = '👤 User: ' + (s.connectedUser || '-');
@@ -876,60 +790,66 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
       document.getElementById('statusUpdated').textContent = '🕒 DB Updated: ' + (s.lastDbUpdated || 'N/A');
     } catch {}
   }
-  refreshStatus();
-  setInterval(refreshStatus, 10000);
+  refreshStatus(); setInterval(refreshStatus, 10000);
+
+  // --- Tree selection ---
+  let selectedAnchor = null;
+  function setSelected(a){ if (selectedAnchor){ selectedAnchor.classList.remove('selected'); selectedAnchor.setAttribute('aria-selected','false'); } selectedAnchor = a; if (a){ a.classList.add('selected'); a.setAttribute('aria-selected','true'); a.scrollIntoView({block:'nearest', inline:'nearest'}); } }
+  function highlightTreeSelection(key){ const a = document.querySelector(`#tree a[data-key='${key}']`); if (a) setSelected(a); }
 
   function liNode({ key, text, hasChildren, icon }) {
     const li = document.createElement('li');
 
     const exp = document.createElement('span');
-    exp.className = 'expander';
+    exp.className='expander';
     exp.textContent = hasChildren ? '+' : '';
-    exp.dataset.state = 'collapsed';
+    exp.dataset.state='collapsed';
     exp.style.visibility = hasChildren ? 'visible' : 'hidden';
 
     const a = document.createElement('a');
-    a.href = '#';
-    a.dataset.key = key;
+    a.href='#';
+    a.dataset.key=key;
 
-    if (icon) {
-      const img = document.createElement('img');
-      img.src = icon;
-      img.className = 'node-icon';
-      img.alt = '';
-      a.appendChild(img);
-    }
+    if (icon) { const img=document.createElement('img'); img.src=icon; img.className='node-icon'; img.alt=''; a.appendChild(img); }
     a.appendChild(document.createTextNode(text));
 
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      setSelected(a);               // select in tree
-      openTab(key, text, icon);     // open/activate tab
-    });
+    a.addEventListener('click', (e) => { e.preventDefault(); setSelected(a); openTab(key, text, icon); });
 
-    const ul = document.createElement('ul');
-    ul.style.display = 'none';
+    const ul = document.createElement('ul'); ul.style.display='none';
 
+    // Toggle expand/collapse
     exp.addEventListener('click', async () => {
-      if (!hasChildren) return;
       if (exp.dataset.state === 'collapsed') {
-        const children = await (await fetch(`/api/tree/children/${encodeURIComponent(key)}`)).json();
-        ul.innerHTML = '';
-        children.forEach(c => ul.appendChild(liNode(c)));
-        ul.style.display = 'block';
-        exp.textContent = '-';
-        exp.dataset.state = 'expanded';
+        await expandNode(li, key);
       } else {
-        ul.style.display = 'none';
-        exp.textContent = '+';
-        exp.dataset.state = 'collapsed';
+        collapseNode(li);
       }
     });
 
-    li.appendChild(exp);
-    li.appendChild(a);
-    li.appendChild(ul);
+    li.appendChild(exp); li.appendChild(a); li.appendChild(ul);
     return li;
+  }
+
+  async function expandNode(li, key){
+    const exp = li.querySelector('span.expander');
+    const ul = li.querySelector('ul');
+    if (!exp || !ul) return;
+    if (exp.dataset.state === 'expanded') return;
+    const children = await (await fetch(`/api/tree/children/${encodeURIComponent(key)}`)).json();
+    ul.innerHTML = '';
+    children.forEach(c => ul.appendChild(liNode(c)));
+    ul.style.display = 'block';
+    exp.textContent = '-';
+    exp.dataset.state = 'expanded';
+  }
+
+  function collapseNode(li){
+    const exp = li.querySelector('span.expander');
+    const ul = li.querySelector('ul');
+    if (!exp || !ul) return;
+    ul.style.display = 'none';
+    exp.textContent = '+';
+    exp.dataset.state = 'collapsed';
   }
 
   async function loadRoots() {
@@ -938,15 +858,48 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
     roots.forEach(r => treeEl.appendChild(liNode(r)));
   }
 
-  function makeTabId(key) { return 'tab-' + key; }
-  function makeViewId(key) { return 'view-' + key; }
+  // Expand to key and select within SPA tree
+  async function expandAndSelect(key) {
+    try {
+      if (!treeEl.children.length) await loadRoots();
+      const res = await fetch(`/api/tree/path/${encodeURIComponent(key)}`);
+      if (!res.ok) return;
+      const path = await res.json();
+      if (!Array.isArray(path) || !path.length) return;
+
+      for (let i = 0; i < path.length; i++) {
+        const k = path[i];
+        let a = document.querySelector(`#tree a[data-key='${k}']`);
+        if (!a && i > 0) {
+          const prevA = document.querySelector(`#tree a[data-key='${path[i - 1]}']`);
+          const liPrev = prevA ? prevA.parentElement : null;
+          if (liPrev) await expandNode(liPrev, path[i - 1]);
+          a = document.querySelector(`#tree a[data-key='${k}']`);
+        }
+        if (i < path.length - 1) {
+          const li = a ? a.parentElement : null;
+          if (li) await expandNode(li, k);
+        } else {
+          if (a) setSelected(a);
+        }
+      }
+    } catch {}
+  }
+
+  function makeTabId(key){ return 'tab-' + key; }
+  function makeViewId(key){ return 'view-' + key; }
 
   function activate(key) {
     const id = makeTabId(key);
     const vid = makeViewId(key);
     [...tabsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === id));
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
-    highlightTreeSelection(key); // sync tree highlight on any activate
+    highlightTreeSelection(key);
+  }
+
+  function getIconForKey(key){
+    const img = document.querySelector(`#tree a[data-key='${key}'] img.node-icon`);
+    return img ? img.src : null;
   }
 
   async function openTab(key, title, icon) {
@@ -955,67 +908,52 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
 
     if (!document.getElementById(tabId)) {
       const tab = document.createElement('div');
-      tab.className = 'tab';
-      tab.id = tabId;
-      tab.dataset.key = key;   // carry key for click syncing
-      tab.title = title;
+      tab.className='tab'; tab.id=tabId; tab.dataset.key=key; tab.title=title;
 
-      if (icon) {
-        const img = document.createElement('img');
-        img.src = icon;
-        img.className = 'node-icon';
-        img.alt = '';
-        tab.appendChild(img);
-      }
+      const iconSrc = icon || getIconForKey(key);
+      if (iconSrc){ const img=document.createElement('img'); img.src=iconSrc; img.className='node-icon'; img.alt=''; tab.appendChild(img); }
 
-      const keySpan = document.createElement('span');
-      keySpan.className = 'tab-key';
-      keySpan.textContent = '[' + key + ']';
-      tab.appendChild(keySpan);
+      const keySpan = document.createElement('span'); keySpan.className='tab-key'; keySpan.textContent='[' + key + ']'; tab.appendChild(keySpan);
 
       const close = document.createElement('span');
-      close.className = 'close';
-      close.textContent = '×';
-      close.title = 'Close';
-      close.setAttribute('aria-label', 'Close');
+      close.className='close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
       close.addEventListener('click', (e) => {
         e.stopPropagation();
-        const t = document.getElementById(tabId);
-        const v = document.getElementById(viewId);
-        if (t) tabsEl.removeChild(t);
-        if (v) viewsEl.removeChild(v);
-        const last = tabsEl.lastElementChild;
-        if (last) {
-          const lastKey = last.dataset.key || last.id.replace(/^tab-/, '');
-          activate(lastKey);
-        }
+        const t=document.getElementById(tabId), v=document.getElementById(viewId);
+        if (t) tabsEl.removeChild(t); if (v) viewsEl.removeChild(v);
+        const last=tabsEl.lastElementChild; if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
       });
 
-      // Clicking a tab header should activate and select in tree
-      tab.addEventListener('click', () => {
-        activate(key);
-      });
+      tab.addEventListener('click', () => { activate(key); });
 
-      tab.appendChild(close);
-      tabsEl.appendChild(tab);
+      tab.appendChild(close); tabsEl.appendChild(tab);
 
-      const view = document.createElement('div');
-      view.className = 'view';
-      view.id = viewId;
-      const iframe = document.createElement('iframe');
-      iframe.setAttribute('title', key);
-      view.appendChild(iframe);
+      const view = document.createElement('div'); view.className='view'; view.id=viewId;
+      const iframe = document.createElement('iframe'); iframe.setAttribute('title', key); view.appendChild(iframe);
       viewsEl.appendChild(view);
 
       try {
         const html = await (await fetch(`/api/issue/${encodeURIComponent(key)}/html`)).text();
         iframe.srcdoc = html;
       } catch {
-        iframe.srcdoc = '<html><body><div style=""padding: 20px; color:#b00;"">Failed to load ' + key + '</div></body></html>';
+        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load ${key}</div></body></html>`;
       }
     }
     activate(key);
   }
+
+  // Listen issue iframes: open tab AND expand/select in SPA tree (no desktop calls)
+  window.addEventListener('message', (ev) => {
+    try {
+      const d = ev.data || {};
+      if (d.type === 'open-issue' && d.key) {
+        (async () => {
+          await expandAndSelect(d.key);
+          await openTab(d.key, d.title || ('[' + d.key + ']'), null);
+        })();
+      }
+    } catch {}
+  });
 
   await loadRoots();
 })();";
@@ -1024,5 +962,6 @@ body.resizing * {{ cursor: col-resize !important; user-select: none !important; 
             await File.WriteAllTextAsync(Path.Combine(wwwroot, "index.html"), indexHtml, Encoding.UTF8);
             await File.WriteAllTextAsync(Path.Combine(wwwroot, "monovera.web.js"), webJs, Encoding.UTF8);
         }
+
     }
 }

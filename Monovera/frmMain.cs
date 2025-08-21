@@ -2707,9 +2707,6 @@ namespace Monovera
             // Initialize icons for issue types and statuses
             InitializeIcons();
 
-            // Show a tab with recently updated issuesup
-            ShowRecentlyUpdatedIssuesAsync(tabDetails);
-
             // Load all Jira projects and their issues into the tree view
             await LoadAllProjectsToTreeAsync(false);
 
@@ -2732,6 +2729,48 @@ namespace Monovera
             {
                 System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
             }
+
+            // Show a tab with recently updated issuesup
+            ShowRecentlyUpdatedIssuesAsync(tabDetails);
+        }
+
+        // Add inside the frmMain class
+        public static void SelectFromSpaInvoke(string key)
+        {
+            try
+            {
+                var main = Application.OpenForms.OfType<frmMain>().FirstOrDefault();
+                if (main == null || string.IsNullOrWhiteSpace(key)) return;
+
+                // Marshal to UI thread
+                main.Invoke(async () =>
+                {
+                    try
+                    {
+                        // Ensure left-click semantics so Tree_AfterSelect isn't suppressed
+                        main.lastTreeMouseButton = MouseButtons.Left;
+
+                        // Expand path to the node (loads children as needed)
+                        var node = await main.ExpandPathToKeyAsync(key);
+                        if (node != null)
+                        {
+                            // Select + ensure visible
+                            main.tree.SelectedNode = node;
+                            node.EnsureVisible();
+                            main.tree.Focus();
+
+                            // Force-load tab content (even if selection event didn’t fire)
+                            await main.Tree_AfterSelect_Internal(main.tree, new TreeViewEventArgs(node), forcedReload: false);
+                        }
+                        else
+                        {
+                            main.ShowTrayNotification(key);
+                        }
+                    }
+                    catch { /* ignore */ }
+                });
+            }
+            catch { /* ignore */ }
         }
 
         /// <summary>
