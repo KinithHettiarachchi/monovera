@@ -2716,7 +2716,7 @@ namespace Monovera
             // Start the self-hosted web server
             try
             {
-                webHost = new WebSelfHost(5178);
+                webHost = new WebSelfHost(8090);
                 await webHost.StartAsync();
 
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo

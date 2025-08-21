@@ -25,7 +25,7 @@ namespace Monovera
 
         public string BaseUrl => $"http://localhost:{port}";
 
-        public WebSelfHost(int port = 5178)
+        public WebSelfHost(int port = 8090)
         {
             this.port = port;
         }
@@ -39,9 +39,12 @@ namespace Monovera
             await EnsureWebAssetsAsync(wwwroot);
 
             webHost = new WebHostBuilder()
-                .UseKestrel()
+                // Listen on all interfaces for the configured port (reachable from other machines)
+                .UseKestrel(options =>
+                {
+                    options.ListenAnyIP(port); // e.g. http://0.0.0.0:8090
+                })
                 .UseContentRoot(baseDir)
-                .UseUrls(BaseUrl)
                 .ConfigureServices(services =>
                 {
                     services.AddRouting();
@@ -113,6 +116,18 @@ namespace Monovera
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
                         });
 
+                        // Recent updates HTML (for the SPA Recent Updates tab)
+                        endpoints.MapGet("/api/recent/updated/html", async context =>
+                        {
+                            int days = 14;
+                            if (context.Request.Query.TryGetValue("days", out var vals))
+                                int.TryParse(vals.FirstOrDefault(), out days);
+
+                            string html = BuildRecentUpdatesHtml(days);
+                            context.Response.ContentType = "text/html; charset=utf-8";
+                            await context.Response.WriteAsync(html);
+                        });
+
                         // New: returns [rootKey, ..., targetKey] for SPA expansion
                         endpoints.MapGet("/api/tree/path/{key}", async context =>
                         {
@@ -130,14 +145,12 @@ namespace Monovera
                                 }
                                 else
                                 {
-                                    // best-effort: include the key even if not known
                                     chain.Add(cur);
                                     break;
                                 }
                             }
                             chain.Reverse();
 
-                            // Trim to configured roots so SPA only expands from visible roots
                             var configuredRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                             if (frmMain.config?.Projects != null)
                             {
@@ -271,6 +284,146 @@ namespace Monovera
                 .Build();
 
             await webHost.StartAsync();
+        }
+
+        // Builds the HTML for the Recent Updates tab using the local SQLite cache
+        private static string BuildRecentUpdatesHtml(int days)
+        {
+            // Threshold as DB string yyyyMMddHHmmss
+            var min = DateTime.UtcNow.AddDays(-Math.Abs(days));
+            string minStr = min.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
+
+            var rows = new List<(string Key, string Summary, string Type, string Status, DateTime UpdatedUtc)>();
+
+            try
+            {
+                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+                string connStr = $"Data Source={dbPath};";
+                using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = @"
+            SELECT KEY, SUMMARY, ISSUETYPE, STATUS, 
+                   COALESCE(UPDATEDTIME, CREATEDTIME) as TS
+            FROM issue
+            WHERE (UPDATEDTIME IS NOT NULL AND UPDATEDTIME >= @min)
+               OR (CREATEDTIME IS NOT NULL AND CREATEDTIME >= @min)
+            ORDER BY TS DESC";
+                cmd.Parameters.AddWithValue("@min", minStr);
+
+                using var r = cmd.ExecuteReader();
+                while (r.Read())
+                {
+                    string key = r["KEY"]?.ToString() ?? "";
+                    string summary = r["SUMMARY"]?.ToString() ?? frmMain.SUMMARY_MISSING;
+                    string type = r["ISSUETYPE"]?.ToString() ?? "";
+                    string status = r["STATUS"]?.ToString() ?? "";
+                    string ts = r["TS"]?.ToString() ?? "";
+                    if (!DateTime.TryParseExact(ts, "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var dt))
+                        continue;
+                    rows.Add((key, summary, type, status, DateTime.SpecifyKind(dt, DateTimeKind.Utc)));
+                }
+            }
+            catch
+            {
+                // Swallow; will render fallback
+            }
+
+            var sb = new StringBuilder();
+            string cssHref = "/static/monovera.css";
+
+            sb.Append($@"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link rel='stylesheet' href='{cssHref}' />
+</head>
+<body>
+  <h2>Recent Updates</h2>
+");
+
+            if (rows.Count == 0)
+            {
+                sb.Append("<div style='padding:12px;color:#888;'>No recent updates.</div></body></html>");
+                return sb.ToString();
+            }
+
+            // Group by updated date (local date)
+            foreach (var group in rows
+                .GroupBy(x => x.UpdatedUtc.ToLocalTime().Date)
+                .OrderByDescending(g => g.Key))
+            {
+                sb.Append($@"
+<details open>
+  <summary>{group.Key:yyyy-MM-dd} ({group.Count()} issues)</summary>
+  <section>
+    <div class='subsection'>
+      <table class='confluenceTable' style='width:100%;border-collapse:collapse;'>
+        <thead>
+          <tr>
+            <th class='confluenceTh' style='width:36px;'>Type</th>
+            <th class='confluenceTh'>Summary</th>
+            <th class='confluenceTh' style='width:100px;'>Updated</th>
+          </tr>
+        </thead>
+        <tbody>");
+
+                foreach (var item in group)
+                {
+                    string iconUrl = ResolveTypeIconUrl(item.Type);
+                    string iconHtml = !string.IsNullOrWhiteSpace(iconUrl)
+                        ? $"<img src='{iconUrl}' style='height:24px;width:24px;vertical-align:middle;margin-right:8px;border-radius:4px;' title='{WebUtility.HtmlEncode(item.Type)}' />"
+                        : "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
+
+                    string updatedLocal = item.UpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                    string pathHtml = "";
+                    try
+                    {
+                        var path = frmMain.GetRequirementPath(item.Key);
+                        if (!string.IsNullOrWhiteSpace(path))
+                            pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:1px;margin-top:1px;'>{path}</div>";
+                    }
+                    catch { }
+
+                    sb.Append($@"
+<tr>
+  <td class='confluenceTd'>{iconHtml}</td>
+  <td class='confluenceTd'>
+    <a href='#' data-key='{WebUtility.HtmlEncode(item.Key)}' class='recent-link'>
+      {WebUtility.HtmlEncode(item.Summary)} [{WebUtility.HtmlEncode(item.Key)}]
+    </a>
+    {pathHtml}
+  </td>
+  <td class='confluenceTd'>{WebUtility.HtmlEncode(updatedLocal)}</td>
+</tr>");
+                }
+
+                sb.Append(@"
+        </tbody>
+      </table>
+    </div>
+  </section>
+</details>");
+            }
+
+            // Bridge link clicks to SPA
+            sb.Append(@"
+<script>
+document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
+  link.addEventListener('click', e => {
+    e.preventDefault();
+    const key = link.dataset.key;
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'open-issue', key: key, title: link.innerText }, '*');
+      }
+    } catch {}
+  });
+});
+</script>");
+
+            sb.Append("</body></html>");
+            return sb.ToString();
         }
 
         public async Task StopAsync()
@@ -694,7 +847,7 @@ namespace Monovera
             }
             catch { css = ""; }
 
-            // Full CSS (layout + splitter + tree + tabs)
+            // Namespaced CSS to avoid collisions (mv-*)
             string indexHtml = $@"<!DOCTYPE html>
 <html>
 <head>
@@ -702,14 +855,15 @@ namespace Monovera
   <title>Monovera (Web)</title>
   <style>
 {css}
-html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
+html, body {{ height: 100%; margin: 0; }}
+body {{ overflow: hidden; }}
 .layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }}
 .main {{ --left: 33%; display: grid; grid-template-columns: var(--left) 6px 1fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
 .splitter {{ grid-column: 2; background: linear-gradient(to right, transparent, #cbd8ea, transparent); cursor: col-resize; user-select: none; }}
 .splitter:hover {{ background: linear-gradient(to right, transparent, #b6c9e4, transparent); }}
 .sidebar {{ grid-column: 1; border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }}
 
-/* Tree: bullet removal is enforced with !important and ::marker reset */
+/* Tree (force no bullets) */
 #tree, #tree ul, #tree li {{
   list-style: none !important;
   list-style-type: none !important;
@@ -719,7 +873,6 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
 }}
 #tree li::marker {{ content: '' !important; color: transparent !important; }}
 #tree li::before {{ content: none !important; }}
-
 #tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}
 #tree li {{ margin: 2px 0; }}
 #tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; }}
@@ -727,15 +880,75 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
 #tree .expander {{ display:inline-block; width:16px; text-align:center; margin-right:6px; cursor:pointer; user-select:none; color:#0d47a1; font-weight:700; font-family:Consolas,monospace; }}
 .node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
 
+/* Right workspace */
 .workspace {{ grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
-.tabs {{ display:flex; gap:4px; border-bottom:1px solid #b3d4f6; padding:6px 6px 0 6px; background:#f2faff; }}
-.tab {{ background:#fff; border:1px solid #b3d4f6; border-bottom:none; border-radius:6px 6px 0 0; padding:6px 10px; cursor:pointer; display:flex; align-items:center; gap:8px; }}
-.tab.active {{ font-weight:600; color:#1565c0; border-bottom:2px solid #1565c0; }}
-.tab .close {{ margin-left:6px; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; font-weight:700; font-size:12px; line-height:1; color:#fff; background:#d32f2f; border:1px solid #b71c1c; border-radius:0; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.2); }}
-.views {{ flex:1 1 auto; position:relative; min-height:0; overflow:hidden; }}
-.view {{ position:absolute; inset:0; display:none; }} .view.active {{ display:block; }}
-.view iframe {{ width:100%; height:100%; border:none; background:#fff; }}
-.status {{ display:flex; align-items:center; padding:0 12px; border-top:1px solid #b3d4f6; background:#f2faff; color:#1565c0; gap:16px; }}
+
+/* Tabs (namespaced) */
+.mv-tabs-bar {{
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid #b3d4f6;
+  background: #f2faff;
+  padding: 6px 6px 0 6px;
+}}
+.mv-tabs-viewport {{ overflow: hidden; }}
+#mv-tabs {{
+  position: relative;
+  display: inline-flex;
+  gap: 4px;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}}
+#mv-tabs::-webkit-scrollbar {{ display: none; }}
+
+.mv-tab {{
+  background:#fff;
+  border:1px solid #b3d4f6; border-bottom:none;
+  border-radius:6px 6px 0 0;
+  padding:6px 10px;
+  cursor:pointer;
+  display:flex; align-items:center; gap:8px;
+  max-width: 360px;
+}}
+.mv-tab.active {{ font-weight:600; color:#1565c0; border-bottom:2px solid #1565c0; }}
+.mv-tab-key {{ font-weight:600; }}
+.mv-tab-close {{
+  margin-left:6px;
+  width:16px; height:16px;
+  display:inline-flex; align-items:center; justify-content:center;
+  font-weight:700; font-size:12px; line-height:1;
+  color:#fff; background:#d32f2f; border:1px solid #b71c1c;
+  border-radius:3px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.2);
+  flex: 0 0 auto;
+}}
+.mv-tab-close:hover {{ background:#b71c1c; border-color:#8a1111; }}
+
+/* Scroll buttons */
+.mv-tab-scroll {{
+  appearance: none; -webkit-appearance: none;
+  border: 1px solid #b3d4f6; background: #ffffff; color: #1565c0;
+  width: 28px; height: 24px; border-radius: 4px; display: none;
+  align-items: center; justify-content: center; cursor: pointer;
+  user-select: none;
+}}
+.mv-tab-scroll[disabled] {{ opacity: .5; cursor: default; }}
+
+/* Views */
+#mv-views {{ flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }}
+.mv-view {{ position: absolute; inset: 0; display: none; background:#fff; }}
+.mv-view.active {{ display: block; }}
+.mv-view iframe {{ width: 100%; height: 100%; border: none; background: #fff; }}
+
+/* Home splash */
+.home-splash {{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#fff; }}
+.home-splash img {{ max-width:100%; max-height:100%; object-fit: contain; }}
+
+.status {{ display: flex; align-items: center; padding: 0 12px; border-top: 1px solid #b3d4f6; background: #f2faff; color: #1565c0; gap: 16px; }}
   </style>
 </head>
 <body>
@@ -746,8 +959,19 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
       </aside>
       <div id='splitter' class='splitter' role='separator' aria-orientation='vertical' tabindex='0' title='Drag to resize'></div>
       <section class='workspace'>
-        <div id='tabs' class='tabs'></div>
-        <div id='views' class='views'></div>
+        <div class='mv-tabs-bar'>
+          <button id='mv-tabPrev' class='mv-tab-scroll' title='Scroll left' aria-label='Scroll left'>&lsaquo;</button>
+          <div class='mv-tabs-viewport'><div id='mv-tabs'></div></div>
+          <button id='mv-tabNext' class='mv-tab-scroll' title='Scroll right' aria-label='Scroll right'>&rsaquo;</button>
+        </div>
+        <div id='mv-views'>
+          <!-- Default Home view (shows background image when no tabs are open) -->
+          <div id='mv-home' class='mv-view active'>
+            <div class='home-splash'>
+              <img src='/static/images/MonoveraBackground.png' alt='Monovera' onerror=""this.outerHTML='<div style=\'color:#b00;font:14px Segoe UI\'>Missing images/MonoveraBackground.png</div>'"" />
+            </div>
+          </div>
+        </div>
       </section>
     </div>
     <footer class='status'>
@@ -761,11 +985,18 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
 </body>
 </html>";
 
-            // JS: adds collapse toggle and keeps SPA-only expand/select behavior
             string webJs = @"(async function () {
   const treeEl = document.getElementById('tree');
-  const tabsEl = document.getElementById('tabs');
-  const viewsEl = document.getElementById('views');
+
+  // Tabs
+  const tabsEl = document.getElementById('mv-tabs');               // scrollable strip
+  const tabsViewport = document.querySelector('.mv-tabs-viewport'); // viewport
+  const prevBtn = document.getElementById('mv-tabPrev');
+  const nextBtn = document.getElementById('mv-tabNext');
+  const viewsEl = document.getElementById('mv-views');
+  const homeView = document.getElementById('mv-home');
+
+  // Splitter
   const mainEl = document.querySelector('.main');
   const splitter = document.getElementById('splitter');
 
@@ -774,7 +1005,7 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
   function setLeftWidth(px){ mainEl.style.setProperty('--left', px + 'px'); splitter.setAttribute('aria-valuenow', String(px)); }
   function clampWidth(px){ const r = mainEl.getBoundingClientRect(); const max = Math.max(MIN_LEFT, r.width - MIN_RIGHT); return Math.max(MIN_LEFT, Math.min(px, max)); }
   function startDrag(e){ e.preventDefault(); const r = mainEl.getBoundingClientRect(); document.body.classList.add('resizing');
-    const move = (ev)=>{ const x = (ev.touches?.[0]?.clientX ?? ev.clientX) - r.left; setLeftWidth(clampWidth(x)); };
+    const move = (ev)=>{ const x = (ev.touches?.[0]?.clientX ?? ev.clientX) - r.left; setLeftWidth(clampWidth(x)); requestAnimationFrame(updateTabScrollButtons); };
     const up = ()=>{ document.body.classList.remove('resizing'); window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); window.removeEventListener('touchmove', move); window.removeEventListener('touchend', up); };
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); window.addEventListener('touchmove', move, { passive:false }); window.addEventListener('touchend', up);
   }
@@ -792,7 +1023,7 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
   }
   refreshStatus(); setInterval(refreshStatus, 10000);
 
-  // --- Tree selection ---
+  // --- Tree selection helpers ---
   let selectedAnchor = null;
   function setSelected(a){ if (selectedAnchor){ selectedAnchor.classList.remove('selected'); selectedAnchor.setAttribute('aria-selected','false'); } selectedAnchor = a; if (a){ a.classList.add('selected'); a.setAttribute('aria-selected','true'); a.scrollIntoView({block:'nearest', inline:'nearest'}); } }
   function highlightTreeSelection(key){ const a = document.querySelector(`#tree a[data-key='${key}']`); if (a) setSelected(a); }
@@ -800,31 +1031,14 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
   function liNode({ key, text, hasChildren, icon }) {
     const li = document.createElement('li');
 
-    const exp = document.createElement('span');
-    exp.className='expander';
-    exp.textContent = hasChildren ? '+' : '';
-    exp.dataset.state='collapsed';
-    exp.style.visibility = hasChildren ? 'visible' : 'hidden';
-
-    const a = document.createElement('a');
-    a.href='#';
-    a.dataset.key=key;
-
+    const exp = document.createElement('span'); exp.className='expander'; exp.textContent = hasChildren ? '+' : ''; exp.dataset.state='collapsed'; exp.style.visibility = hasChildren ? 'visible' : 'hidden';
+    const a = document.createElement('a'); a.href='#'; a.dataset.key=key;
     if (icon) { const img=document.createElement('img'); img.src=icon; img.className='node-icon'; img.alt=''; a.appendChild(img); }
     a.appendChild(document.createTextNode(text));
-
     a.addEventListener('click', (e) => { e.preventDefault(); setSelected(a); openTab(key, text, icon); });
 
     const ul = document.createElement('ul'); ul.style.display='none';
-
-    // Toggle expand/collapse
-    exp.addEventListener('click', async () => {
-      if (exp.dataset.state === 'collapsed') {
-        await expandNode(li, key);
-      } else {
-        collapseNode(li);
-      }
-    });
+    exp.addEventListener('click', async () => { if (exp.dataset.state === 'collapsed') { await expandNode(li, key); } else { collapseNode(li); } });
 
     li.appendChild(exp); li.appendChild(a); li.appendChild(ul);
     return li;
@@ -858,15 +1072,33 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
     roots.forEach(r => treeEl.appendChild(liNode(r)));
   }
 
+  // One-time root expansion on load
+  let expandedRootsOnce = false;
+  async function expandRootLevelOnce() {
+    if (expandedRootsOnce) return;
+    expandedRootsOnce = true;
+    const roots = Array.from(treeEl.children);
+    for (const li of roots) {
+      const a = li.querySelector('a[data-key]');
+      const exp = li.querySelector('span.expander');
+      const key = a?.dataset.key;
+      if (key && exp && exp.dataset.state === 'collapsed' && exp.style.visibility !== 'hidden') {
+        await expandNode(li, key);
+      }
+    }
+  }
+
   // Expand to key and select within SPA tree
   async function expandAndSelect(key) {
     try {
-      if (!treeEl.children.length) await loadRoots();
+      if (!treeEl.children.length) {
+        await loadRoots();
+        await expandRootLevelOnce();
+      }
       const res = await fetch(`/api/tree/path/${encodeURIComponent(key)}`);
       if (!res.ok) return;
       const path = await res.json();
       if (!Array.isArray(path) || !path.length) return;
-
       for (let i = 0; i < path.length; i++) {
         const k = path[i];
         let a = document.querySelector(`#tree a[data-key='${k}']`);
@@ -886,15 +1118,57 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
     } catch {}
   }
 
+  // --- Tabs: scrolling logic (namespaced) ---
+  function updateTabScrollButtons(){
+    const canScroll = tabsEl.scrollWidth > tabsViewport.clientWidth + 1;
+    prevBtn.style.display = canScroll ? 'inline-flex' : 'none';
+    nextBtn.style.display = canScroll ? 'inline-flex' : 'none';
+    prevBtn.disabled = !canScroll || tabsEl.scrollLeft <= 0;
+    nextBtn.disabled = !canScroll || (tabsEl.scrollLeft + tabsViewport.clientWidth >= tabsEl.scrollWidth - 1);
+  }
+  function scrollTabsBy(delta){
+    tabsEl.scrollBy({ left: delta, behavior: 'smooth' });
+  }
+  prevBtn.addEventListener('click', () => scrollTabsBy(-Math.max(200, tabsViewport.clientWidth * 0.6)));
+  nextBtn.addEventListener('click', () => scrollTabsBy(+Math.max(200, tabsViewport.clientWidth * 0.6)));
+  tabsEl.addEventListener('scroll', () => requestAnimationFrame(updateTabScrollButtons));
+  window.addEventListener('resize', () => requestAnimationFrame(updateTabScrollButtons));
+
+  // Keep active tab in view
+  function ensureActiveTabVisible(key){
+    const tab = document.getElementById(makeTabId(key));
+    if (!tab) return;
+    const tabRect = tab.getBoundingClientRect();
+    const viewRect = tabsViewport.getBoundingClientRect();
+    if (tabRect.right > viewRect.right - 8) {
+      const diff = tabRect.right - viewRect.right + 8;
+      tabsEl.scrollBy({ left: diff, behavior: 'smooth' });
+    } else if (tabRect.left < viewRect.left + 8) {
+      const diff = tabRect.left - viewRect.left - 8;
+      tabsEl.scrollBy({ left: diff, behavior: 'smooth' });
+    }
+  }
+
+  // Helpers for views/tabs
   function makeTabId(key){ return 'tab-' + key; }
   function makeViewId(key){ return 'view-' + key; }
+
+  function showHomeIfNoTabs() {
+    if (!tabsEl.children.length) {
+      [...viewsEl.children].forEach(ch => ch.classList.remove('active'));
+      if (homeView) homeView.classList.add('active');
+    }
+  }
 
   function activate(key) {
     const id = makeTabId(key);
     const vid = makeViewId(key);
     [...tabsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === id));
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
+    if (homeView) homeView.classList.remove('active');
     highlightTreeSelection(key);
+    ensureActiveTabVisible(key);
+    updateTabScrollButtons();
   }
 
   function getIconForKey(key){
@@ -902,47 +1176,96 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
     return img ? img.src : null;
   }
 
-  async function openTab(key, title, icon) {
+  async function openTab(key, title, icon, { activateTab = true } = {}) {
     const tabId = makeTabId(key);
     const viewId = makeViewId(key);
 
     if (!document.getElementById(tabId)) {
       const tab = document.createElement('div');
-      tab.className='tab'; tab.id=tabId; tab.dataset.key=key; tab.title=title;
+      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title=title;
 
       const iconSrc = icon || getIconForKey(key);
       if (iconSrc){ const img=document.createElement('img'); img.src=iconSrc; img.className='node-icon'; img.alt=''; tab.appendChild(img); }
-
-      const keySpan = document.createElement('span'); keySpan.className='tab-key'; keySpan.textContent='[' + key + ']'; tab.appendChild(keySpan);
+      const keySpan = document.createElement('span'); keySpan.className='mv-tab-key'; keySpan.textContent='[' + key + ']'; tab.appendChild(keySpan);
 
       const close = document.createElement('span');
-      close.className='close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
+      close.className='mv-tab-close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
       close.addEventListener('click', (e) => {
         e.stopPropagation();
         const t=document.getElementById(tabId), v=document.getElementById(viewId);
-        if (t) tabsEl.removeChild(t); if (v) viewsEl.removeChild(v);
-        const last=tabsEl.lastElementChild; if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
+        if (t) tabsEl.removeChild(t);
+        if (v) viewsEl.removeChild(v);
+        const last=tabsEl.lastElementChild;
+        updateTabScrollButtons();
+        if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
+        else { showHomeIfNoTabs(); }
       });
 
       tab.addEventListener('click', () => { activate(key); });
+      tab.appendChild(close);
+      tabsEl.appendChild(tab);
 
-      tab.appendChild(close); tabsEl.appendChild(tab);
-
-      const view = document.createElement('div'); view.className='view'; view.id=viewId;
+      const view = document.createElement('div'); view.className='mv-view'; view.id=viewId;
       const iframe = document.createElement('iframe'); iframe.setAttribute('title', key); view.appendChild(iframe);
       viewsEl.appendChild(view);
 
       try {
+        // Set loading page first
+        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading...</div></body></html>`;
         const html = await (await fetch(`/api/issue/${encodeURIComponent(key)}/html`)).text();
         iframe.srcdoc = html;
       } catch {
         iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load ${key}</div></body></html>`;
       }
     }
-    activate(key);
+    if (activateTab) activate(key);
   }
 
-  // Listen issue iframes: open tab AND expand/select in SPA tree (no desktop calls)
+  // Special: open Recent Updates tab (HTML provided by server)
+  async function openRecentUpdatesTab({ days = 14, activateTab = true } = {}) {
+    const key = 'RECENT-UPDATES';
+    const tabId = makeTabId(key);
+    const viewId = makeViewId(key);
+    if (!document.getElementById(tabId)) {
+      const tab = document.createElement('div');
+      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title='Recent Updates!';
+      const keySpan = document.createElement('span'); keySpan.className='mv-tab-key'; keySpan.textContent='[Recent Updates]';
+      tab.appendChild(keySpan);
+
+      const close = document.createElement('span');
+      close.className='mv-tab-close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
+      close.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const t=document.getElementById(tabId), v=document.getElementById(viewId);
+        if (t) tabsEl.removeChild(t);
+        if (v) viewsEl.removeChild(v);
+        const last=tabsEl.lastElementChild;
+        updateTabScrollButtons();
+        if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
+        else { showHomeIfNoTabs(); }
+      });
+
+      tab.addEventListener('click', () => { activate(key); });
+      tab.appendChild(close);
+      tabsEl.appendChild(tab);
+
+      const view = document.createElement('div'); view.className='mv-view'; view.id=viewId;
+      const iframe = document.createElement('iframe'); iframe.setAttribute('title', 'Recent Updates'); view.appendChild(iframe);
+      viewsEl.appendChild(view);
+
+      try {
+        // Show loading placeholder first
+        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading Recent Updates...</div></body></html>`;
+        const html = await (await fetch(`/api/recent/updated/html?days=${encodeURIComponent(days)}`)).text();
+        iframe.srcdoc = html;
+      } catch {
+        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load Recent Updates</div></body></html>`;
+      }
+    }
+    if (activateTab) activate(key);
+  }
+
+  // Messages from iframes: open tab AND expand/select tree
   window.addEventListener('message', (ev) => {
     try {
       const d = ev.data || {};
@@ -956,6 +1279,12 @@ html, body {{ height: 100%; margin: 0; }} body {{ overflow: hidden; }}
   });
 
   await loadRoots();
+  await expandRootLevelOnce();
+
+  // Auto-open Recent Updates (same behavior as desktop)
+  await openRecentUpdatesTab({ days: 14, activateTab: true });
+
+  updateTabScrollButtons();
 })();";
 
             Directory.CreateDirectory(wwwroot);
