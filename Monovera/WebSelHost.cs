@@ -630,7 +630,7 @@ namespace Monovera
             }
             catch { css = ""; }
 
-            // index.html with embedded CSS
+            // index.html with embedded CSS + draggable splitter
             string indexHtml = $@"<!DOCTYPE html>
 <html>
 <head>
@@ -643,10 +643,31 @@ namespace Monovera
 html, body {{ height: 100%; margin: 0; }}
 body {{ overflow: hidden; }}
 .layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }}
-.main {{ display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
+
+/* 3-column grid: left (tree), splitter, right (content) */
+.main {{
+  --left: 33%;
+  display: grid;
+  grid-template-columns: var(--left) 6px 1fr;
+  gap: 8px;
+  padding: 8px;
+  box-sizing: border-box;
+  min-height: 0;
+}}
+
+/* Splitter (draggable) */
+.splitter {{
+  grid-column: 2;
+  background: linear-gradient(to right, transparent, #cbd8ea, transparent);
+  cursor: col-resize;
+  user-select: none;
+}}
+.splitter:hover {{ background: linear-gradient(to right, transparent, #b6c9e4, transparent); }}
+body.resizing * {{ cursor: col-resize !important; user-select: none !important; }}
 
 /* Sidebar: make tree area scroll, not the page */
 .sidebar {{
+  grid-column: 1;
   border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff;
   display: flex; flex-direction: column; min-height: 0; overflow: hidden;
 }}
@@ -677,7 +698,10 @@ body {{ overflow: hidden; }}
 .node-icon {{ width: 18px; height: 18px; vertical-align: middle; border-radius: 3px; }}
 
 /* Right side: prevent it from forcing page scroll */
-.workspace {{ display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
+.workspace {{
+  grid-column: 3;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+}}
 .tabs {{ display: flex; gap: 4px; border-bottom: 1px solid #b3d4f6; padding: 6px 6px 0 6px; background: #f2faff; }}
 .tab {{ background: #ffffff; border: 1px solid #b3d4f6; border-bottom: none; border-radius: 6px 6px 0 0; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 8px; }}
 .tab.active {{ background: #fff; color: #1565c0; font-weight: 600; border-bottom: 2px solid #1565c0; }}
@@ -721,6 +745,7 @@ body {{ overflow: hidden; }}
       <aside class='sidebar'>
         <ul id='tree'></ul>
       </aside>
+      <div id='splitter' class='splitter' role='separator' aria-orientation='vertical' tabindex='0' title='Drag to resize'></div>
       <section class='workspace'>
         <div id='tabs' class='tabs'></div>
         <div id='views' class='views'></div>
@@ -737,12 +762,94 @@ body {{ overflow: hidden; }}
 </body>
 </html>";
 
-            // JS with close aria-label (unchanged otherwise)
+            // JS: bidirectional selection sync + draggable splitter with persistence
             string webJs = @"(async function () {
   const treeEl = document.getElementById('tree');
   const tabsEl = document.getElementById('tabs');
   const viewsEl = document.getElementById('views');
+  const mainEl = document.querySelector('.main');
+  const splitter = document.getElementById('splitter');
 
+  // --- Resizer setup ---
+  const MIN_LEFT = 220;   // px
+  const MIN_RIGHT = 360;  // px
+
+  function setLeftWidth(px) {
+    mainEl.style.setProperty('--left', px + 'px');
+    splitter.setAttribute('aria-valuenow', String(px));
+  }
+  function saveLeftWidth(px) {
+    try { localStorage.setItem('treeWidthPx', String(px)); } catch {}
+  }
+  function loadLeftWidth() {
+    try { return parseInt(localStorage.getItem('treeWidthPx') || '0', 10) || 0; } catch { return 0; }
+  }
+  function clampWidth(px) {
+    const rect = mainEl.getBoundingClientRect();
+    const max = Math.max(MIN_LEFT, rect.width - MIN_RIGHT);
+    return Math.max(MIN_LEFT, Math.min(px, max));
+  }
+  function startDrag(e) {
+    e.preventDefault();
+    const rect = mainEl.getBoundingClientRect();
+    document.body.classList.add('resizing');
+
+    const move = (ev) => {
+      const clientX = (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
+      const x = clientX - rect.left;
+      const w = clampWidth(x);
+      setLeftWidth(w);
+    };
+    const up = () => {
+      document.body.classList.remove('resizing');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.removeEventListener('touchmove', move);
+      window.removeEventListener('touchend', up);
+      const val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
+      const px = parseInt(val, 10);
+      if (!Number.isNaN(px)) saveLeftWidth(px);
+    };
+
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    window.addEventListener('touchmove', move, { passive: false });
+    window.addEventListener('touchend', up);
+  }
+
+  splitter.addEventListener('mousedown', startDrag);
+  splitter.addEventListener('touchstart', startDrag, { passive: false });
+
+  // Keyboard resizing on splitter
+  splitter.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 32 : 16;
+    let val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
+    let px = parseInt(val, 10);
+    if (Number.isNaN(px)) px = 360;
+    if (e.key === 'ArrowLeft') { px = clampWidth(px - step); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { px = clampWidth(px + step); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
+    if (e.key === 'Home') { px = clampWidth(MIN_LEFT); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
+    if (e.key === 'End') { const rect = mainEl.getBoundingClientRect(); px = clampWidth(rect.width - MIN_RIGHT); setLeftWidth(px); saveLeftWidth(px); e.preventDefault(); }
+  });
+
+  // Restore saved width or default to ~33%
+  function initLeftWidth() {
+    const rect = mainEl.getBoundingClientRect();
+    let px = loadLeftWidth();
+    if (!px) px = clampWidth(Math.round(rect.width * 0.33));
+    setLeftWidth(px);
+  }
+  window.addEventListener('resize', () => {
+    const rect = mainEl.getBoundingClientRect();
+    const val = getComputedStyle(mainEl).getPropertyValue('--left').trim();
+    let px = parseInt(val, 10);
+    if (Number.isNaN(px)) return;
+    const clamped = clampWidth(px);
+    if (clamped !== px) { setLeftWidth(clamped); saveLeftWidth(clamped); }
+  });
+  initLeftWidth();
+
+  // --- Tree selection sync ---
   let selectedAnchor = null;
   function setSelected(a) {
     if (selectedAnchor) {
@@ -796,8 +903,8 @@ body {{ overflow: hidden; }}
 
     a.addEventListener('click', (e) => {
       e.preventDefault();
-      setSelected(a);
-      openTab(key, text, icon);
+      setSelected(a);               // select in tree
+      openTab(key, text, icon);     // open/activate tab
     });
 
     const ul = document.createElement('ul');
@@ -839,7 +946,7 @@ body {{ overflow: hidden; }}
     const vid = makeViewId(key);
     [...tabsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === id));
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
-    highlightTreeSelection(key);
+    highlightTreeSelection(key); // sync tree highlight on any activate
   }
 
   async function openTab(key, title, icon) {
@@ -850,7 +957,7 @@ body {{ overflow: hidden; }}
       const tab = document.createElement('div');
       tab.className = 'tab';
       tab.id = tabId;
-      tab.dataset.key = key;
+      tab.dataset.key = key;   // carry key for click syncing
       tab.title = title;
 
       if (icon) {
@@ -884,6 +991,7 @@ body {{ overflow: hidden; }}
         }
       });
 
+      // Clicking a tab header should activate and select in tree
       tab.addEventListener('click', () => {
         activate(key);
       });
