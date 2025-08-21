@@ -32,6 +32,7 @@ using ComboBox = System.Windows.Forms.ComboBox;
 using Font = System.Drawing.Font;
 using Image = System.Drawing.Image;
 using System.Drawing.Imaging;
+using Application = System.Windows.Forms.Application;
 
 namespace Monovera
 {
@@ -40,6 +41,8 @@ namespace Monovera
     /// </summary>
     public partial class frmMain : Form
     {
+        private WebSelfHost webHost;
+
         public static bool OFFLINE_MODE = true;
         bool editorMode = false;
         private MouseButtons lastTreeMouseButton = MouseButtons.Left;
@@ -481,6 +484,12 @@ namespace Monovera
             // Enable keyboard shortcuts
             this.KeyPreview = true;
             this.KeyDown += frmMain_KeyDown;
+
+            //Kill web server
+            Application.ApplicationExit += (s, e) =>
+            {
+                try { webHost?.StopAsync().GetAwaiter().GetResult(); } catch { }
+            };
         }
 
         private TreeNode draggedNode;
@@ -2706,6 +2715,23 @@ namespace Monovera
 
             // After tree loading, start sync status timer
             syncStatusTimer = new System.Threading.Timer(CheckSyncStatusAsync, null, TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
+
+            // Start the self-hosted web server
+            try
+            {
+                webHost = new WebSelfHost(5178);
+                await webHost.StartAsync();
+
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = webHost.BaseUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
+            }
         }
 
         /// <summary>
