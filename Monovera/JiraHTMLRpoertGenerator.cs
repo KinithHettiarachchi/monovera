@@ -293,8 +293,7 @@ public class JiraHtmlReportGenerator
             var doc = new HtmlAgilityPack.HtmlDocument();
             doc.LoadHtml(html);
 
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string attachmentsRoot = Path.Combine(baseDir, "attachments");
+            string attachmentsRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "attachments");
 
             string ToAbs(string value)
             {
@@ -308,8 +307,7 @@ public class JiraHtmlReportGenerator
                 if (!v.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase))
                     return null;
 
-                string tail = v.Substring("attachments/".Length)
-                               .Replace('/', Path.DirectorySeparatorChar);
+                string tail = v.Substring("attachments/".Length).Replace('/', Path.DirectorySeparatorChar);
                 string abs = Path.GetFullPath(Path.Combine(attachmentsRoot, tail));
                 string rootFull = Path.GetFullPath(attachmentsRoot);
                 if (!abs.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
@@ -341,7 +339,6 @@ public class JiraHtmlReportGenerator
                     node.SetAttributeValue(attrName, data);
             }
 
-            // Process src, href, data-src, data-filepath
             foreach (var n in doc.DocumentNode.SelectNodes("//*[@src]") ?? Enumerable.Empty<HtmlNode>())
                 ProcessAttr(n, "src");
             foreach (var n in doc.DocumentNode.SelectNodes("//*[@href]") ?? Enumerable.Empty<HtmlNode>())

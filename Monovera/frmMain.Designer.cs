@@ -58,6 +58,7 @@
             toolStripStatusLabel7 = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
+            toolStripSeparator1 = new ToolStripSeparator();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
@@ -176,7 +177,7 @@
             // 
             // mnuAI
             // 
-            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext });
+            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext, toolStripSeparator1 });
             mnuAI.Font = new Font("Microsoft Sans Serif", 9.75F);
             mnuAI.ImageTransparentColor = Color.Magenta;
             mnuAI.Name = "mnuAI";
@@ -292,6 +293,11 @@
             // 
             toolTip1.ToolTipIcon = ToolTipIcon.Info;
             // 
+            // toolStripSeparator1
+            // 
+            toolStripSeparator1.Name = "toolStripSeparator1";
+            toolStripSeparator1.Size = new Size(288, 6);
+            // 
             // frmMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -344,5 +350,6 @@
         private ToolStripStatusLabel toolStripStatusLabel5;
         private ToolStripStatusLabel toolStripStatusLabel7;
         private ToolStripStatusLabel lblSyncStatus;
+        private ToolStripSeparator toolStripSeparator1;
     }
 }

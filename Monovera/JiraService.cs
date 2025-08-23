@@ -24,6 +24,20 @@ using static Monovera.frmMain;
 /// </summary>
 public class JiraService
 {
+    private static readonly string DataDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data");
+    private static readonly string AttachmentsDir = Path.Combine(DataDir, "attachments");
+    private static readonly string DatabasePath = Path.Combine(DataDir, "monovera.sqlite");
+
+    static JiraService()
+    {
+        try
+        {
+            Directory.CreateDirectory(DataDir);
+            Directory.CreateDirectory(AttachmentsDir);
+        }
+        catch { /* best effort */ }
+    }
+
     /// <summary>
     /// Atlassian.Jira SDK client instance used for all SDK-based operations.
     /// </summary>
@@ -50,6 +64,7 @@ public class JiraService
     /// <param name="jiraUrl">Base URL of the Jira instance.</param>
     /// <param name="email">Email associated with Jira account.</param>
     /// <param name="apiToken">API token generated for the Jira account.</param>
+    /// 
     public JiraService(string jiraUrl, string email, string apiToken)
     {
         this.username = email;
@@ -194,10 +209,9 @@ public class JiraService
     int maxParallelism = 250,
     string updateType = "Complete")
     {
-        string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-        string connStr = $"Data Source={dbPath};";
+        var connStr = $"Data Source={DatabasePath};";
 
-        bool dbExists = File.Exists(dbPath);
+        bool dbExists = File.Exists(DatabasePath);
         bool tableEmpty = true;
 
         // Ensure DB and tables exist, and set WAL mode for concurrency
@@ -430,10 +444,10 @@ public class JiraService
                                 }
 
                                 // Handle attachments: ensure directories exist, then download and overwrite files (no deletion)
+                                // Handle attachments: ensure directories exist, then download and overwrite files (no deletion)
                                 if (detailJson["fields"]?["attachment"] is JArray attachArray)
                                 {
-                                    string appDir = AppDomain.CurrentDomain.BaseDirectory;
-                                    string attachmentsRoot = Path.Combine(appDir, "attachments");
+                                    string attachmentsRoot = AttachmentsDir;
                                     string issueDir = Path.Combine(attachmentsRoot, key);
 
                                     // Ensure directories exist (do not delete existing content) ONLY if there are attachments
@@ -498,6 +512,8 @@ public class JiraService
                                     {
                                         attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                                     }
+
+                                    // use attachmentsHtml variable below (already present in your method)
                                 }
                                 else
                                 {
@@ -776,7 +792,7 @@ public class JiraService
             if (relPaths == null || relPaths.Count == 0)
                 return "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
 
-            string attachmentsRoot = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "attachments");
+            string attachmentsRoot = AttachmentsDir;
             var sb = new StringBuilder();
             sb.AppendLine(@"
     <div class='attachments-strip-wrapper'>
@@ -879,7 +895,6 @@ public class JiraService
 ");
             return sb.ToString();
         }
-
         static bool IsImageExtension(string fileName)
         {
             string ext = Path.GetExtension(fileName).ToLowerInvariant();
@@ -959,14 +974,12 @@ public class JiraService
 
     private void CleanupAttachmentsFolderFromDbReferences(string connStr)
     {
-        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-        string attachmentsRoot = Path.Combine(baseDir, "attachments");
+        string attachmentsRoot = AttachmentsDir;
         if (!Directory.Exists(attachmentsRoot))
             return;
 
         var keepSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // 1) Collect all referenced "attachments/..." paths from DB
         using (var conn = new SqliteConnection(connStr))
         {
             conn.Open();
@@ -995,39 +1008,28 @@ public class JiraService
             }
         }
 
-        // 2) Delete any file under attachmentsRoot not referenced
         foreach (var file in Directory.EnumerateFiles(attachmentsRoot, "*", SearchOption.AllDirectories))
         {
-            // If keepSet empty, avoid nuking everything by mistake
             if (keepSet.Count == 0) break;
-
             if (!keepSet.Contains(file))
             {
-                try { File.Delete(file); } catch { /* ignore */ }
+                try { File.Delete(file); } catch { }
             }
         }
 
-        // 3) Remove empty directories
         PruneEmptyDirectories(attachmentsRoot);
 
-        // Helper to resolve a relative "attachments/..." into absolute under attachments root
         static string SafeAbsUnderAttachments(string attachmentsRoot, string relativeUrl)
         {
             if (string.IsNullOrWhiteSpace(relativeUrl)) return null;
-
-            // Normalize prefix
             string rel = relativeUrl.Trim();
             if (rel.StartsWith("./", StringComparison.Ordinal)) rel = rel.Substring(2);
             if (!rel.StartsWith("attachments/", StringComparison.OrdinalIgnoreCase))
                 return null;
 
-            // Strip leading "attachments/"
             string tail = rel.Substring("attachments/".Length);
-
-            // URL decode and normalize separators
             tail = WebUtility.UrlDecode(tail).Replace('/', Path.DirectorySeparatorChar);
 
-            // Compose absolute path and ensure it is within attachmentsRoot
             string abs = Path.GetFullPath(Path.Combine(attachmentsRoot, tail));
             string rootFull = Path.GetFullPath(attachmentsRoot);
             if (!abs.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase))
@@ -1439,9 +1441,10 @@ public class JiraService
     /// <returns>Configured HttpClient instance.</returns>
     private HttpClient GetJiraClient()
     {
-        var client = new HttpClient();
-        var byteArray = System.Text.Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}");
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+        var client = new HttpClient { BaseAddress = new Uri(jiraBaseUrl) };
+        var bytes = Encoding.ASCII.GetBytes($"{username}:{apiToken}");
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(bytes));
+        client.DefaultRequestHeaders.Accept.Clear();
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
     }

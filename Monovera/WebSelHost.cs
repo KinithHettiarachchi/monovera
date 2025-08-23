@@ -33,16 +33,22 @@ namespace Monovera
         public async Task StartAsync()
         {
             var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            var wwwroot = Path.Combine(baseDir, "wwwroot");
-            Directory.CreateDirectory(wwwroot);
 
-            await EnsureWebAssetsAsync(wwwroot);
+            // WebAppRoot under app base
+            var WebAppRoot = Path.Combine(baseDir, "WebAppRoot");
+            Directory.CreateDirectory(WebAppRoot);
+
+            // Ensure Data/attachments
+            var dataDir = Path.Combine(baseDir, "Data");
+            var attachmentsPhysical = Path.Combine(dataDir, "attachments");
+            Directory.CreateDirectory(attachmentsPhysical);
+
+            await EnsureWebAssetsAsync(WebAppRoot);
 
             webHost = new WebHostBuilder()
-                // Listen on all interfaces for the configured port (reachable from other machines)
                 .UseKestrel(options =>
                 {
-                    options.ListenAnyIP(port); // e.g. http://0.0.0.0:8090
+                    options.ListenAnyIP(port);
                 })
                 .UseContentRoot(baseDir)
                 .ConfigureServices(services =>
@@ -55,11 +61,11 @@ namespace Monovera
                     app.UseDefaultFiles(new DefaultFilesOptions
                     {
                         DefaultFileNames = new List<string> { "index.html" },
-                        FileProvider = new PhysicalFileProvider(wwwroot)
+                        FileProvider = new PhysicalFileProvider(WebAppRoot)
                     });
                     app.UseStaticFiles(new StaticFileOptions
                     {
-                        FileProvider = new PhysicalFileProvider(wwwroot),
+                        FileProvider = new PhysicalFileProvider(WebAppRoot),
                         RequestPath = ""
                     });
 
@@ -73,12 +79,12 @@ namespace Monovera
                         });
                     }
 
-                    var attachmentsDir = Path.Combine(baseDir, "attachments");
-                    if (Directory.Exists(attachmentsDir))
+                    // Serve attachments from Data/attachments
+                    if (Directory.Exists(attachmentsPhysical))
                     {
                         app.UseStaticFiles(new StaticFileOptions
                         {
-                            FileProvider = new PhysicalFileProvider(attachmentsDir),
+                            FileProvider = new PhysicalFileProvider(attachmentsPhysical),
                             RequestPath = "/attachments"
                         });
                     }
@@ -1040,17 +1046,17 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
         {
             try
             {
-                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "monovera.sqlite");
                 string connStr = $"Data Source={dbPath};";
                 using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
                 conn.Open();
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue";
                 var result = cmd.ExecuteScalar();
-                if (result != DBNull.Value && result != null)
+                if (result != DBNull.Value && result != null &&
+                    DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
                 {
-                    if (DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                        return dt.ToString("yyyy-MM-dd HH:mm:ss");
+                    return dt.ToString("yyyy-MM-dd HH:mm:ss");
                 }
                 return null;
             }
@@ -1110,8 +1116,8 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             }
         }
 
-        // Write index.html (embedded monovera.css) and monovera.web.js to wwwroot
-        private static async Task EnsureWebAssetsAsync(string wwwroot)
+        // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
+        private static async Task EnsureWebAssetsAsync(string WebAppRoot)
         {
             string css = "";
             try
@@ -1563,9 +1569,9 @@ body {{ overflow: hidden; }}
   updateTabScrollButtons();
 })();";
 
-            Directory.CreateDirectory(wwwroot);
-            await File.WriteAllTextAsync(Path.Combine(wwwroot, "index.html"), indexHtml, Encoding.UTF8);
-            await File.WriteAllTextAsync(Path.Combine(wwwroot, "monovera.web.js"), webJs, Encoding.UTF8);
+            Directory.CreateDirectory(WebAppRoot);
+            await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
+            await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
         }
 
     }

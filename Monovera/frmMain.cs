@@ -41,6 +41,10 @@ namespace Monovera
     /// </summary>
     public partial class frmMain : Form
     {
+        public static readonly string DataDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data");
+        public static readonly string AttachmentsDir = Path.Combine(DataDir, "attachments");
+        public static readonly string DatabasePath = Path.Combine(DataDir, "monovera.sqlite");
+
         private WebSelfHost webHost;
 
         public static bool OFFLINE_MODE = true;
@@ -320,23 +324,49 @@ namespace Monovera
             notifyIcon.BalloonTipText = message;
             notifyIcon.ShowBalloonTip(5000); // Show for 5 seconds
         }
-
         private static string? GetMaxUpdatedTimeFromDb()
         {
-            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-            string connStr = $"Data Source={dbPath};";
+            string connStr = $"Data Source={DatabasePath};";
             using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
             conn.Open();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue";
             var result = cmd.ExecuteScalar();
-            if (result != DBNull.Value && result != null)
+            if (result != DBNull.Value && result != null &&
+                DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
             {
-                // Assume UPDATEDTIME is stored as "yyyyMMddHHmmss"
-                if (DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                    return dt.ToString("yyyy-MM-dd HH:mm:ss");
+                return dt.ToString("yyyy-MM-dd HH:mm:ss");
             }
             return null;
+        }
+
+        private static void EnsureDataLayout()
+        {
+            try
+            {
+                Directory.CreateDirectory(DataDir);
+                Directory.CreateDirectory(AttachmentsDir);
+
+                // Migrate old DB if found
+                var oldDb = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
+                if (File.Exists(oldDb) && !File.Exists(DatabasePath))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
+                    File.Move(oldDb, DatabasePath);
+                }
+
+                // Migrate old attachments folder if found
+                var oldAttachments = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "attachments");
+                if (Directory.Exists(oldAttachments) && !Directory.Exists(AttachmentsDir))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(AttachmentsDir)!);
+                    Directory.Move(oldAttachments, AttachmentsDir);
+                }
+            }
+            catch
+            {
+                // Best-effort migration; ignore failures
+            }
         }
 
         /// <summary>
@@ -409,9 +439,12 @@ namespace Monovera
             appDir = AppDomain.CurrentDomain.BaseDirectory;
             tempFolder = Path.Combine(appDir, "temp");
 
+            EnsureDataLayout();
+
             Directory.CreateDirectory(tempFolder);
             cssPath = Path.Combine(appDir, "monovera.css");
             cssHref = new Uri(cssPath).AbsoluteUri;
+            
             if (!File.Exists(cssPath))
             {
                 cssHref = "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
@@ -675,10 +708,8 @@ namespace Monovera
         {
             try
             {
-                // 1. Get max UPDATEDTIME for each project from DB
                 var projectMaxTimes = new Dictionary<string, DateTime>();
-                string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-                string connStr = $"Data Source={dbPath};";
+                string connStr = $"Data Source={DatabasePath};";
                 using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
                 {
                     conn.Open();
@@ -690,16 +721,15 @@ namespace Monovera
                             cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTNAME = @pcode";
                             cmd.Parameters.AddWithValue("@pcode", projectKey);
                             var result = cmd.ExecuteScalar();
-                            if (result != DBNull.Value && result != null)
+                            if (result != DBNull.Value && result != null &&
+                                DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
                             {
-                                if (DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                                    projectMaxTimes[projectKey] = dt;
+                                projectMaxTimes[projectKey] = dt;
                             }
                         }
                     }
                 }
 
-                // 2. For each project, query JIRA for issues created/updated after max UPDATEDTIME
                 int totalUpdates = 0;
                 foreach (var kvp in projectMaxTimes)
                 {
@@ -707,21 +737,18 @@ namespace Monovera
                     DateTime maxTime = kvp.Value;
                     string jql = $"project = \"{projectKey}\" AND updated >= \"{maxTime:yyyy-MM-dd HH:mm}\"";
                     var issues = await jiraService.SearchIssuesAsync(jql);
-                    foreach (var issue in issues ?? Enumerable.Empty<Issue>())
+                    foreach (var issue in issues ?? Enumerable.Empty<Atlassian.Jira.Issue>())
                     {
                         if (issue.Updated != null)
                         {
                             string issueUpdatedStr = issue.Updated.Value.ToString("yyyyMMddHHmmss");
                             string maxTimeStr = maxTime.ToString("yyyyMMddHHmmss");
                             if (string.Compare(issueUpdatedStr, maxTimeStr, StringComparison.Ordinal) > 0)
-                            {
                                 totalUpdates++;
-                            }
                         }
                     }
                 }
 
-                // 3. Update lblSyncStatus on UI thread
                 this.Invoke(() =>
                 {
                     if (totalUpdates > 0)
@@ -738,7 +765,7 @@ namespace Monovera
             }
             catch
             {
-                // Optionally handle/log errors
+                // ignore
             }
         }
 
@@ -4067,7 +4094,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 var doc = new HtmlAgilityPack.HtmlDocument();
                 doc.LoadHtml(html);
 
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string dataDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data");
 
                 static bool IsRelativeAttachment(string s)
                     => !string.IsNullOrWhiteSpace(s)
@@ -4085,21 +4112,21 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                 {
                     var src = node.GetAttributeValue("src", null);
                     if (IsRelativeAttachment(src))
-                        node.SetAttributeValue("src", ToFileUri(baseDir, src));
+                        node.SetAttributeValue("src", ToFileUri(dataDir, src));
                 }
 
                 foreach (var node in doc.DocumentNode.SelectNodes("//*[@href]") ?? Enumerable.Empty<HtmlNode>())
                 {
                     var href = node.GetAttributeValue("href", null);
                     if (IsRelativeAttachment(href))
-                        node.SetAttributeValue("href", ToFileUri(baseDir, href));
+                        node.SetAttributeValue("href", ToFileUri(dataDir, href));
                 }
 
                 foreach (var node in doc.DocumentNode.SelectNodes("//*[@data-src]") ?? Enumerable.Empty<HtmlNode>())
                 {
                     var ds = node.GetAttributeValue("data-src", null);
                     if (IsRelativeAttachment(ds))
-                        node.SetAttributeValue("data-src", ToFileUri(baseDir, ds));
+                        node.SetAttributeValue("data-src", ToFileUri(dataDir, ds));
                 }
 
                 return doc.DocumentNode.InnerHtml;
@@ -4294,8 +4321,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
             if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(fieldName))
                 return null;
 
-            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-            string connStr = $"Data Source={dbPath};";
+            string connStr = $"Data Source={DatabasePath};";
             using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
             conn.Open();
             using var cmd = conn.CreateCommand();
@@ -5662,8 +5688,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             var imgNodes = doc.DocumentNode.SelectNodes("//img[@src]");
             if (imgNodes == null || imgNodes.Count == 0) return;
 
-            string appDir = AppDomain.CurrentDomain.BaseDirectory;
-            string attachmentsRoot = Path.Combine(appDir, "attachments");
+            string attachmentsRoot = AttachmentsDir;
             string issueDir = Path.Combine(attachmentsRoot, issueKey);
             string descDir = Path.Combine(issueDir, "desc");
 
@@ -5671,7 +5696,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             Directory.CreateDirectory(issueDir);
             Directory.CreateDirectory(descDir);
 
-            // For reuse of already-downloaded attachments: look for files starting with {id}_...
             string TryReuseAttachmentById(string id)
             {
                 try
@@ -5689,7 +5713,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 return null;
             }
 
-            // Download helper
             string DownloadToDesc(string absoluteUrl, string candidateFileName, string idHint = null)
             {
                 try
@@ -5701,7 +5724,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     using var resp = client.GetAsync(absoluteUrl).Result;
                     resp.EnsureSuccessStatusCode();
 
-                    // Determine file name
                     string fileName = null;
                     if (resp.Content.Headers.ContentDisposition?.FileName != null)
                         fileName = resp.Content.Headers.ContentDisposition.FileName.Trim('"');
@@ -5740,7 +5762,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 if (string.IsNullOrWhiteSpace(src))
                     continue;
 
-                // 1) data:image/*;base64,...
                 if (src.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
                 {
                     try
@@ -5760,36 +5781,20 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                         string rel = $"attachments/{issueKey}/desc/{fileName}";
                         img.SetAttributeValue("src", rel);
                     }
-                    catch
-                    {
-                        // leave as-is on failure
-                    }
+                    catch { }
                     continue;
                 }
 
-                // Normalize to absolute if Jira-relative
                 string absolute = src;
                 if (src.StartsWith("/", StringComparison.OrdinalIgnoreCase))
-                {
                     absolute = jiraBaseUrl.TrimEnd('/') + src;
-                }
 
-                // 2) /rest/api/3/attachment/content/{id}
                 var mContent = Regex.Match(absolute, @"/attachment/content/(?<id>\d+)", RegexOptions.IgnoreCase);
                 if (mContent.Success)
                 {
                     string id = mContent.Groups["id"].Value;
-
-                    // Reuse if we already downloaded this id under attachments/<issueKey>
                     var reused = TryReuseAttachmentById(id);
-                    string finalPath = reused;
-
-                    if (string.IsNullOrEmpty(finalPath))
-                    {
-                        // No reuse possible; download now
-                        finalPath = DownloadToDesc(absolute, null, id);
-                    }
-
+                    string finalPath = reused ?? DownloadToDesc(absolute, null, id);
                     if (!string.IsNullOrEmpty(finalPath))
                     {
                         string rel = $"attachments/{issueKey}/desc/{Path.GetFileName(finalPath)}";
@@ -5798,7 +5803,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     continue;
                 }
 
-                // 3) /secure/attachment/{id}/{name}
                 var mSecure = Regex.Match(absolute, @"/secure/attachment/(?<id>\d+)/(?<name>[^/?#]+)", RegexOptions.IgnoreCase);
                 if (mSecure.Success)
                 {
@@ -5806,14 +5810,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     string name = SanitizeFileName(WebUtility.UrlDecode(mSecure.Groups["name"].Value ?? "image"));
 
                     var reused = TryReuseAttachmentById(id);
-                    string finalPath = reused;
-
-                    if (string.IsNullOrEmpty(finalPath))
-                    {
-                        string candidate = $"{id}_{name}";
-                        finalPath = DownloadToDesc(absolute, candidate, id);
-                    }
-
+                    string finalPath = reused ?? DownloadToDesc(absolute, $"{id}_{name}", id);
                     if (!string.IsNullOrEmpty(finalPath))
                     {
                         string rel = $"attachments/{issueKey}/desc/{Path.GetFileName(finalPath)}";
@@ -5822,7 +5819,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     continue;
                 }
 
-                // 4) Other absolute URLs under Jira host: attempt to download; otherwise keep as-is
                 if (Uri.TryCreate(absolute, UriKind.Absolute, out var uri) && string.Equals(uri.Host, jiraHost, StringComparison.OrdinalIgnoreCase))
                 {
                     string candidate = Path.GetFileName(uri.LocalPath);
@@ -5835,7 +5831,6 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                         img.SetAttributeValue("src", rel);
                     }
                 }
-                // else: external hosts left as-is
             }
 
             static string SafeGetHost(string url)

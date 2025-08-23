@@ -1,5 +1,4 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows10.0.17763.0</TargetFramework>
@@ -7,6 +6,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>Monovera.ico</ApplicationIcon>
+
+    <!-- Ensure all referenced assemblies are copied to output -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+
+    <!-- Keep RID so native assets (e_sqlite3, WebView2Loader) are copied, but avoid \win-x64 in the output path -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,7 +41,7 @@
     <PackageReference Include="Microsoft.Extensions.FileProviders.Physical" Version="9.0.8" />
     <PackageReference Include="Microsoft.Graph" Version="5.91.0" />
     <PackageReference Include="Microsoft.NETCore.Targets" Version="5.0.0" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3351.48" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3405.78" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="SharpSvn" Version="1.14005.343" />
     <PackageReference Include="SQLite" Version="3.13.0" />
@@ -75,7 +81,38 @@
   </ItemGroup>
   
   <ItemGroup>
-   <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
+  
+  <ItemGroup>
+  <_OutDlls Include="$(_Out)**\*.dll" Exclude="$(_Out)$(AssemblyName).dll;$(_Out)Libraries\**\*.*;$(_Out)SQLitePCLRaw.batteries_v2.dll;$(_Out)SQLitePCLRaw.core.dll" />
+</ItemGroup>
+
+  <!-- Move all dependency DLLs into bin\...\Libraries\ after Build, keeping Monovera.dll at root -->
+  <Target Name="RelocateDependenciesToLibraries" AfterTargets="Build">
+    <PropertyGroup>
+      <_Out>$(OutputPath)</_Out>
+    </PropertyGroup>
+    <ItemGroup>
+      <!-- All DLLs in output except main assembly and anything already under Libraries -->
+      <_OutDlls Include="$(_Out)**\*.dll" Exclude="$(_Out)$(AssemblyName).dll;$(_Out)Libraries\**\*.*" />
+    </ItemGroup>
+    <MakeDir Directories="$(_Out)Libraries" />
+    <Copy SourceFiles="@(_OutDlls)" DestinationFiles="@(_OutDlls->'$(_Out)Libraries\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Delete Files="@(_OutDlls)" ContinueOnError="true" />
+  </Target>
+
+  <!-- Do the same when publishing -->
+  <Target Name="RelocatePublishedDependenciesToLibraries" AfterTargets="Publish">
+    <PropertyGroup>
+      <_Pub>$(PublishDir)</_Pub>
+    </PropertyGroup>
+    <ItemGroup>
+      <_PubDlls Include="$(_Pub)**\*.dll" Exclude="$(_Pub)$(AssemblyName).dll;$(_Pub)Libraries\**\*.*" />
+    </ItemGroup>
+    <MakeDir Directories="$(_Pub)Libraries" />
+    <Copy SourceFiles="@(_PubDlls)" DestinationFiles="@(_PubDlls->'$(_Pub)Libraries\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Delete Files="@(_PubDlls)" ContinueOnError="true" />
+  </Target>
 
 </Project>
