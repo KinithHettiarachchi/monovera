@@ -2852,8 +2852,7 @@ namespace Monovera
                         if (updateType == "Difference")
                         {
                             // Get max UPDATEDTIME from DB for this project
-                            string dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.sqlite");
-                            string connStr = $"Data Source={dbPath};";
+                            string connStr = $"Data Source={DatabasePath};";
                             string maxUpdatedTime = null;
                             using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
                             {

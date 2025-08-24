@@ -11,6 +11,7 @@ using Microsoft.VisualBasic.FileIO;
 using NAudio.Gui;
 using System;
 using System.Collections.Generic;
+using System.Drawing.Printing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -19,11 +20,13 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using static System.Net.Mime.MediaTypeNames;
 using static System.Net.WebRequestMethods;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.Tab;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
 
 namespace Monovera
 {
@@ -962,6 +965,29 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
                 ?? "<div class='no-attachments'>No attachments found.</div>";
             attachmentsHtml = FixOfflineAttachmentUrlsLocal(attachmentsHtml);
 
+
+            // Count attachments for header
+            int attachmentCount = 0;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(attachmentsHtml))
+                {
+                    if (attachmentsHtml.IndexOf("class='no-attachments'", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        attachmentsHtml.IndexOf("class=\"no-attachments\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        attachmentCount = 0;
+                    }
+                    else
+                    {
+                        var attDoc = new HtmlAgilityPack.HtmlDocument();
+                        attDoc.LoadHtml(attachmentsHtml);
+                        var nodes = attDoc.DocumentNode.SelectNodes("//div[contains(@class,'attachment-card')]");
+                        attachmentCount = nodes?.Count ?? 0;
+                    }
+                }
+            }
+            catch { attachmentCount = 0; }
+
             // Links offline
             string linksHtml = BuildLinksOffline(key);
 
@@ -1013,7 +1039,7 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
   <div class='tab-bar'>
     <button class='tab-btn active' data-tab='linksTab'>⛓ Links</button>
     <button class='tab-btn' data-tab='historyTab'>🕰️ History</button>
-    <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments</button>
+    <button class='tab-btn' data-tab='attachmentsTab'>📎 Attachments [#{attachmentCount}]</button>
   </div>
   <div class='tab-content' id='linksTab' style='display:block;'>
     {linksHtml}
@@ -1426,7 +1452,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
         }
 
         // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
-        // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
         private static async Task EnsureWebAssetsAsync(string WebAppRoot)
         {
             string css = "";
@@ -1471,16 +1496,19 @@ body {{ overflow: hidden; }}
 #tree .expander {{ display:inline-block; width:16px; text-align:center; margin-right:6px; cursor:pointer; user-select:none; color:#0d47a1; font-weight:700; font-family:Consolas,monospace; }}
 .node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
 
-/* Context menu */
+/* Context menu (force no bullets) */
 .ctx-menu {{ position: fixed; display:none; z-index:10000; min-width:220px; background:#fff; border:1px solid #b3d4f6; border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.15); font: 12px Segoe UI, sans-serif; }}
-.ctx-menu ul {{ margin:0; padding:4px; list-style:none; }}
+.ctx-menu ul {{ margin:0; padding:4px; }}
+.ctx-menu ul, .ctx-menu li {{ list-style: none !important; list-style-type: none !important; list-style-image: none !important; }}
+.ctx-menu li::marker {{ content: '' !important; }}
+.ctx-menu li::before {{ content: none !important; }}
 .ctx-menu li {{ padding:6px 10px; cursor:pointer; border-radius:4px; color:#1565c0; display:flex; align-items:center; gap:8px; }}
 .ctx-menu li:hover {{ background:#e3f2fd; }}
 
 /* Right workspace */
 .workspace {{ grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
 
-/* Tabs (namespaced) */
+/* Tabs */
 .mv-tabs-bar {{
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -1490,19 +1518,19 @@ body {{ overflow: hidden; }}
   background: #f2faff;
   padding: 6px 6px 0 6px;
 }}
-.mv-tabs-viewport {{ overflow: hidden; }}
+/* The viewport is the scrolling container */
+.mv-tabs-viewport {{
+  overflow: hidden;
+  position: relative;
+}}
+/* The strip is wider than the viewport; we do programmatic scrolling of the viewport */
 #mv-tabs {{
+  --tab-width: 240px;
   position: relative;
   display: inline-flex;
   gap: 4px;
   white-space: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }}
-#mv-tabs::-webkit-scrollbar {{ display: none; }}
-
 .mv-tab {{
   background:#fff;
   border:1px solid #b3d4f6; border-bottom:none;
@@ -1510,10 +1538,20 @@ body {{ overflow: hidden; }}
   padding:6px 10px;
   cursor:pointer;
   display:flex; align-items:center; gap:8px;
-  max-width: 360px;
+  /* Fixed width tabs: no shrinking */
+  width: var(--tab-width);
+  min-width: var(--tab-width);
+  max-width: var(--tab-width);
+  flex: 0 0 var(--tab-width);
+  overflow: hidden;
+}}
+.mv-tab .mv-tab-label {{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
 }}
 .mv-tab.active {{ font-weight:600; color:#1565c0; border-bottom:2px solid #1565c0; }}
-.mv-tab-key {{ font-weight:600; }}
 .mv-tab-close {{
   margin-left:6px;
   width:16px; height:16px;
@@ -1616,6 +1654,17 @@ body {{ overflow: hidden; }}
     </footer>
   </div>
 
+  <!-- Tab context menu -->
+  <div id='tabMenu' class='ctx-menu' role='menu' aria-hidden='true'>
+    <ul>
+      <li data-action='close'>Close Tab</li>
+      <li data-action='close-others'>Close Other Tabs</li>
+      <li data-action='close-left'>Close Tabs on Left</li>
+      <li data-action='close-right'>Close Tabs on Right</li>
+      <li data-action='close-all'>Close All Tabs</li>
+    </ul>
+  </div>
+
   <div id='mv-search' class='mv-search' aria-hidden='true'>
     <div class='mv-search-panel' role='dialog' aria-modal='true' aria-labelledby='mv-search-title'>
       <div class='mv-search-header'>
@@ -1663,6 +1712,7 @@ body {{ overflow: hidden; }}
   const nextBtn = document.getElementById('mv-tabNext');
   const viewsEl = document.getElementById('mv-views');
   const homeView = document.getElementById('mv-home');
+  const tabMenu = document.getElementById('tabMenu');
 
   // Splitter
   const mainEl = document.querySelector('.main');
@@ -1796,18 +1846,18 @@ body {{ overflow: hidden; }}
     } catch {}
   }
 
-  // Tabs scroll
+  // Tabs scroll (scroll the viewport, not the strip)
   function updateTabScrollButtons(){
     const canScroll = tabsEl.scrollWidth > tabsViewport.clientWidth + 1;
     prevBtn.style.display = canScroll ? 'inline-flex' : 'none';
     nextBtn.style.display = canScroll ? 'inline-flex' : 'none';
-    prevBtn.disabled = !canScroll || tabsEl.scrollLeft <= 0;
-    nextBtn.disabled = !canScroll || (tabsEl.scrollLeft + tabsViewport.clientWidth >= tabsEl.scrollWidth - 1);
+    prevBtn.disabled = !canScroll || tabsViewport.scrollLeft <= 0;
+    nextBtn.disabled = !canScroll || (tabsViewport.scrollLeft + tabsViewport.clientWidth >= tabsEl.scrollWidth - 1);
   }
-  function scrollTabsBy(delta){ tabsEl.scrollBy({ left: delta, behavior: 'smooth' }); }
+  function scrollTabsBy(delta){ tabsViewport.scrollBy({ left: delta, behavior: 'smooth' }); }
   prevBtn.addEventListener('click', () => scrollTabsBy(-Math.max(200, tabsViewport.clientWidth * 0.6)));
   nextBtn.addEventListener('click', () => scrollTabsBy(+Math.max(200, tabsViewport.clientWidth * 0.6)));
-  tabsEl.addEventListener('scroll', () => requestAnimationFrame(updateTabScrollButtons));
+  tabsViewport.addEventListener('scroll', () => requestAnimationFrame(updateTabScrollButtons));
   window.addEventListener('resize', () => requestAnimationFrame(updateTabScrollButtons));
 
   function makeTabId(key){ return 'tab-' + key; }
@@ -1825,11 +1875,41 @@ body {{ overflow: hidden; }}
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
     if (homeView) homeView.classList.remove('active');
     highlightTreeSelection(key);
+    const tab = document.getElementById(id);
+    if (tab) ensureTabVisible(tab);
     updateTabScrollButtons();
   }
   function getIconForKey(key){
     const img = document.querySelector(`#tree a[data-key='${key}'] img.node-icon`);
     return img ? img.src : null;
+  }
+  function ensureTabVisible(tab){
+    const vpLeft = tabsViewport.scrollLeft;
+    const vpRight = vpLeft + tabsViewport.clientWidth;
+    const tabLeft = tab.offsetLeft;
+    const tabRight = tabLeft + tab.offsetWidth;
+    if (tabLeft < vpLeft) tabsViewport.scrollTo({ left: Math.max(0, tabLeft - 8), behavior: 'smooth' });
+    else if (tabRight > vpRight) tabsViewport.scrollTo({ left: tabRight - tabsViewport.clientWidth + 8, behavior: 'smooth' });
+  }
+
+  function closeTabByKey(key) {
+    const tabId = makeTabId(key);
+    const viewId = makeViewId(key);
+    const t = document.getElementById(tabId), v = document.getElementById(viewId);
+    let nextToActivateKey = null;
+    if (t) {
+      const tabs = Array.from(tabsEl.children);
+      const idx = tabs.indexOf(t);
+      if (t.classList.contains('active')) {
+        const neighbor = tabs[idx - 1] || tabs[idx + 1];
+        nextToActivateKey = neighbor ? (neighbor.dataset.key || neighbor.id.replace(/^tab-/,'')) : null;
+      }
+      tabsEl.removeChild(t);
+    }
+    if (v) viewsEl.removeChild(v);
+    updateTabScrollButtons();
+    if (nextToActivateKey) activate(nextToActivateKey);
+    else showHomeIfNoTabs();
   }
 
   async function openTab(key, title, icon, { activateTab = true } = {}) {
@@ -1838,23 +1918,18 @@ body {{ overflow: hidden; }}
 
     if (!document.getElementById(tabId)) {
       const tab = document.createElement('div');
-      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title=title;
+      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title=title || key;
 
       const iconSrc = icon || getIconForKey(key);
       if (iconSrc){ const img=document.createElement('img'); img.src=iconSrc; img.className='node-icon'; img.alt=''; tab.appendChild(img); }
-      const keySpan = document.createElement('span'); keySpan.className='mv-tab-key'; keySpan.textContent='[' + key + ']'; tab.appendChild(keySpan);
+
+      const label = document.createElement('span'); label.className='mv-tab-label'; label.textContent=key; tab.appendChild(label);
 
       const close = document.createElement('span');
       close.className='mv-tab-close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
       close.addEventListener('click', (e) => {
         e.stopPropagation();
-        const t=document.getElementById(tabId), v=document.getElementById(viewId);
-        if (t) tabsEl.removeChild(t);
-        if (v) viewsEl.removeChild(v);
-        const last=tabsEl.lastElementChild;
-        updateTabScrollButtons();
-        if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
-        else { showHomeIfNoTabs(); }
+        closeTabByKey(key);
       });
 
       tab.addEventListener('click', () => { activate(key); });
@@ -1872,33 +1947,29 @@ body {{ overflow: hidden; }}
       } catch {
         iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load ${key}</div></body></html>`;
       }
+
+      // Make the newly added tab visible
+      ensureTabVisible(tab);
     }
     if (activateTab) activate(key);
   }
 
-  // Recent updates tab
+  // Recent updates tab (clock icon, no brackets)
   async function openRecentUpdatesTab({ days = 14, activateTab = true } = {}) {
     const key = 'RECENT-UPDATES';
     const tabId = makeTabId(key);
     const viewId = makeViewId(key);
     if (!document.getElementById(tabId)) {
       const tab = document.createElement('div');
-      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title='Recent Updates!';
-      const keySpan = document.createElement('span'); keySpan.className='mv-tab-key'; keySpan.textContent='[Recent Updates]';
+      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title='Recent Updates';
+      // clock icon
+      const clock = document.createElement('span'); clock.textContent='🕒'; tab.appendChild(clock);
+      const keySpan = document.createElement('span'); keySpan.className='mv-tab-label'; keySpan.textContent='Recent Updates';
       tab.appendChild(keySpan);
 
       const close = document.createElement('span');
       close.className='mv-tab-close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
-      close.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const t=document.getElementById(tabId), v=document.getElementById(viewId);
-        if (t) tabsEl.removeChild(t);
-        if (v) viewsEl.removeChild(v);
-        const last=tabsEl.lastElementChild;
-        updateTabScrollButtons();
-        if (last){ const lastKey=last.dataset.key || last.id.replace(/^tab-/,''); activate(lastKey); }
-        else { showHomeIfNoTabs(); }
-      });
+      close.addEventListener('click', (e) => { e.stopPropagation(); closeTabByKey(key); });
 
       tab.addEventListener('click', () => { activate(key); });
       tab.appendChild(close);
@@ -1915,6 +1986,8 @@ body {{ overflow: hidden; }}
       } catch {
         iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load Recent Updates</div></body></html>`;
       }
+
+      ensureTabVisible(tab);
     }
     if (activateTab) activate(key);
   }
@@ -1926,13 +1999,13 @@ body {{ overflow: hidden; }}
       if (d.type === 'open-issue' && d.key) {
         (async () => {
           await expandAndSelect(d.key);
-          await openTab(d.key, d.title || ('[' + d.key + ']'), null);
+          await openTab(d.key, d.title || d.key, null);
         })();
       }
     } catch {}
   });
 
-  // Context menu
+  // Tree context menu
   function hideTreeMenu(){ treeMenu.style.display='none'; treeMenu.setAttribute('aria-hidden','true'); }
   function showTreeMenu(x, y){
     treeMenu.style.display='block';
@@ -1956,6 +2029,55 @@ body {{ overflow: hidden; }}
     hideTreeMenu();
     if (action === 'search') openSearchDialog();
     if (action === 'report') generateReport();
+  });
+
+  // Tab context menu
+  let ctxTab = null;
+  function hideTabMenu(){ tabMenu.style.display='none'; tabMenu.setAttribute('aria-hidden','true'); ctxTab = null; }
+  function showTabMenu(x, y){
+    tabMenu.style.display='block';
+    tabMenu.style.left = Math.max(2, Math.min(x, window.innerWidth - tabMenu.offsetWidth - 2)) + 'px';
+    tabMenu.style.top = Math.max(2, Math.min(y, window.innerHeight - tabMenu.offsetHeight - 2)) + 'px';
+    tabMenu.setAttribute('aria-hidden','false');
+  }
+  tabsEl.addEventListener('contextmenu', (e) => {
+    const tab = e.target && e.target.closest ? e.target.closest('.mv-tab') : null;
+    if (!tab) return;
+    e.preventDefault();
+    ctxTab = tab;
+    showTabMenu(e.clientX, e.clientY);
+  });
+  document.addEventListener('click', (e) => { if (!tabMenu.contains(e.target)) hideTabMenu(); });
+
+ tabMenu.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-action]');
+    if (!li || !ctxTab) return;
+
+    // Capture current tab BEFORE hiding menu (hideTabMenu clears ctxTab)
+    const currentTab = ctxTab;
+    const action = li.getAttribute('data-action');
+    const tabs = Array.from(tabsEl.children);
+    const idx = tabs.indexOf(currentTab);
+    const keyOf = (t) => t?.dataset?.key || t?.id?.replace(/^tab-/, '');
+    const activeKey = keyOf(currentTab);
+
+    hideTabMenu(); // ok to hide now
+
+    if (action === 'close') {
+      closeTabByKey(activeKey);
+    } else if (action === 'close-others') {
+      tabs.forEach(t => { if (t !== currentTab) closeTabByKey(keyOf(t)); });
+      activate(activeKey);
+    } else if (action === 'close-left') {
+      for (let i = 0; i < idx; i++) closeTabByKey(keyOf(tabs[i]));
+      activate(activeKey);
+    } else if (action === 'close-right') {
+      for (let i = tabs.length - 1; i > idx; i--) closeTabByKey(keyOf(tabs[i]));
+      activate(activeKey);
+    } else if (action === 'close-all') {
+      tabs.forEach(t => closeTabByKey(keyOf(t)));
+      showHomeIfNoTabs();
+    }
   });
 
   // Centered confirmation like history alerts
@@ -2035,7 +2157,6 @@ body {{ overflow: hidden; }}
 
       if (targetUrl) {
         if (popup && !popup.closed) {
-          // Use replace to avoid adding an extra entry in popup history
           popup.location.replace(targetUrl);
         } else {
           window.open(targetUrl, '_blank');
@@ -2166,7 +2287,7 @@ body {{ overflow: hidden; }}
         e.preventDefault(); generateReport();
       }
     }
-    if (e.key === 'Escape') hideTreeMenu();
+    if (e.key === 'Escape') {{ hideTreeMenu(); hideTabMenu(); }}
   });
 
   await loadRoots();
