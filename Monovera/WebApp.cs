@@ -1,9 +1,13 @@
-﻿using HtmlAgilityPack;
+﻿using Atlassian.Jira;
+using HtmlAgilityPack;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.Graph.Models;
+using Microsoft.Graph.Models.Security;
+using Microsoft.VisualBasic.FileIO;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -14,6 +18,11 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using static System.Net.Mime.MediaTypeNames;
+using static System.Net.WebRequestMethods;
+using static System.Runtime.InteropServices.JavaScript.JSType;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement;
+using static System.Windows.Forms.VisualStyles.VisualStyleElement.Tab;
 
 namespace Monovera
 {
@@ -98,9 +107,9 @@ namespace Monovera
                         {
                             context.Response.ContentType = "text/css; charset=utf-8";
                             var cssPath = frmMain.cssPath;
-                            if (File.Exists(cssPath))
+                            if (System.IO.File.Exists(cssPath))
                             {
-                                var css = await File.ReadAllTextAsync(cssPath);
+                                var css = await System.IO.File.ReadAllTextAsync(cssPath);
                                 await context.Response.WriteAsync(css);
                             }
                             else
@@ -296,6 +305,49 @@ namespace Monovera
                             var key = context.Request.RouteValues["key"]?.ToString() ?? "";
                             var html = BuildIssuePageHtml(key);
                             context.Response.ContentType = "text/html; charset=utf-8";
+                            await context.Response.WriteAsync(html);
+                        });
+
+                        // Search options for the dialog (projects/types/status)
+                        endpoints.MapGet("/api/search/options", async context =>
+                        {
+                            var projects = new List<object>();
+                            try
+                            {
+                                // FIX: use frmMain.JiraProjectConfig, not frmMain.ProjectConfig
+                                var cfgProjects = frmMain.config?.Projects ?? new List<frmMain.JiraProjectConfig>();
+                                foreach (var p in cfgProjects)
+                                {
+                                    var types = p?.Types?.Keys?.OrderBy(k => k, StringComparer.OrdinalIgnoreCase)?.ToArray() ?? Array.Empty<string>();
+                                    var statuses = p?.Status?.Keys?.OrderBy(k => k, StringComparer.OrdinalIgnoreCase)?.ToArray() ?? Array.Empty<string>();
+                                    projects.Add(new
+                                    {
+                                        project = p?.Project ?? "",
+                                        types,
+                                        statuses
+                                    });
+                                }
+                            }
+                            catch
+                            {
+                            }
+
+                            var payload = new { projects };
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
+                        });
+
+                        // Search results HTML using Jira JQL (mirrors desktop search behavior)
+                        endpoints.MapGet("/api/search/html", async context =>
+                        {
+                            var jql = context.Request.Query["jql"].ToString() ?? "";
+                            context.Response.ContentType = "text/html; charset=utf-8";
+                            if (string.IsNullOrWhiteSpace(jql))
+                            {
+                                await context.Response.WriteAsync("<!DOCTYPE html><html><body style='font:14px Segoe UI;padding:16px;color:#b00;'>Missing jql parameter.</body></html>");
+                                return;
+                            }
+                            var html = await BuildSearchResultsHtml(jql);
                             await context.Response.WriteAsync(html);
                         });
                     });
@@ -958,12 +1010,12 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
                         return "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
 
                     var fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images", fileName);
-                    if (!File.Exists(fullPath))
+                    if (!System.IO.File.Exists(fullPath))
                         return "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
 
                     try
                     {
-                        var bytes = File.ReadAllBytes(fullPath);
+                        var bytes = System.IO.File.ReadAllBytes(fullPath);
                         var base64 = Convert.ToBase64String(bytes);
                         return $"<img src='data:image/png;base64,{base64}' style='height:24px; width:24px; vertical-align:middle; margin-right:8px; border-radius:4px;' title='{WebUtility.HtmlEncode(issueType)}' />";
                     }
@@ -1116,14 +1168,134 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             }
         }
 
+        // Build Search Results HTML for the SPA (triggered by /api/search/html)
+        private static async Task<string> BuildSearchResultsHtml(string jql)
+        {
+            var list = new List<(string Key, string Summary, string Type, DateTime? Updated)>();
+            try
+            {
+                var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{frmMain.jiraEmail}:{frmMain.jiraToken}"));
+                using var client = new HttpClient();
+                client.BaseAddress = new Uri(frmMain.jiraBaseUrl?.TrimEnd('/') ?? "");
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+
+                const int pageSize = 100;
+                int startAt = 0;
+                int total = int.MaxValue;
+
+                while (startAt < total)
+                {
+                    var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,updated";
+                    var res = await client.GetAsync(url);
+                    if (!res.IsSuccessStatusCode) break;
+                    string json = await res.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("total", out var totalProp)) total = totalProp.GetInt32(); else total = 0;
+                    if (!root.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array) break;
+
+                    foreach (var issue in issues.EnumerateArray())
+                    {
+                        string key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+                        var fields = issue.TryGetProperty("fields", out var f) ? f : default;
+                        string summary = "";
+                        string type = "";
+                        DateTime? updated = null;
+                        if (fields.ValueKind == JsonValueKind.Object)
+                        {
+                            if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String) summary = s.GetString() ?? "";
+                            if (fields.TryGetProperty("issuetype", out var it) && it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String) type = itn.GetString() ?? "";
+                            if (fields.TryGetProperty("updated", out var up) && up.ValueKind == JsonValueKind.String && DateTime.TryParse(up.GetString(), out var dt)) updated = dt;
+                        }
+                        if (!string.IsNullOrWhiteSpace(key))
+                            list.Add((key, summary, type, updated));
+                    }
+                    startAt += pageSize;
+                }
+            }
+            catch
+            {
+                // ignore; will show empty
+            }
+
+            var cssHref = "/static/monovera.css";
+            var sb = new StringBuilder();
+            sb.Append($@"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <link rel='stylesheet' href='{cssHref}' />
+</head>
+<body>
+  <details open>
+    <summary>Search Results ({list.Count})</summary>
+    <section>
+      <table class='confluenceTable' style='width:100%; border-collapse:collapse; margin-top:6px;'>
+        <tbody>
+");
+            foreach (var item in list)
+            {
+                string iconUrl = ResolveTypeIconUrl(item.Type);
+                string iconHtml = !string.IsNullOrWhiteSpace(iconUrl)
+                    ? $"<img src='{iconUrl}' width='24' height='24' style='vertical-align:middle;margin-right:8px;border-radius:4px;' title='{WebUtility.HtmlEncode(item.Type)}' />"
+                    : "<span style='font-size:20px; vertical-align:middle; margin-right:8px;'>🟥</span>";
+
+                string pathHtml = "";
+                try
+                {
+                    var path = frmMain.GetRequirementPath(item.Key);
+                    if (!string.IsNullOrWhiteSpace(path))
+                        pathHtml = $"<div style='font-size:0.7em;color:#888;margin-left:48px;margin-top:1px;'>{WebUtility.HtmlEncode(path)}</div>";
+                }
+                catch { }
+
+                sb.Append($@"
+  <tr>
+    <td class='confluenceTd'>
+      <a href='#' data-key='{WebUtility.HtmlEncode(item.Key)}'>{iconHtml}{WebUtility.HtmlEncode(item.Summary)} [{WebUtility.HtmlEncode(item.Key)}]</a>
+      {pathHtml}
+    </td>
+  </tr>");
+            }
+
+            if (list.Count == 0)
+            {
+                sb.Append("<tr><td class='confluenceTd' style='color:#888;'>No results.</td></tr>");
+            }
+
+            sb.Append(@"
+        </tbody>
+      </table>
+    </section>
+  </details>
+  <script>
+    // Bridge clicks back to SPA to open and select issue
+    document.querySelectorAll('a[data-key]').forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        const key = link.dataset.key;
+        const title = link.textContent || '[' + key + ']';
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'open-issue', key, title }, '*');
+          }
+        } catch {}
+      });
+    });
+  </script>
+</body>
+</html>");
+            return sb.ToString();
+        }
+
         // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
         private static async Task EnsureWebAssetsAsync(string WebAppRoot)
         {
             string css = "";
             try
             {
-                if (!string.IsNullOrWhiteSpace(frmMain.cssPath) && File.Exists(frmMain.cssPath))
-                    css = await File.ReadAllTextAsync(frmMain.cssPath, Encoding.UTF8);
+                if (!string.IsNullOrWhiteSpace(frmMain.cssPath) && System.IO.File.Exists(frmMain.cssPath))
+                    css = await System.IO.File.ReadAllTextAsync(frmMain.cssPath, Encoding.UTF8);
                 else if (!string.IsNullOrWhiteSpace(frmMain.cssHref))
                     using (var hc = new HttpClient()) css = await hc.GetStringAsync(frmMain.cssHref);
             }
@@ -1161,6 +1333,12 @@ body {{ overflow: hidden; }}
 #tree a.selected {{ background:#e3f2fd; color:#0d47a1; outline:1px solid #b3d4f6; }}
 #tree .expander {{ display:inline-block; width:16px; text-align:center; margin-right:6px; cursor:pointer; user-select:none; color:#0d47a1; font-weight:700; font-family:Consolas,monospace; }}
 .node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
+
+/* Context menu */
+.ctx-menu {{ position: fixed; display:none; z-index:10000; min-width:180px; background:#fff; border:1px solid #b3d4f6; border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.15); font: 12px Segoe UI, sans-serif; }}
+.ctx-menu ul {{ margin:0; padding:4px; list-style:none; }}
+.ctx-menu li {{ padding:6px 10px; cursor:pointer; border-radius:4px; color:#1565c0; display:flex; align-items:center; gap:8px; }}
+.ctx-menu li:hover {{ background:#e3f2fd; }}
 
 /* Right workspace */
 .workspace {{ grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
@@ -1231,6 +1409,22 @@ body {{ overflow: hidden; }}
 .home-splash img {{ max-width:100%; max-height:100%; object-fit: contain; }}
 
 .status {{ display: flex; align-items: center; padding: 0 12px; border-top: 1px solid #b3d4f6; background: #f2faff; color: #1565c0; gap: 16px; }}
+
+/* Search dialog */
+.mv-search {{ position:fixed; inset:0; background:rgba(0,0,0,.25); z-index:9999; display:none; }}
+.mv-search-panel {{ position:absolute; top:40px; left:50%; transform:translateX(-50%); width: min(1020px, calc(100% - 20px)); background:#fff; border:1px solid #b3d4f6; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.2); overflow:hidden; }}
+.mv-search-header {{ display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:#f2faff; border-bottom:1px solid #b3d4f6; }}
+.mv-search-title {{ font-weight:600; color:#1565c0; }}
+.mv-search-close {{ appearance:none; border:1px solid #b3d4f6; background:#fff; color:#1565c0; border-radius:4px; padding:4px 8px; cursor:pointer; }}
+.mv-search-body {{ padding:8px; display:grid; grid-template-columns: 1fr; gap:8px; }}
+.mv-search-row {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+.mv-search-row label {{ font-weight:600; color:#1565c0; min-width:64px; }}
+.mv-search-row select, .mv-search-row input[type='text'] {{ padding:6px 8px; border:1px solid #b3d4f6; border-radius:4px; min-width:160px; flex: 1 1 auto; }}
+.mv-search-actions {{ display:flex; gap:10px; justify-content:flex-end; }}
+.mv-search-btn {{ appearance:none; border:1px solid #b3d4f6; background:#ffffff; color:#1565c0; border-radius:4px; padding:6px 10px; cursor:pointer; }}
+.mv-search-results {{ height: 420px; border-top:1px solid #b3d4f6; }}
+.mv-search-results iframe {{ width:100%; height:100%; border:none; background:#fff; }}
+.mv-search-hint {{ color:#777; font-size:0.9em; }}
   </style>
 </head>
 <body>
@@ -1238,6 +1432,11 @@ body {{ overflow: hidden; }}
     <div class='main'>
       <aside class='sidebar'>
         <ul id='tree'></ul>
+        <div id='treeMenu' class='ctx-menu' role='menu' aria-hidden='true'>
+          <ul>
+            <li data-action='search' role='menuitem' title='Ctrl+Q'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
+          </ul>
+        </div>
       </aside>
       <div id='splitter' class='splitter' role='separator' aria-orientation='vertical' tabindex='0' title='Drag to resize'></div>
       <section class='workspace'>
@@ -1263,6 +1462,41 @@ body {{ overflow: hidden; }}
       <span style='margin-left:auto;'>Monovera Web</span>
     </footer>
   </div>
+
+  <!-- Search dialog -->
+  <div id='mv-search' class='mv-search' aria-hidden='true'>
+    <div class='mv-search-panel' role='dialog' aria-modal='true' aria-labelledby='mv-search-title'>
+      <div class='mv-search-header'>
+        <div id='mv-search-title' class='mv-search-title'>Search</div>
+        <button id='mv-search-close' class='mv-search-close' aria-label='Close'>Close</button>
+      </div>
+      <div class='mv-search-body'>
+        <div class='mv-search-row'>
+          <label><input type='checkbox' id='mv-search-jql' /> JQL</label>
+          <span class='mv-search-hint'>Toggle JQL to type raw Jira queries</span>
+        </div>
+        <div id='mv-search-filters' class='mv-search-row'>
+          <label for='mv-search-project'>Project</label>
+          <select id='mv-search-project'></select>
+          <label for='mv-search-type'>Type</label>
+          <select id='mv-search-type'></select>
+          <label for='mv-search-status'>Status</label>
+          <select id='mv-search-status'></select>
+        </div>
+        <div class='mv-search-row'>
+          <label for='mv-search-text'>Query</label>
+          <input id='mv-search-text' type='text' placeholder='Enter issue key or search text...' />
+        </div>
+        <div class='mv-search-actions'>
+          <button id='mv-search-run' class='mv-search-btn'>Search</button>
+        </div>
+      </div>
+      <div class='mv-search-results'>
+        <iframe id='mv-search-results'></iframe>
+      </div>
+    </div>
+  </div>
+
   <script src='monovera.web.js'></script>
 </body>
 </html>";
@@ -1281,6 +1515,19 @@ body {{ overflow: hidden; }}
   // Splitter
   const mainEl = document.querySelector('.main');
   const splitter = document.getElementById('splitter');
+
+  // Context menu + Search dialog elements
+  const treeMenu = document.getElementById('treeMenu');
+  const searchOverlay = document.getElementById('mv-search');
+  const searchClose = document.getElementById('mv-search-close');
+  const searchText = document.getElementById('mv-search-text');
+  const searchRun = document.getElementById('mv-search-run');
+  const searchJql = document.getElementById('mv-search-jql');
+  const searchFilters = document.getElementById('mv-search-filters');
+  const ddlProject = document.getElementById('mv-search-project');
+  const ddlType = document.getElementById('mv-search-type');
+  const ddlStatus = document.getElementById('mv-search-status');
+  const resultsFrame = document.getElementById('mv-search-results');
 
   // --- Resizer ---
   const MIN_LEFT = 220, MIN_RIGHT = 360;
@@ -1560,18 +1807,184 @@ body {{ overflow: hidden; }}
     } catch {}
   });
 
-  await loadRoots();
-  await expandRootLevelOnce();
+  // ---- Context menu on tree ----
+  function hideTreeMenu(){ treeMenu.style.display='none'; treeMenu.setAttribute('aria-hidden','true'); }
+  function showTreeMenu(x, y){
+    treeMenu.style.display='block';
+    treeMenu.style.left = Math.max(2, Math.min(x, window.innerWidth - treeMenu.offsetWidth - 2)) + 'px';
+    treeMenu.style.top = Math.max(2, Math.min(y, window.innerHeight - treeMenu.offsetHeight - 2)) + 'px';
+    treeMenu.setAttribute('aria-hidden','false');
+  }
+  treeEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showTreeMenu(e.clientX, e.clientY);
+  });
+  document.addEventListener('click', (e) => {
+    if (!treeMenu.contains(e.target)) hideTreeMenu();
+  });
+  treeMenu.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-action]');
+    if (!li) return;
+    const action = li.getAttribute('data-action');
+    hideTreeMenu();
+    if (action === 'search') openSearchDialog();
+  });
 
-  // Auto-open Recent Updates (same behavior as desktop)
-  await openRecentUpdatesTab({ days: 14, activateTab: true });
+  // ---- Search dialog logic ----
+  let searchOptions = null; // { projects: [{project, types[], statuses[]}, ...] }
+  function union(arrays){
+    const set = new Set(); arrays.forEach(a => a?.forEach(v => set.add(v))); return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  }
+  async function ensureSearchOptions(){
+    if (searchOptions) return searchOptions;
+    const res = await fetch('/api/search/options');
+    searchOptions = await res.json();
+    return searchOptions;
+  }
+  function fillDropdown(sel, values, includeAll=true){
+    sel.innerHTML = '';
+    if (includeAll){ const opt = document.createElement('option'); opt.value = 'All'; opt.textContent = 'All'; sel.appendChild(opt); }
+    (values || []).forEach(v => { const o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); });
+    sel.value = 'All';
+  }
+  async function populateFilters(){
+    const opts = await ensureSearchOptions();
+    const projects = (opts?.projects || []).map(p => p.project).filter(Boolean).sort((a,b)=>a.localeCompare(b));
+    fillDropdown(ddlProject, projects, true);
+    // Initial types/status (All projects merged)
+    const allTypes = union((opts?.projects || []).map(p => p.types));
+    const allStatuses = union((opts?.projects || []).map(p => p.statuses));
+    fillDropdown(ddlType, allTypes, true);
+    fillDropdown(ddlStatus, allStatuses, true);
 
-  updateTabScrollButtons();
-})();";
+    ddlProject.onchange = () => {
+      const sel = ddlProject.value;
+      if (sel === 'All'){
+        fillDropdown(ddlType, union((opts?.projects || []).map(p => p.types)), true);
+        fillDropdown(ddlStatus, union((opts?.projects || []).map(p => p.statuses)), true);
+      } else {
+        const p = (opts?.projects || []).find(x => x.project === sel);
+        fillDropdown(ddlType, p?.types || [], true);
+        fillDropdown(ddlStatus, p?.statuses || [], true);
+      }
+    };
+  }
+  function toggleJqlUI(){
+    const jqlMode = !!searchJql.checked;
+    searchFilters.style.display = jqlMode ? 'none' : 'flex';
+    searchText.placeholder = jqlMode ? 'Enter JQL...' : 'Enter issue key or search text...';
+  }
+  function showSearchLoading(){
+    resultsFrame.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Searching...</div></body></html>`;
+  }
+  function buildNormalJql(){
+    const q = (searchText.value || '').trim();
+    const proj = ddlProject.value || 'All';
+    const type = ddlType.value || 'All';
+    const status = ddlStatus.value || 'All';
+    const filters = [];
+    if (proj === 'All') {
+      try {
+        const projects = (searchOptions?.projects || []).map(p => p.project).filter(Boolean);
+        if (projects.length) filters.push('(' + projects.map(p => `project = \""${ p}\""`).join(' OR ') + ')');
+      } catch {}
+    } else {
+      filters.push(`project = \""${proj}\""`);
+    }
+if (q) filters.push(`text ~ \""${q}\""`);
+    if (type !== 'All') filters.push(`issuetype = \""${type}\""`);
+    if (status !== 'All') filters.push(`status = \""${status}\""`);
+    return `${ filters.join(' AND ')}
+ORDER BY key ASC`;
+  }
+  function tryQuickOpenByKey()
+{
+    const key = (searchText.value || '').trim().toUpperCase();
+    if (/ ^ [A - Z][A - Z0 - 9] + -\d +$/.test(key)) {
+        // Quick open/close dialog
+        try
+        {
+            window.postMessage({ type: 'open-issue', key, title: '[' + key + ']' }, '*');
+        }
+        catch { }
+        hideSearchDialog();
+        return true;
+    }
+    return false;
+}
+async function runSearch()
+{
+    if (!searchJql.checked && tryQuickOpenByKey()) return;
+        const jql = searchJql.checked ? (searchText.value || '').trim() : buildNormalJql();
+if (!jql) return;
+showSearchLoading();
+const url = `/api/search/html?jql=${encodeURIComponent(jql)}`;
+try
+{
+    const html = await (await fetch(url)).text();
+    resultsFrame.srcdoc = html;
+}
+catch
+{
+    resultsFrame.srcdoc = `< html >< body >< div style = 'padding:12px;color:#b00;font:14px Segoe UI;' > Failed to run search.</ div ></ body ></ html >`;
+}
+  }
+  function showSearchDialog()
+{
+    searchOverlay.style.display = 'block';
+    searchOverlay.setAttribute('aria-hidden', 'false');
+    searchText.focus();
+    // lazy load options on first open
+    if (!searchOptions) populateFilters();
+}
+function hideSearchDialog()
+{
+    searchOverlay.style.display = 'none';
+    searchOverlay.setAttribute('aria-hidden', 'true');
+}
+function openSearchDialog() { showSearchDialog(); }
+
+// Wire UI
+searchClose.addEventListener('click', hideSearchDialog);
+searchJql.addEventListener('change', () => { toggleJqlUI(); });
+toggleJqlUI();
+searchRun.addEventListener('click', () => runSearch());
+searchText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+    if (e.key === 'Escape') { e.preventDefault(); hideSearchDialog(); }
+});
+// Dismiss dialog when clicking outside panel
+searchOverlay.addEventListener('click', (e) => {
+    const panel = e.target.closest('.mv-search-panel');
+    if (!panel) hideSearchDialog();
+});
+
+// Global keyboard: Ctrl+Q opens search (avoid when typing in inputs)
+window.addEventListener('keydown', (e) => {
+    const tag = (e.target?.tagName || '').toUpperCase();
+    if (e.ctrlKey && (e.key === 'q' || e.key === 'Q'))
+    {
+        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(e.target?.isContentEditable))
+        {
+            e.preventDefault();
+            openSearchDialog();
+        }
+    }
+    if (e.key === 'Escape') hideTreeMenu();
+});
+
+await loadRoots();
+await expandRootLevelOnce();
+
+// Auto-open Recent Updates (same behavior as desktop)
+await openRecentUpdatesTab({ days: 14, activateTab: true });
+
+updateTabScrollButtons();
+})(); ";
 
             Directory.CreateDirectory(WebAppRoot);
-            await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
-            await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
+await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
+await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
         }
     }
 }
