@@ -1155,7 +1155,7 @@ body {{ overflow: hidden; }}
 }}
 #tree li::marker {{ content: '' !important; color: transparent !important; }}
 #tree li::before {{ content: none !important; }}
-#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; }}
+#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; font-size: 12px; }}
 #tree li {{ margin: 2px 0; }}
 #tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; }}
 #tree a.selected {{ background:#e3f2fd; color:#0d47a1; outline:1px solid #b3d4f6; }}
@@ -1298,7 +1298,7 @@ body {{ overflow: hidden; }}
   async function refreshStatus(){
     try {
       const s = await (await fetch('/api/status')).json();
-      document.getElementById('statusUser').textContent = '👤 User: ' + (s.connectedUser || '-');
+      document.getElementById('statusUser').textContent = '👤 Connected as: ' + (s.connectedUser || '-');
       document.getElementById('statusMode').textContent = '🌐 Mode: ' + (s.offline ? 'Offline' : 'Online');
       document.getElementById('statusUpdated').textContent = '🕒 DB Updated: ' + (s.lastDbUpdated || 'N/A');
     } catch {}
@@ -1573,6 +1573,5 @@ body {{ overflow: hidden; }}
             await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
             await File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
         }
-
     }
 }
