@@ -8,6 +8,7 @@ using Microsoft.Extensions.FileProviders;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.Security;
 using Microsoft.VisualBasic.FileIO;
+using NAudio.Gui;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -51,6 +52,10 @@ namespace Monovera
             var dataDir = Path.Combine(baseDir, "Data");
             var attachmentsPhysical = Path.Combine(dataDir, "attachments");
             Directory.CreateDirectory(attachmentsPhysical);
+
+            // Ensure reports directory (served to browser)
+            var reportsDirPhysical = Path.Combine(baseDir, "reports");
+            Directory.CreateDirectory(reportsDirPhysical);
 
             await EnsureWebAssetsAsync(WebAppRoot);
 
@@ -98,6 +103,16 @@ namespace Monovera
                         });
                     }
 
+                    // Serve generated reports at /reports
+                    if (Directory.Exists(reportsDirPhysical))
+                    {
+                        app.UseStaticFiles(new StaticFileOptions
+                        {
+                            FileProvider = new PhysicalFileProvider(reportsDirPhysical),
+                            RequestPath = "/reports"
+                        });
+                    }
+
                     app.UseRouting();
                     app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
 
@@ -138,7 +153,7 @@ namespace Monovera
                             if (context.Request.Query.TryGetValue("days", out var vals))
                                 int.TryParse(vals.FirstOrDefault(), out days);
 
-                            // 1) Return loader page (spinner + JS) immediately
+                            // Return loader page (spinner + JS) immediately
                             string loader = BuildRecentUpdatesHtml(days);
                             context.Response.ContentType = "text/html; charset=utf-8";
                             await context.Response.WriteAsync(loader);
@@ -156,7 +171,7 @@ namespace Monovera
                             await context.Response.WriteAsync(html);
                         });
 
-                        // New: returns [rootKey, ..., targetKey] for SPA expansion
+                        // Returns [rootKey, ..., targetKey] for SPA expansion
                         endpoints.MapGet("/api/tree/path/{key}", async context =>
                         {
                             var targetKey = context.Request.RouteValues["key"]?.ToString() ?? "";
@@ -308,13 +323,145 @@ namespace Monovera
                             await context.Response.WriteAsync(html);
                         });
 
+                        // Generate Report: produces offline HTML report and returns its URL
+                        endpoints.MapPost("/api/report/{rootKey}", async context =>
+                        {
+                            var rootKey = context.Request.RouteValues["rootKey"]?.ToString() ?? "";
+                            if (string.IsNullOrWhiteSpace(rootKey))
+                            {
+                                context.Response.StatusCode = 400;
+                                await context.Response.WriteAsync("Missing rootKey");
+                                return;
+                            }
+
+                            // Run work on STA with a WinForms message loop to satisfy any UI/COM/WebBrowser dependencies
+                            static Task<string> RunOnStaWithMessageLoopAsync(Func<Task<string>> func)
+                            {
+                                var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                                var th = new System.Threading.Thread(() =>
+                                {
+                                    try
+                                    {
+                                        // Start after the loop is alive
+                                        System.EventHandler handler = null;
+                                        handler = async (s, e) =>
+                                        {
+                                            // Run once
+                                            System.Windows.Forms.Application.Idle -= handler;
+                                            try
+                                            {
+                                                // Keep continuations on this STA ctx (message loop present)
+                                                var result = await func().ConfigureAwait(true);
+                                                tcs.TrySetResult(result);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                tcs.TrySetException(ex);
+                                            }
+                                            finally
+                                            {
+                                                // Exit the message loop/thread
+                                                try { System.Windows.Forms.Application.ExitThread(); } catch { }
+                                            }
+                                        };
+                                        System.Windows.Forms.Application.Idle += handler;
+                                        System.Windows.Forms.Application.Run();
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        tcs.TrySetException(ex);
+                                    }
+                                });
+
+                                th.IsBackground = true;
+                                th.SetApartmentState(System.Threading.ApartmentState.STA);
+                                th.Start();
+                                return tcs.Task;
+                            }
+
+                            try
+                            {
+                                // Optional: server-side timeout to avoid hanging forever
+                                using var cts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+                                cts.CancelAfter(TimeSpan.FromMinutes(3));
+
+                                var genTask = RunOnStaWithMessageLoopAsync(async () =>
+                                {
+                                    var generator = new JiraHtmlReportGenerator(
+                                        frmMain.issueDict,
+                                        frmMain.childrenByParent,
+                                        frmMain.jiraEmail,
+                                        frmMain.jiraToken,
+                                        frmMain.jiraBaseUrl,
+                                        new System.Windows.Forms.TreeView() // placeholder; generator may rely on WinForms context
+                                    );
+                                    // If your generator supports a token, pass cts.Token here
+                                    var path = await generator.GenerateAsync(rootKey);
+                                    return path;
+                                });
+
+                                var completed = await Task.WhenAny(genTask, Task.Delay(Timeout.InfiniteTimeSpan, cts.Token));
+                                if (completed != genTask)
+                                {
+                                    context.Response.StatusCode = 504;
+                                    await context.Response.WriteAsync("Report generation timed out.");
+                                    return;
+                                }
+
+                                var filePath = await genTask; // propagate exceptions
+                                if (string.IsNullOrWhiteSpace(filePath) || !System.IO.File.Exists(filePath))
+                                {
+                                    context.Response.StatusCode = 500;
+                                    await context.Response.WriteAsync("Report generation failed: output file missing.");
+                                    return;
+                                }
+
+                                // Ensure the result is available under /reports
+                                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                                string reportsDirPhysical = Path.Combine(baseDir, "reports");
+                                Directory.CreateDirectory(reportsDirPhysical);
+
+                                string targetName = Path.GetFileName(filePath);
+                                if (string.IsNullOrWhiteSpace(targetName))
+                                    targetName = $"{rootKey}-{DateTime.Now:yyyyMMddHHmmss}.html";
+
+                                string targetPath = Path.Combine(reportsDirPhysical, targetName);
+
+                                try
+                                {
+                                    var srcFull = Path.GetFullPath(filePath);
+                                    var dstFull = Path.GetFullPath(targetPath);
+                                    if (!srcFull.Equals(dstFull, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        System.IO.File.Copy(srcFull, dstFull, overwrite: true);
+                                    }
+                                }
+                                catch (Exception copyEx)
+                                {
+                                    context.Response.StatusCode = 500;
+                                    await context.Response.WriteAsync($"Report generated but failed to move into /reports: {copyEx.Message}");
+                                    return;
+                                }
+
+                                var url = "/reports/" + targetName;
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                context.Response.Headers["Cache-Control"] = "no-store";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { url, file = targetName }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync($"Report generation failed: {ex.Message}");
+                            }
+                        });
+
                         // Search options for the dialog (projects/types/status)
                         endpoints.MapGet("/api/search/options", async context =>
                         {
                             var projects = new List<object>();
                             try
                             {
-                                // FIX: use frmMain.JiraProjectConfig, not frmMain.ProjectConfig
                                 var cfgProjects = frmMain.config?.Projects ?? new List<frmMain.JiraProjectConfig>();
                                 foreach (var p in cfgProjects)
                                 {
@@ -391,9 +538,7 @@ namespace Monovera
         // Builds the HTML for the Recent Updates tab using Jira REST (mirrors frmMain.ShowRecentlyUpdatedIssuesAsync)
         private static string BuildRecentUpdatesHtmlFinal(int days)
         {
-
             // Search Jira for recently created/updated issues across configured projects
-            // JQL: (project = "P1" OR project = "P2") AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC
             var rows = new List<(string Key, string Summary, string Type, string Status, DateTime Updated, DateTime? Created, List<string> Tags)>();
             try
             {
@@ -477,7 +622,6 @@ namespace Monovera
                             var updatedLocalDate = it.Updated.ToLocalTime().Date;
                             DateTime? createdUtc = it.Created;
 
-                            // Created tag if created same local date as update day
                             if (createdUtc.HasValue && createdUtc.Value.ToLocalTime().Date == updatedLocalDate)
                                 tags.Add("Created");
 
@@ -510,7 +654,6 @@ namespace Monovera
                     }
                     catch { /* best effort */ }
 
-                    // Distinct + normalize
                     tags = tags
                         .Where(t => !string.IsNullOrWhiteSpace(t))
                         .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -550,7 +693,6 @@ namespace Monovera
                 return sb.ToString();
             }
 
-            // Collect filters
             var allIssueTypesGlobal = rows
                 .Select(r => r.Type)
                 .Where(t => !string.IsNullOrWhiteSpace(t))
@@ -565,7 +707,7 @@ namespace Monovera
                 .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            // Filter panel: hidden by default; toggled by button
+            // Filter panel
             sb.Append($@"
 <button id='show-filter-btn'>Apply Filter</button>
 
@@ -575,9 +717,9 @@ namespace Monovera
     <div class='filter-panel' style='display:inline-block; padding:8px; border:1px solid #b3d4f6; background:#f9fcff; border-radius:6px;'>
       <div class='filter-panel-title' style='font-weight:600;color:#1565c0;margin-bottom:6px;'>Issue Types</div>
       <div id='issue-type-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
-        <label><input type='checkbox' class='issue-type-checkbox-all change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+        <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
         {string.Join("\n", allIssueTypesGlobal.Select(t =>
-                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='issue-type-checkbox change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
       </div>
     </div>
 
@@ -612,7 +754,7 @@ namespace Monovera
 </script>
 ");
 
-            // Group by updated date (local)
+            // Group by date
             foreach (var group in rows
                 .GroupBy(x => x.Updated.ToLocalTime().Date)
                 .OrderByDescending(g => g.Key))
@@ -836,7 +978,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
                 historyHtml = "<div class='no-links'>No history found.</div>";
             }
 
-            // Always serve CSS over HTTP so it loads inside iframe srcdoc
             var cssHref = "/static/monovera.css";
 
             var sb = new StringBuilder();
@@ -991,14 +1132,12 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
 
                 string IconImgHtml(string key, string issueType)
                 {
-                    // Resolve project config for this key to map type -> image file (same logic as frmMain)
                     var keyPrefix = key.Split('-')[0];
                     var projectConfig = frmMain.config?.Projects?.FirstOrDefault(p => !string.IsNullOrEmpty(p.Root) &&
                                                                                      p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
                     if (projectConfig == null || string.IsNullOrWhiteSpace(issueType))
                         return "<span style='font-size:22px; vertical-align:middle; margin-right:8px;'>🟥</span>";
 
-                    // Exact or case-insensitive map
                     string fileName = null;
                     if (!projectConfig.Types.TryGetValue(issueType, out fileName))
                     {
@@ -1115,7 +1254,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             catch { return null; }
         }
 
-        // Local copy of frmMain.FixOfflineAttachmentUrls (frmMain version is private)
         // Local copy of frmMain.FixOfflineAttachmentUrls (web version: rewrite to HTTP)
         private static string FixOfflineAttachmentUrlsLocal(string html)
         {
@@ -1134,7 +1272,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
 
                 static string ToHttpPath(string rel)
                 {
-                    // Normalize ./attachments/... => /attachments/...
                     var p = rel.TrimStart('.', '/');
                     return "/" + p.Replace('\\', '/');
                 }
@@ -1289,6 +1426,7 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
         }
 
         // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
+        // Write index.html (embedded monovera.css) and monovera.web.js to WebAppRoot
         private static async Task EnsureWebAssetsAsync(string WebAppRoot)
         {
             string css = "";
@@ -1301,7 +1439,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             }
             catch { css = ""; }
 
-            // Namespaced CSS to avoid collisions (mv-*)
             string indexHtml = $@"<!DOCTYPE html>
 <html>
 <head>
@@ -1335,7 +1472,7 @@ body {{ overflow: hidden; }}
 .node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
 
 /* Context menu */
-.ctx-menu {{ position: fixed; display:none; z-index:10000; min-width:180px; background:#fff; border:1px solid #b3d4f6; border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.15); font: 12px Segoe UI, sans-serif; }}
+.ctx-menu {{ position: fixed; display:none; z-index:10000; min-width:220px; background:#fff; border:1px solid #b3d4f6; border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.15); font: 12px Segoe UI, sans-serif; }}
 .ctx-menu ul {{ margin:0; padding:4px; list-style:none; }}
 .ctx-menu li {{ padding:6px 10px; cursor:pointer; border-radius:4px; color:#1565c0; display:flex; align-items:center; gap:8px; }}
 .ctx-menu li:hover {{ background:#e3f2fd; }}
@@ -1424,7 +1561,23 @@ body {{ overflow: hidden; }}
 .mv-search-btn {{ appearance:none; border:1px solid #b3d4f6; background:#ffffff; color:#1565c0; border-radius:4px; padding:6px 10px; cursor:pointer; }}
 .mv-search-results {{ height: 420px; border-top:1px solid #b3d4f6; }}
 .mv-search-results iframe {{ width:100%; height:100%; border:none; background:#fff; }}
-.mv-search-hint {{ color:#777; font-size:0.9em; }}
+
+/* Confirmation overlay centered like history alerts */
+.mv-confirm {{
+  position:fixed; inset:0; background:rgba(0,0,0,.15);
+  z-index:10000; display:none;
+  display:flex; align-items:center; justify-content:center;
+}}
+.mv-confirm-panel {{
+  width:min(560px, calc(100% - 24px));
+  background:#fff; border:1px solid #b3d4f6; border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.2); overflow:hidden;
+}}
+.mv-confirm-body {{ padding:12px; }}
+.mv-alert {{ background:#e3f2fd; border:1px solid #b3d4f6; color:#0d47a1; border-radius:6px; padding:10px; }}
+.mv-confirm-actions {{ display:flex; justify-content:flex-end; gap:8px; padding:8px 12px; background:#f2faff; border-top:1px solid #b3d4f6; }}
+.mv-btn {{ appearance:none; border:1px solid #b3d4f6; background:#fff; color:#1565c0; border-radius:4px; padding:6px 10px; cursor:pointer; }}
+.mv-btn-primary {{ background:#1565c0; color:#fff; border-color:#0d47a1; }}
   </style>
 </head>
 <body>
@@ -1435,6 +1588,7 @@ body {{ overflow: hidden; }}
         <div id='treeMenu' class='ctx-menu' role='menu' aria-hidden='true'>
           <ul>
             <li data-action='search' role='menuitem' title='Ctrl+Q'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
+            <li data-action='report' role='menuitem' title='Ctrl+P'>📄 Generate report… <span class='mv-search-hint'>(Ctrl+P)</span></li>
           </ul>
         </div>
       </aside>
@@ -1446,7 +1600,6 @@ body {{ overflow: hidden; }}
           <button id='mv-tabNext' class='mv-tab-scroll' title='Scroll right' aria-label='Scroll right'>&rsaquo;</button>
         </div>
         <div id='mv-views'>
-          <!-- Default Home view (shows background image when no tabs are open) -->
           <div id='mv-home' class='mv-view active'>
             <div class='home-splash'>
               <img src='/static/images/MonoveraBackground.png' alt='Monovera' onerror=""this.outerHTML='<div style=\'color:#b00;font:14px Segoe UI\'>Missing images/MonoveraBackground.png</div>'"" />
@@ -1463,7 +1616,6 @@ body {{ overflow: hidden; }}
     </footer>
   </div>
 
-  <!-- Search dialog -->
   <div id='mv-search' class='mv-search' aria-hidden='true'>
     <div class='mv-search-panel' role='dialog' aria-modal='true' aria-labelledby='mv-search-title'>
       <div class='mv-search-header'>
@@ -1505,8 +1657,8 @@ body {{ overflow: hidden; }}
   const treeEl = document.getElementById('tree');
 
   // Tabs
-  const tabsEl = document.getElementById('mv-tabs');               // scrollable strip
-  const tabsViewport = document.querySelector('.mv-tabs-viewport'); // viewport
+  const tabsEl = document.getElementById('mv-tabs');
+  const tabsViewport = document.querySelector('.mv-tabs-viewport');
   const prevBtn = document.getElementById('mv-tabPrev');
   const nextBtn = document.getElementById('mv-tabNext');
   const viewsEl = document.getElementById('mv-views');
@@ -1516,7 +1668,7 @@ body {{ overflow: hidden; }}
   const mainEl = document.querySelector('.main');
   const splitter = document.getElementById('splitter');
 
-  // Context menu + Search dialog elements
+  // Context menu + Search dialog
   const treeMenu = document.getElementById('treeMenu');
   const searchOverlay = document.getElementById('mv-search');
   const searchClose = document.getElementById('mv-search-close');
@@ -1529,7 +1681,7 @@ body {{ overflow: hidden; }}
   const ddlStatus = document.getElementById('mv-search-status');
   const resultsFrame = document.getElementById('mv-search-results');
 
-  // --- Resizer ---
+  // Resizer
   const MIN_LEFT = 220, MIN_RIGHT = 360;
   function setLeftWidth(px){ mainEl.style.setProperty('--left', px + 'px'); splitter.setAttribute('aria-valuenow', String(px)); }
   function clampWidth(px){ const r = mainEl.getBoundingClientRect(); const max = Math.max(MIN_LEFT, r.width - MIN_RIGHT); return Math.max(MIN_LEFT, Math.min(px, max)); }
@@ -1541,7 +1693,7 @@ body {{ overflow: hidden; }}
   splitter.addEventListener('mousedown', startDrag);
   splitter.addEventListener('touchstart', startDrag, { passive:false });
 
-  // --- Status ---
+  // Status
   async function refreshStatus(){
     try {
       const s = await (await fetch('/api/status')).json();
@@ -1552,10 +1704,11 @@ body {{ overflow: hidden; }}
   }
   refreshStatus(); setInterval(refreshStatus, 10000);
 
-  // --- Tree selection helpers ---
+  // Tree selection
   let selectedAnchor = null;
   function setSelected(a){ if (selectedAnchor){ selectedAnchor.classList.remove('selected'); selectedAnchor.setAttribute('aria-selected','false'); } selectedAnchor = a; if (a){ a.classList.add('selected'); a.setAttribute('aria-selected','true'); a.scrollIntoView({block:'nearest', inline:'nearest'}); } }
   function highlightTreeSelection(key){ const a = document.querySelector(`#tree a[data-key='${key}']`); if (a) setSelected(a); }
+  window.__ctxKey = null;
 
   function liNode({ key, text, hasChildren, icon }) {
     const li = document.createElement('li');
@@ -1585,7 +1738,6 @@ body {{ overflow: hidden; }}
     exp.textContent = '-';
     exp.dataset.state = 'expanded';
   }
-
   function collapseNode(li){
     const exp = li.querySelector('span.expander');
     const ul = li.querySelector('ul');
@@ -1594,14 +1746,13 @@ body {{ overflow: hidden; }}
     exp.textContent = '+';
     exp.dataset.state = 'collapsed';
   }
-
   async function loadRoots() {
     const roots = await (await fetch('/api/tree/roots')).json();
     treeEl.innerHTML = '';
     roots.forEach(r => treeEl.appendChild(liNode(r)));
   }
 
-  // One-time root expansion on load
+  // Expand to key
   let expandedRootsOnce = false;
   async function expandRootLevelOnce() {
     if (expandedRootsOnce) return;
@@ -1616,8 +1767,6 @@ body {{ overflow: hidden; }}
       }
     }
   }
-
-  // Expand to key and select within SPA tree
   async function expandAndSelect(key) {
     try {
       if (!treeEl.children.length) {
@@ -1647,7 +1796,7 @@ body {{ overflow: hidden; }}
     } catch {}
   }
 
-  // --- Tabs: scrolling logic (namespaced) ---
+  // Tabs scroll
   function updateTabScrollButtons(){
     const canScroll = tabsEl.scrollWidth > tabsViewport.clientWidth + 1;
     prevBtn.style.display = canScroll ? 'inline-flex' : 'none';
@@ -1655,40 +1804,20 @@ body {{ overflow: hidden; }}
     prevBtn.disabled = !canScroll || tabsEl.scrollLeft <= 0;
     nextBtn.disabled = !canScroll || (tabsEl.scrollLeft + tabsViewport.clientWidth >= tabsEl.scrollWidth - 1);
   }
-  function scrollTabsBy(delta){
-    tabsEl.scrollBy({ left: delta, behavior: 'smooth' });
-  }
+  function scrollTabsBy(delta){ tabsEl.scrollBy({ left: delta, behavior: 'smooth' }); }
   prevBtn.addEventListener('click', () => scrollTabsBy(-Math.max(200, tabsViewport.clientWidth * 0.6)));
   nextBtn.addEventListener('click', () => scrollTabsBy(+Math.max(200, tabsViewport.clientWidth * 0.6)));
   tabsEl.addEventListener('scroll', () => requestAnimationFrame(updateTabScrollButtons));
   window.addEventListener('resize', () => requestAnimationFrame(updateTabScrollButtons));
 
-  // Keep active tab in view
-  function ensureActiveTabVisible(key){
-    const tab = document.getElementById(makeTabId(key));
-    if (!tab) return;
-    const tabRect = tab.getBoundingClientRect();
-    const viewRect = tabsViewport.getBoundingClientRect();
-    if (tabRect.right > viewRect.right - 8) {
-      const diff = tabRect.right - viewRect.right + 8;
-      tabsEl.scrollBy({ left: diff, behavior: 'smooth' });
-    } else if (tabRect.left < viewRect.left + 8) {
-      const diff = tabRect.left - viewRect.left - 8;
-      tabsEl.scrollBy({ left: diff, behavior: 'smooth' });
-    }
-  }
-
-  // Helpers for views/tabs
   function makeTabId(key){ return 'tab-' + key; }
   function makeViewId(key){ return 'view-' + key; }
-
   function showHomeIfNoTabs() {
     if (!tabsEl.children.length) {
       [...viewsEl.children].forEach(ch => ch.classList.remove('active'));
       if (homeView) homeView.classList.add('active');
     }
   }
-
   function activate(key) {
     const id = makeTabId(key);
     const vid = makeViewId(key);
@@ -1696,10 +1825,8 @@ body {{ overflow: hidden; }}
     [...viewsEl.children].forEach(ch => ch.classList.toggle('active', ch.id === vid));
     if (homeView) homeView.classList.remove('active');
     highlightTreeSelection(key);
-    ensureActiveTabVisible(key);
     updateTabScrollButtons();
   }
-
   function getIconForKey(key){
     const img = document.querySelector(`#tree a[data-key='${key}'] img.node-icon`);
     return img ? img.src : null;
@@ -1739,7 +1866,6 @@ body {{ overflow: hidden; }}
       viewsEl.appendChild(view);
 
       try {
-        // Set loading page first
         iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading...</div></body></html>`;
         const html = await (await fetch(`/api/issue/${encodeURIComponent(key)}/html`)).text();
         iframe.srcdoc = html;
@@ -1750,7 +1876,7 @@ body {{ overflow: hidden; }}
     if (activateTab) activate(key);
   }
 
-  // Special: open Recent Updates tab (HTML provided by server)
+  // Recent updates tab
   async function openRecentUpdatesTab({ days = 14, activateTab = true } = {}) {
     const key = 'RECENT-UPDATES';
     const tabId = makeTabId(key);
@@ -1783,7 +1909,6 @@ body {{ overflow: hidden; }}
       viewsEl.appendChild(view);
 
       try {
-        // Show loading placeholder first
         iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading Recent Updates...</div></body></html>`;
         const html = await (await fetch(`/api/recent/updated/html?days=${encodeURIComponent(days)}`)).text();
         iframe.srcdoc = html;
@@ -1794,7 +1919,7 @@ body {{ overflow: hidden; }}
     if (activateTab) activate(key);
   }
 
-  // Messages from iframes: open tab AND expand/select tree
+  // Message bridge
   window.addEventListener('message', (ev) => {
     try {
       const d = ev.data || {};
@@ -1807,7 +1932,7 @@ body {{ overflow: hidden; }}
     } catch {}
   });
 
-  // ---- Context menu on tree ----
+  // Context menu
   function hideTreeMenu(){ treeMenu.style.display='none'; treeMenu.setAttribute('aria-hidden','true'); }
   function showTreeMenu(x, y){
     treeMenu.style.display='block';
@@ -1817,10 +1942,12 @@ body {{ overflow: hidden; }}
   }
   treeEl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    const a = e.target && e.target.closest ? e.target.closest('a[data-key]') : null;
+    if (a) { setSelected(a); window.__ctxKey = a.dataset.key; }
     showTreeMenu(e.clientX, e.clientY);
   });
   document.addEventListener('click', (e) => {
-    if (!treeMenu.contains(e.target)) hideTreeMenu();
+    if (!treeMenu.contains(e.target)) { hideTreeMenu(); window.__ctxKey = null; }
   });
   treeMenu.addEventListener('click', (e) => {
     const li = e.target.closest('li[data-action]');
@@ -1828,13 +1955,106 @@ body {{ overflow: hidden; }}
     const action = li.getAttribute('data-action');
     hideTreeMenu();
     if (action === 'search') openSearchDialog();
+    if (action === 'report') generateReport();
   });
 
-  // ---- Search dialog logic ----
-  let searchOptions = null; // { projects: [{project, types[], statuses[]}, ...] }
-  function union(arrays){
-    const set = new Set(); arrays.forEach(a => a?.forEach(v => set.add(v))); return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  // Centered confirmation like history alerts
+  function mvConfirm(message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'mv-confirm';
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-hidden', 'false');
+
+      const panel = document.createElement('div');
+      panel.className = 'mv-confirm-panel';
+
+      const body = document.createElement('div');
+      body.className = 'mv-confirm-body';
+
+      const alertBox = document.createElement('div');
+      alertBox.className = 'mv-alert';
+      alertBox.textContent = message;
+
+      const actions = document.createElement('div');
+      actions.className = 'mv-confirm-actions';
+
+      const btnCancel = document.createElement('button');
+      btnCancel.className = 'mv-btn';
+      btnCancel.textContent = 'Cancel';
+
+      const btnOk = document.createElement('button');
+      btnOk.className = 'mv-btn mv-btn-primary';
+      btnOk.textContent = 'OK';
+
+      actions.appendChild(btnCancel);
+      actions.appendChild(btnOk);
+      body.appendChild(alertBox);
+      panel.appendChild(body);
+      panel.appendChild(actions);
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+
+      const cleanup = (val) => { overlay.remove(); resolve(val); };
+      btnOk.addEventListener('click', () => cleanup(true));
+      btnCancel.addEventListener('click', () => cleanup(false));
+      overlay.addEventListener('click', (e) => { if (!panel.contains(e.target)) cleanup(false); });
+      window.addEventListener('keydown', function onKey(e) {
+        if (e.key === 'Escape') { window.removeEventListener('keydown', onKey); cleanup(false); }
+        if (e.key === 'Enter') { window.removeEventListener('keydown', onKey); cleanup(true); }
+      }, { once: true });
+    });
   }
+
+  // Report generation: open new tab and navigate with absolute URL
+  async function generateReport() {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key) || null;
+    if (!key) { alert('Please select an item in the tree.'); return; }
+
+    const ok = await mvConfirm('Generate hierarchical HTML report for ' + key + ' and its children?');
+    if (!ok) return;
+
+    // Pre-open a tab and show a placeholder so it never stays blank
+    let popup = null;
+    try {
+      popup = window.open('about:blank', '_blank');
+      if (popup && !popup.closed) {
+        popup.document.write(`<html><head><title>Generating report…</title></head>
+          <body style='font:14px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh;color:#1565c0;'>
+            Generating report for ${key}…</body></html>`);
+        popup.document.close();
+        try { popup.focus(); } catch {}
+      }
+    } catch {}
+
+    try {
+      const res = await fetch(`/api/report/${encodeURIComponent(key)}`, { method: 'POST' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const targetUrl = data && data.url ? new URL(data.url, window.location.origin).href : null;
+
+      if (targetUrl) {
+        if (popup && !popup.closed) {
+          // Use replace to avoid adding an extra entry in popup history
+          popup.location.replace(targetUrl);
+        } else {
+          window.open(targetUrl, '_blank');
+        }
+      } else {
+        if (popup && !popup.closed) {
+          popup.document.body.innerHTML = `<div style='padding:12px;color:#b00;'>Report generated but no URL was returned.</div>`;
+        } else {
+          alert('Report generated but no URL was returned.');
+        }
+      }
+    } catch (err) {
+      if (popup && !popup.closed) popup.document.body.innerHTML = `<div style='padding:12px;color:#b00;'>Failed to generate report: ${String(err?.message || err)}</div>`;
+    }
+  }
+
+  // Search dialog
+  let searchOptions = null;
+  function union(arrays){ const set = new Set(); arrays.forEach(a => a?.forEach(v => set.add(v))); return Array.from(set).sort((a,b)=>a.localeCompare(b)); }
   async function ensureSearchOptions(){
     if (searchOptions) return searchOptions;
     const res = await fetch('/api/search/options');
@@ -1851,7 +2071,6 @@ body {{ overflow: hidden; }}
     const opts = await ensureSearchOptions();
     const projects = (opts?.projects || []).map(p => p.project).filter(Boolean).sort((a,b)=>a.localeCompare(b));
     fillDropdown(ddlProject, projects, true);
-    // Initial types/status (All projects merged)
     const allTypes = union((opts?.projects || []).map(p => p.types));
     const allStatuses = union((opts?.projects || []).map(p => p.statuses));
     fillDropdown(ddlType, allTypes, true);
@@ -1877,6 +2096,8 @@ body {{ overflow: hidden; }}
   function showSearchLoading(){
     resultsFrame.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Searching...</div></body></html>`;
   }
+
+  // Build normal JQL (unchanged)
   function buildNormalJql(){
     const q = (searchText.value || '').trim();
     const proj = ddlProject.value || 'All';
@@ -1886,105 +2107,77 @@ body {{ overflow: hidden; }}
     if (proj === 'All') {
       try {
         const projects = (searchOptions?.projects || []).map(p => p.project).filter(Boolean);
-        if (projects.length) filters.push('(' + projects.map(p => `project = \""${ p}\""`).join(' OR ') + ')');
+        if (projects.length) filters.push('(' + projects.map(p => `project = ""${p}""`).join(' OR ') + ')');
       } catch {}
     } else {
-      filters.push(`project = \""${proj}\""`);
+      filters.push(`project = ""${proj}""`);
     }
-if (q) filters.push(`text ~ \""${q}\""`);
-    if (type !== 'All') filters.push(`issuetype = \""${type}\""`);
-    if (status !== 'All') filters.push(`status = \""${status}\""`);
-    return `${ filters.join(' AND ')}
-ORDER BY key ASC`;
+    if (q) filters.push(`text ~ ""${q}""`);
+    if (type !== 'All') filters.push(`issuetype = ""${type}""`);
+    if (status !== 'All') filters.push(`status = ""${status}""`);
+    return `${filters.join(' AND ')} ORDER BY key ASC`;
   }
-  function tryQuickOpenByKey()
-{
-    const key = (searchText.value || '').trim().toUpperCase();
-    if (/ ^ [A - Z][A - Z0 - 9] + -\d +$/.test(key)) {
-        // Quick open/close dialog
-        try
-        {
-            window.postMessage({ type: 'open-issue', key, title: '[' + key + ']' }, '*');
-        }
-        catch { }
-        hideSearchDialog();
-        return true;
-    }
-    return false;
-}
-async function runSearch()
-{
-    if (!searchJql.checked && tryQuickOpenByKey()) return;
-        const jql = searchJql.checked ? (searchText.value || '').trim() : buildNormalJql();
-if (!jql) return;
-showSearchLoading();
-const url = `/api/search/html?jql=${encodeURIComponent(jql)}`;
-try
-{
-    const html = await (await fetch(url)).text();
-    resultsFrame.srcdoc = html;
-}
-catch
-{
-    resultsFrame.srcdoc = `< html >< body >< div style = 'padding:12px;color:#b00;font:14px Segoe UI;' > Failed to run search.</ div ></ body ></ html >`;
-}
-  }
-  function showSearchDialog()
-{
+
+  function showSearchDialog(){
     searchOverlay.style.display = 'block';
     searchOverlay.setAttribute('aria-hidden', 'false');
     searchText.focus();
-    // lazy load options on first open
     if (!searchOptions) populateFilters();
-}
-function hideSearchDialog()
-{
+  }
+  function hideSearchDialog(){
     searchOverlay.style.display = 'none';
     searchOverlay.setAttribute('aria-hidden', 'true');
-}
-function openSearchDialog() { showSearchDialog(); }
+  }
+  function openSearchDialog() { showSearchDialog(); }
 
-// Wire UI
-searchClose.addEventListener('click', hideSearchDialog);
-searchJql.addEventListener('change', () => { toggleJqlUI(); });
-toggleJqlUI();
-searchRun.addEventListener('click', () => runSearch());
-searchText.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+  searchClose.addEventListener('click', hideSearchDialog);
+  searchJql.addEventListener('change', () => { toggleJqlUI(); });
+  toggleJqlUI();
+  searchRun.addEventListener('click', async () => {
+    const jql = searchJql.checked ? (searchText.value || '').trim() : buildNormalJql();
+    if (!jql) return;
+    showSearchLoading();
+    try {
+      const html = await (await fetch(`/api/search/html?jql=${encodeURIComponent(jql)}`)).text();
+      resultsFrame.srcdoc = html;
+    } catch {
+      resultsFrame.srcdoc = `<html><body><div style='padding:12px;color:#b00;font:14px Segoe UI;'>Failed to run search.</div></body></html>`;
+    }
+  });
+  searchText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); searchRun.click(); }
     if (e.key === 'Escape') { e.preventDefault(); hideSearchDialog(); }
-});
-// Dismiss dialog when clicking outside panel
-searchOverlay.addEventListener('click', (e) => {
+  });
+  searchOverlay.addEventListener('click', (e) => {
     const panel = e.target.closest('.mv-search-panel');
     if (!panel) hideSearchDialog();
-});
+  });
 
-// Global keyboard: Ctrl+Q opens search (avoid when typing in inputs)
-window.addEventListener('keydown', (e) => {
+  // Global keyboard
+  window.addEventListener('keydown', (e) => {
     const tag = (e.target?.tagName || '').toUpperCase();
-    if (e.ctrlKey && (e.key === 'q' || e.key === 'Q'))
-    {
-        if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(e.target?.isContentEditable))
-        {
-            e.preventDefault();
-            openSearchDialog();
-        }
+    if (e.ctrlKey && (e.key === 'q' || e.key === 'Q')) {
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(e.target?.isContentEditable)) {
+        e.preventDefault(); openSearchDialog();
+      }
+    }
+    if (e.ctrlKey && (e.key === 'p' || e.key === 'P')) {
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(e.target?.isContentEditable)) {
+        e.preventDefault(); generateReport();
+      }
     }
     if (e.key === 'Escape') hideTreeMenu();
-});
+  });
 
-await loadRoots();
-await expandRootLevelOnce();
-
-// Auto-open Recent Updates (same behavior as desktop)
-await openRecentUpdatesTab({ days: 14, activateTab: true });
-
-updateTabScrollButtons();
+  await loadRoots();
+  await expandRootLevelOnce();
+  await openRecentUpdatesTab({ days: 14, activateTab: true });
+  updateTabScrollButtons();
 })(); ";
 
             Directory.CreateDirectory(WebAppRoot);
-await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
-await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
+            await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
+            await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "monovera.web.js"), webJs, Encoding.UTF8);
         }
     }
 }
