@@ -1,39 +1,311 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Linq;
-using System.Net.Http.Headers;
+﻿using Microsoft.Web.WebView2.Core;
+using Newtonsoft.Json;
+using System;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using System.Windows.Forms;
-using Microsoft.Web.WebView2.Core;
-using static System.Net.Mime.MediaTypeNames;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TrayNotify;
-using static Monovera.frmMain;
-using Application = System.Windows.Forms.Application;
 
 namespace Monovera
 {
     /// <summary>
-    /// Search dialog for Monovera.
-    /// Allows users to search Jira issues by text, project, type, and status.
-    /// Displays results in a WebView2 browser and supports navigation to issues in the tree.
+    /// Talk to AI dialog. Hosts an Ollama RAG UI in WebView2 and streams progress/answers.
     /// </summary>
     public partial class frmTalkToAI : Form
     {
         private ListBox lstAutoComplete;
         public string AI_MODE = "test";
 
-        /// <summary>
-        /// Main constructor. Initializes UI, combo boxes, event handlers, and WebView2.
-        /// </summary>
-        /// <param name="tree">The TreeView control to use for navigation.</param>
+        private string _dbPath = "";
+        private string? _ollamaBaseUrl = "http://localhost:11434";
+        private CancellationTokenSource? _ctsIndex;
+        private CancellationTokenSource? _ctsAsk;
+
+        // Guards initial navigation so the loading page doesn't override the Ollama UI
+        private volatile bool _loadOllamaUiRequested = false;
+
+        // Call this from frmMain after creating the form (mnuOllama click)
+        public async void InitializeOllamaRagUI(string dbPath, string? ollamaBaseUrl = "http://localhost:11434")
+        {
+            _dbPath = dbPath;
+            _ollamaBaseUrl = ollamaBaseUrl;
+            _loadOllamaUiRequested = true; // set early to win races
+
+            var wv = webViewTestCases ?? throw new InvalidOperationException("webViewTestCases is not initialized on frmTalkToAI.");
+            await wv.EnsureCoreWebView2Async();
+
+            // Wire Ollama message handler
+            wv.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived_ForOllama;
+            wv.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived_ForOllama;
+
+            // Navigate to the Ollama UI
+            wv.CoreWebView2.NavigateToString(BuildOllamaHtml());
+        }
+
+        private void CoreWebView2_WebMessageReceived_ForOllama(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try
+            {
+                var msgText = e.TryGetWebMessageAsString();
+                if (string.IsNullOrWhiteSpace(msgText)) return;
+
+                dynamic msg = JsonConvert.DeserializeObject(msgText)!;
+                string cmd = (string?)msg.cmd ?? "";
+
+                switch (cmd)
+                {
+                    case "index":
+                        {
+                            int chunk = (int?)(msg.chunksize ?? 1500) ?? 1500;
+                            int hop = (int?)(msg.hop ?? 2) ?? 2;
+                            StartIndex(chunk, hop);
+                            break;
+                        }
+                    case "ask":
+                        {
+                            string q = (string?)msg.q ?? "";
+                            int topk = (int?)(msg.topk ?? 12) ?? 12;
+                            string? seed = (string?)msg.seed;
+                            string? sys = (string?)msg.sys;
+                            StartAsk(q, topk, seed, sys);
+                            break;
+                        }
+                    case "cancel":
+                        {
+                            _ctsIndex?.Cancel();
+                            _ctsAsk?.Cancel();
+                            PostStatus("Canceled.");
+                            break;
+                        }
+                }
+            }
+            catch (Exception ex)
+            {
+                PostStatus($"Error: {ex.Message}");
+            }
+        }
+
+        private void StartIndex(int chunkSize, int hop)
+        {
+            _ctsIndex?.Cancel();
+            _ctsIndex = new CancellationTokenSource();
+
+            var progress = new Progress<string>(text => PostProgress(text));
+            PostStatus($"Indexing started (chunksize={chunkSize}, hop={hop})");
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await OllamaRAG.BuildIndexAsync(_dbPath, chunkSize, hop, _ollamaBaseUrl, progress, _ctsIndex!.Token);
+                    PostStatus("Indexing completed.");
+                }
+                catch (OperationCanceledException)
+                {
+                    PostStatus("Indexing canceled.");
+                }
+                catch (MissingMethodException)
+                {
+                    await OllamaRAG.BuildIndexAsync(_dbPath, chunkSize, hop, _ollamaBaseUrl);
+                    PostStatus("Indexing completed (fallback).");
+                }
+                catch (Exception ex)
+                {
+                    PostStatus($"Index error: {ex.Message}");
+                }
+            });
+        }
+
+        private void StartAsk(string question, int topk, string? seedKey, string? systemStyle)
+        {
+            _ctsAsk?.Cancel();
+            _ctsAsk = new CancellationTokenSource();
+
+            PostAnswerReset();
+            PostStatus("Asking...");
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var gotAnyDelta = false;
+                    await OllamaRAG.AskStreamAsync(
+                        dbPath: _dbPath,
+                        question: question,
+                        onDelta: delta => { gotAnyDelta = true; PostAnswerDelta(delta); },
+                        topk: topk,
+                        seedKey: seedKey,
+                        systemStyle: systemStyle,
+                        ollamaBaseUrl: _ollamaBaseUrl,
+                        cancellationToken: _ctsAsk!.Token
+                    );
+
+                    if (!gotAnyDelta)
+                    {
+                        // Fallback to non-stream if stream produced no output
+                        var answer = await OllamaRAG.AskAsync(_dbPath, question, topk, seedKey, systemStyle, _ollamaBaseUrl);
+                        if (!string.IsNullOrWhiteSpace(answer))
+                            PostAnswerDelta(answer);
+                    }
+                    PostStatus("Ask completed.");
+                }
+                catch (OperationCanceledException)
+                {
+                    PostStatus("Ask canceled.");
+                }
+                catch (MissingMethodException)
+                {
+                    var answer = await OllamaRAG.AskAsync(_dbPath, question, topk, seedKey, systemStyle, _ollamaBaseUrl);
+                    PostAnswerDelta(answer);
+                    PostStatus("Ask completed (fallback).");
+                }
+                catch (Exception ex)
+                {
+                    PostStatus($"Ask error: {ex.Message}");
+                }
+            });
+        }
+
+        private void PostProgress(string text) => PostToWeb(new { type = "progress", text });
+        private void PostStatus(string text) => PostToWeb(new { type = "status", text });
+        private void PostAnswerReset() => PostToWeb(new { type = "answer-reset" });
+        private void PostAnswerDelta(string delta) => PostToWeb(new { type = "answer-delta", delta });
+
+        private void PostToWeb(object payload)
+        {
+            if (webViewTestCases?.CoreWebView2 == null) return;
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+
+            if (webViewTestCases.InvokeRequired)
+            {
+                webViewTestCases.Invoke(new Action(() =>
+                {
+                    if (webViewTestCases?.CoreWebView2 != null)
+                        webViewTestCases.CoreWebView2.PostWebMessageAsString(json);
+                }));
+            }
+            else
+            {
+                webViewTestCases.CoreWebView2.PostWebMessageAsString(json);
+            }
+        }
+
+        private static string BuildOllamaHtml()
+        {
+            var sb = new StringBuilder();
+            sb.Append(@"<!doctype html>
+<html>
+<head>
+<meta charset='utf-8'>
+<title>Ollama RAG</title>
+<style>
+ body{font-family:Segoe UI,Arial,sans-serif;margin:16px}
+ h2{color:#1565c0}
+ .row{display:flex;gap:8px;align-items:center;margin:6px 0}
+ textarea,input[type=text]{width:100%;box-sizing:border-box}
+ textarea{height:120px}
+ .progress{height:90px}
+ button{padding:6px 10px}
+ .muted{color:#666}
+</style>
+</head>
+<body>
+<h2>Ollama RAG</h2>
+
+<div class='row'>
+  <button id='btnIndex'>Index Now</button>
+  <input id='chunksize' type='number' value='1500' min='200' step='100' style='width:110px' />
+  <input id='hop' type='number' value='2' min='0' max='5' step='1' style='width:70px' />
+  <button id='btnCancel' title='Cancel current operation'>Cancel</button>
+</div>
+<div class='row'>
+  <textarea id='progress' class='progress' placeholder='Progress...'></textarea>
+</div>
+
+<hr />
+
+<div class='row'>
+  <textarea id='q' placeholder='Type your question...'></textarea>
+</div>
+<div class='row'>
+  <input id='seed' type='text' placeholder='Optional seed key (e.g., DEV-123)' />
+  <input id='sys' type='text' placeholder='Optional system style rules' />
+  <input id='topk' type='number' value='12' min='1' max='50' step='1' style='width:80px' />
+  <button id='btnAsk'>Ask</button>
+</div>
+<div class='row'>
+  <textarea id='answer' placeholder='Answer appears here in real time...'></textarea>
+</div>
+
+<div class='row muted' id='status'></div>
+
+<script>
+const btnIndex = document.getElementById('btnIndex');
+const btnCancel = document.getElementById('btnCancel');
+const progress = document.getElementById('progress');
+const q = document.getElementById('q');
+const topk = document.getElementById('topk');
+const sys = document.getElementById('sys');
+const seed = document.getElementById('seed');
+const chunksize = document.getElementById('chunksize');
+const hop = document.getElementById('hop');
+const btnAsk = document.getElementById('btnAsk');
+const answer = document.getElementById('answer');
+const statusEl = document.getElementById('status');
+
+function post(msg) {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage(JSON.stringify(msg));
+  }
+}
+
+btnIndex.addEventListener('click', () => {
+  progress.value = '';
+  statusEl.textContent = 'Starting indexing...';
+  post({ cmd: 'index', chunksize: parseInt(chunksize.value || '1500'), hop: parseInt(hop.value || '2') });
+});
+
+btnCancel.addEventListener('click', () => {
+  post({ cmd: 'cancel' });
+});
+
+btnAsk.addEventListener('click', () => {
+  answer.value = '';
+  statusEl.textContent = 'Asking...';
+  post({ cmd: 'ask', q: q.value || '', topk: parseInt(topk.value || '12'), seed: seed.value || null, sys: sys.value || null });
+});
+
+if (window.chrome && window.chrome.webview) {
+  window.chrome.webview.addEventListener('message', e => {
+    const data = e.data;
+    try {
+      const msg = (typeof data === 'string') ? JSON.parse(data) : data;
+      switch (msg.type) {
+        case 'progress':
+          progress.value += (msg.text || '') + '\n';
+          progress.scrollTop = progress.scrollHeight;
+          break;
+        case 'status':
+          statusEl.textContent = msg.text || '';
+          break;
+        case 'answer-reset':
+          answer.value = '';
+          break;
+        case 'answer-delta':
+          answer.value += (msg.delta || '');
+          answer.scrollTop = answer.scrollHeight;
+          break;
+      }
+    } catch {}
+  });
+}
+</script>
+</body>
+</html>");
+            return sb.ToString();
+        }
+
         public frmTalkToAI()
         {
             InitializeComponent();
@@ -109,29 +381,47 @@ namespace Monovera
 </body>
 </AIResponse>";
 
-            // Initialize WebView2 and attach message handler
+            // Initialize WebView2 and attach generic message handler
             webViewTestCases.EnsureCoreWebView2Async().ContinueWith(_ =>
             {
                 webViewTestCases.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
 
-                // Show welcome message on first open
+                // Navigate once ready; choose page based on requested mode
                 webViewTestCases.Invoke(() =>
                 {
-                    webViewTestCases.NavigateToString(loadingAIHTML);
-
+                    var html = _loadOllamaUiRequested ? BuildOllamaHtml() : loadingAIHTML;
+                    webViewTestCases.NavigateToString(html);
                 });
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
+            // Clean up on close
+            this.FormClosed += (_, __) =>
+            {
+                try
+                {
+                    _ctsAsk?.Cancel();
+                    _ctsAsk?.Dispose();
+                    _ctsAsk = null;
 
+                    _ctsIndex?.Cancel();
+                    _ctsIndex?.Dispose();
+                    _ctsIndex = null;
 
+                    if (webViewTestCases?.CoreWebView2 != null)
+                    {
+                        webViewTestCases.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                        webViewTestCases.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived_ForOllama;
+                    }
+                }
+                catch { /* ignore */ }
+            };
         }
 
         public void UpdateAIProgress(string message)
         {
             if (webViewTestCases?.CoreWebView2 != null)
             {
-                // Escape message for JS
-                string js = $"document.getElementById('ai-progress').textContent = {JsonSerializer.Serialize(message)};";
+                string js = $"document.getElementById('ai-progress').textContent = {System.Text.Json.JsonSerializer.Serialize(message)};";
                 webViewTestCases.ExecuteScriptAsync(js);
             }
         }
@@ -141,18 +431,15 @@ namespace Monovera
             base.OnShown(e);
         }
 
-        /// <summary>
-        /// Handles messages from the WebView2 browser.
-        /// Selects and focuses the corresponding issue node in the tree when a result is clicked.
-        /// </summary>
+        // Generic WebView2 messages (used by other pages)
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            string key = e.TryGetWebMessageAsString();
+            string _ = e.TryGetWebMessageAsString();
         }
 
+        // Existing (non-RAG) AI context renderer remains available
         public async void LoadAIContext(string key, string issueListSummary, string aiInput)
         {
-            // Ensure WebView2 is initialized before using it
             if (webViewTestCases.CoreWebView2 == null)
                 await webViewTestCases.EnsureCoreWebView2Async();
 
@@ -166,11 +453,9 @@ namespace Monovera
                 aiResult = "Error: " + ex.Message;
             }
 
-            // Read the CSS file content
-            string cssPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.css");
-            string cssContent = File.Exists(cssPath) ? File.ReadAllText(cssPath) : "";
+            string cssPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "monovera.css");
+            string cssContent = System.IO.File.Exists(cssPath) ? System.IO.File.ReadAllText(cssPath) : "";
 
-            // Prepare the HTML with marked.js for Markdown and Prism.js for code highlighting
             string AIResponse = $@"
 <!DOCTYPE html>
 <html lang='en'>
@@ -203,7 +488,7 @@ namespace Monovera
         <summary>List of Issues</summary>
         <section>{System.Web.HttpUtility.HtmlEncode(issueListSummary)}</section>
       </details>
-        <details>
+      <details>
         <summary>Prompt</summary>
         <section>{System.Web.HttpUtility.HtmlEncode(aiInput)}</section>
       </details>
@@ -216,19 +501,16 @@ namespace Monovera
     </section>
   </details>
   <script>
-    // Render markdown to HTML
-    document.getElementById('ai-markdown').innerHTML = marked.parse({JsonSerializer.Serialize(aiResult)});
-    // Highlight code blocks
+    document.getElementById('ai-markdown').innerHTML = marked.parse({System.Text.Json.JsonSerializer.Serialize(aiResult)});
     Prism.highlightAll();
   </script>
 </body>
 </html>";
 
-            // Write to temp file and navigate
-            string tempFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "temp");
-            Directory.CreateDirectory(tempFolder);
-            string tempFile = Path.Combine(tempFolder, $"AIResponse_{Guid.NewGuid():N}.html");
-            File.WriteAllText(tempFile, AIResponse, Encoding.UTF8);
+            string tempFolder = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "temp");
+            System.IO.Directory.CreateDirectory(tempFolder);
+            string tempFile = System.IO.Path.Combine(tempFolder, $"AIResponse_{Guid.NewGuid():N}.html");
+            System.IO.File.WriteAllText(tempFile, AIResponse, Encoding.UTF8);
 
             try
             {
@@ -237,199 +519,7 @@ namespace Monovera
             catch (Exception ex)
             {
                 MessageBox.Show($"Error loading AI response: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
             }
-        }
-    }
-
-    public static class AIService
-    {
-        private class AIConfig
-        {
-            public string Type { get; set; } = "";
-            public string EndPoint { get; set; } = "";
-            public string Token { get; set; } = "";
-            public Dictionary<string, string> PromptPrefixes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-        }
-
-        private static AIConfig? _activeConfig;
-        private static readonly object _lock = new();
-
-        private static void LoadConfig()
-        {
-            if (_activeConfig != null) return;
-            lock (_lock)
-            {
-                if (_activeConfig != null) return;
-                string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "AIConfiguration.json");
-                if (!File.Exists(configPath))
-                    throw new InvalidOperationException("AIConfiguration.json not found.");
-
-                var json = File.ReadAllText(configPath);
-                using var doc = JsonDocument.Parse(json);
-
-                AIConfig? found = null;
-                foreach (var prop in doc.RootElement.EnumerateObject())
-                {
-                    var aiObj = prop.Value;
-                    if (aiObj.TryGetProperty("default", out var def) && def.GetBoolean())
-                    {
-                        found = new AIConfig
-                        {
-                            Type = prop.Name,
-                            EndPoint = aiObj.GetProperty("endPoint").GetString() ?? "",
-                            Token = aiObj.GetProperty("token").GetString() ?? "",
-                            PromptPrefixes = aiObj.TryGetProperty("promptPrefixes", out var prefixesElem) && prefixesElem.ValueKind == JsonValueKind.Object
-                                ? prefixesElem.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.GetString() ?? "", StringComparer.OrdinalIgnoreCase)
-                                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                        };
-                        break;
-                    }
-                }
-                if (found == null)
-                    throw new InvalidOperationException("No default AI configuration found in AIConfiguration.json.");
-                _activeConfig = found;
-            }
-        }
-
-        private static string PromptForPrefix(string prefix)
-        {
-            string result = prefix;
-            using (var dlg = new Form())
-            {
-                dlg.Text = "Edit AI Prompt Prefix";
-                dlg.FormBorderStyle = FormBorderStyle.FixedDialog;
-                dlg.StartPosition = FormStartPosition.CenterParent;
-                dlg.Width = 700;
-                dlg.Height = 400;
-                dlg.Font = new System.Drawing.Font("Segoe UI", 10);
-
-                var txtPrompt = new TextBox
-                {
-                    Dock = DockStyle.Fill,
-                    Font = new System.Drawing.Font("Consolas", 11),
-                    Multiline = true,
-                    ScrollBars = ScrollBars.Vertical,
-                    Text = prefix,
-                    Height = 240
-                };
-
-                var btnContinue = new Button { Text = "Continue", DialogResult = DialogResult.OK, Width = 100, Height = 40, Font = new System.Drawing.Font("Segoe UI", 10, FontStyle.Bold) };
-                var btnCancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 100, Height = 40, Font = new System.Drawing.Font("Segoe UI", 10) };
-
-                var buttonPanel = new FlowLayoutPanel
-                {
-                    FlowDirection = FlowDirection.RightToLeft,
-                    Dock = DockStyle.Bottom,
-                    Padding = new Padding(0, 8, 0, 0)
-                };
-                buttonPanel.Controls.Add(btnContinue);
-                buttonPanel.Controls.Add(btnCancel);
-
-                dlg.Controls.Add(txtPrompt);
-                dlg.Controls.Add(buttonPanel);
-
-                dlg.AcceptButton = btnContinue;
-                dlg.CancelButton = btnCancel;
-
-                if (dlg.ShowDialog() == DialogResult.OK)
-                    result = txtPrompt.Text;
-                else
-                    result = null;
-            }
-            return result;
-        }
-
-        public static async Task<string> AskAI(string prompt, string promptType = "")
-        {
-            LoadConfig();
-            if (_activeConfig == null)
-                return "AI configuration is missing or invalid.";
-
-            string prefix = "";
-            if (!string.IsNullOrWhiteSpace(promptType) && _activeConfig.PromptPrefixes.TryGetValue(promptType, out var p))
-                prefix = p;
-
-            // Show dialog for user to review/edit the prefix
-            prefix = PromptForPrefix(prefix);
-            if (string.IsNullOrWhiteSpace(prefix))
-                return "Cancelled by user.";
-
-            string fullPrompt = (prefix + (string.IsNullOrWhiteSpace(prefix) ? "" : "\n\n") + prompt).Trim();
-
-            return _activeConfig.Type.Equals("GemniAI", StringComparison.OrdinalIgnoreCase)
-                ? await AskGeminiAI(fullPrompt)
-                : await AskOllamaAI(fullPrompt);
-        }
-
-        private static async Task<string> AskGeminiAI(string prompt)
-        {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Add("X-goog-api-key", _activeConfig!.Token);
-
-            var requestBody = new
-            {
-                contents = new[]
-                {
-                new
-                {
-                    parts = new[]
-                    {
-                        new { text = prompt }
-                    }
-                }
-            }
-            };
-
-            var jsonRequest = JsonSerializer.Serialize(requestBody);
-            var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-
-            using var response = await client.PostAsync(_activeConfig.EndPoint, content);
-            response.EnsureSuccessStatusCode();
-
-            var jsonResponse = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(jsonResponse);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("candidates", out var candidates) && candidates.GetArrayLength() > 0)
-            {
-                var text = candidates[0]
-                    .GetProperty("content")
-                    .GetProperty("parts")[0]
-                    .GetProperty("text")
-                    .GetString();
-
-                return text ?? "";
-            }
-            return "";
-        }
-
-        private static async Task<string> AskOllamaAI(string prompt)
-        {
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _activeConfig!.Token);
-
-            var requestBody = new
-            {
-                model = "llama3", // or whatever model you want to use
-                prompt = prompt,
-                stream = false
-            };
-
-            var jsonRequest = JsonSerializer.Serialize(requestBody);
-            var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
-
-            using var response = await client.PostAsync(_activeConfig.EndPoint + "/api/generate", content);
-            response.EnsureSuccessStatusCode();
-
-            var jsonResponse = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(jsonResponse);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("response", out var resp))
-                return resp.GetString() ?? "";
-
-            return "";
         }
     }
 }

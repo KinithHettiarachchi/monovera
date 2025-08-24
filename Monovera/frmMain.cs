@@ -234,7 +234,7 @@ namespace Monovera
             /// <summary>Link type name used for hierarchy (e.g. "Blocks").</summary>
             public string LinkTypeName { get; set; }
             /// <summary>Field name to sort child nodes by (e.g. "created", "summary", "customfield_12345").</summary>
-            public string SortingField { get; set; } 
+            public string SortingField { get; set; }
             /// <summary>Maps issue type names to icon filenames.</summary>
             public Dictionary<string, string> Types { get; set; }
             /// <summary>Maps status names to icon filenames.</summary>
@@ -444,7 +444,7 @@ namespace Monovera
             Directory.CreateDirectory(tempFolder);
             cssPath = Path.Combine(appDir, "monovera.css");
             cssHref = new Uri(cssPath).AbsoluteUri;
-            
+
             if (!File.Exists(cssPath))
             {
                 cssHref = "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
@@ -2867,7 +2867,7 @@ namespace Monovera
                                 }
                             }
 
-                         
+
 
                             // Call JiraService with custom JQL
                             issueDictList = await jiraService.UpdateLocalIssueRepositoryAndLoadTree(
@@ -3849,7 +3849,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     return;
                 }
             }
-          
+
 
             if (OFFLINE_MODE)
             {
@@ -3871,11 +3871,11 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     statusIcon = $"<img src='data:image/png;base64,{base64}' style='height: 18px; vertical-align: middle; margin-right: 6px;'>";
                 }
 
-                 string createdDate = DateTime.ParseExact(
-                                GetFieldValueByKey(issueKey, "CREATEDTIME"),
-                                "yyyyMMddHHmmss",
-                                CultureInfo.InvariantCulture
-                            ).ToString("yyyy-MM-dd HH:mm");
+                string createdDate = DateTime.ParseExact(
+                               GetFieldValueByKey(issueKey, "CREATEDTIME"),
+                               "yyyyMMddHHmmss",
+                               CultureInfo.InvariantCulture
+                           ).ToString("yyyy-MM-dd HH:mm");
 
                 string lastUpdated = DateTime.ParseExact(
                                 GetFieldValueByKey(issueKey, "UPDATEDTIME"),
@@ -4045,7 +4045,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                         {
                             HTML_SECTION_HISTORY = BuildHTMLSection_HISTORY(histories);
                         }
-                        
+
 
                         string responseHTML = WebUtility.HtmlEncode(FormatJson(json));
 
@@ -4081,7 +4081,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
                     }
                 });
             }
-                
+
         }
 
         // Add this helper inside frmMain
@@ -4617,7 +4617,7 @@ window.addEventListener('DOMContentLoaded', applyGlobalFilter);
 
         public static string BuildHTMLSection_HISTORY(JsonElement histories)
         {
-   
+
             var changes = new List<string>();
             int changeId = 0;
 
@@ -5863,7 +5863,7 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             foreach (var c in Path.GetInvalidFileNameChars())
                 name = name.Replace(c, '_');
             return name;
-        } 
+        }
 
         /// <summary>
         /// Selects and loads a tree node by its Jira issue key.
@@ -7149,6 +7149,17 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             {
                 MessageBox.Show("A fatal error occurred: " + ex.Message, "Put Me In Context", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void mnuOllama_Click(object sender, EventArgs e)
+        {
+            if (frmTalkToAIInstance == null || frmTalkToAIInstance.IsDisposed)
+                frmTalkToAIInstance = new frmTalkToAI();
+
+            // Point to your DB and Ollama (default localhost:11434)
+            frmTalkToAIInstance.InitializeOllamaRagUI(DatabasePath, "http://localhost:11434");
+            frmTalkToAIInstance.Show(this);
+            frmTalkToAIInstance.BringToFront();
         }
     }
 

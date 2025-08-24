@@ -44,6 +44,7 @@
             mnuAI = new ToolStripSplitButton();
             mnuAITestCases = new ToolStripMenuItem();
             mnuPutMeInContext = new ToolStripMenuItem();
+            toolStripSeparator1 = new ToolStripSeparator();
             toolStripStatusLabel2 = new ToolStripStatusLabel();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
@@ -58,7 +59,7 @@
             toolStripStatusLabel7 = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
-            toolStripSeparator1 = new ToolStripSeparator();
+            mnuOllama = new ToolStripMenuItem();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
@@ -177,7 +178,7 @@
             // 
             // mnuAI
             // 
-            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext, toolStripSeparator1 });
+            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext, toolStripSeparator1, mnuOllama });
             mnuAI.Font = new Font("Microsoft Sans Serif", 9.75F);
             mnuAI.ImageTransparentColor = Color.Magenta;
             mnuAI.Name = "mnuAI";
@@ -197,6 +198,11 @@
             mnuPutMeInContext.Size = new Size(291, 22);
             mnuPutMeInContext.Text = "Put Me In Context (Experimental)";
             mnuPutMeInContext.Click += mnuPutMeInContext_Click;
+            // 
+            // toolStripSeparator1
+            // 
+            toolStripSeparator1.Name = "toolStripSeparator1";
+            toolStripSeparator1.Size = new Size(288, 6);
             // 
             // toolStripStatusLabel2
             // 
@@ -293,10 +299,12 @@
             // 
             toolTip1.ToolTipIcon = ToolTipIcon.Info;
             // 
-            // toolStripSeparator1
+            // mnuOllama
             // 
-            toolStripSeparator1.Name = "toolStripSeparator1";
-            toolStripSeparator1.Size = new Size(288, 6);
+            mnuOllama.Name = "mnuOllama";
+            mnuOllama.Size = new Size(291, 22);
+            mnuOllama.Text = "Ollama Querying";
+            mnuOllama.Click += mnuOllama_Click;
             // 
             // frmMain
             // 
@@ -351,5 +359,6 @@
         private ToolStripStatusLabel toolStripStatusLabel7;
         private ToolStripStatusLabel lblSyncStatus;
         private ToolStripSeparator toolStripSeparator1;
+        private ToolStripMenuItem mnuOllama;
     }
 }

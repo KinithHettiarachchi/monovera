@@ -240,7 +240,7 @@ public class JiraService
                     PROJECTCODE TEXT,
                     STATUS TEXT,
                     HISTORY TEXT,
-                    ATTACHMENTS BLOB
+                    ATTACHMENTS TEXT
                 );";
                     cmd.ExecuteNonQuery();
                 }

@@ -1257,7 +1257,7 @@ body {{ overflow: hidden; }}
       </section>
     </div>
     <footer class='status'>
-      <span id='statusUser'>👤 User: -</span>
+      <span id='statusUser'>👤 Connected as: -</span>
       <span id='statusMode'>🌐 Mode: -</span>
       <span id='statusUpdated'>🕒 DB Updated: -</span>
       <span style='margin-left:auto;'>Monovera Web</span>
