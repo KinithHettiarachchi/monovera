@@ -4,7 +4,6 @@ using Monovera;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
-using System.Data.SQLite;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -102,7 +101,6 @@ public class JiraService
     /// Any exceptions encountered are caught and result in a <c>null</c> return value.
     /// </summary>
     /// <returns>
-    /// The display name of the connected Jira user, or <c>null</c> if the user information cannot be fetched.
     /// </returns>
     public async Task<string?> GetConnectedUserNameAsync()
     {
@@ -294,17 +292,33 @@ public class JiraService
                     jql = $"project={projectKey}";
 
                 relevantKeys = new List<string>();
-                using (var client = new HttpClient())
+
+                using (var client = GetJiraClient())
                 {
-                    client.BaseAddress = new Uri(jiraBaseUrl);
-                    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-                        "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
-                    );
-                    string url = $"{jiraBaseUrl}/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&fields=key,updated&maxResults=1000";
+                    var payload = new
+                    {
+                        jql,
+                        startAt = 0,
+                        maxResults = 1000,
+                        fields = new[] { "key", "updated" }
+                    };
+
                     var response = await RetryWithMessageBoxAsync(
-                        () => client.GetStringAsync(url),
+                        async () =>
+                        {
+                            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                            var r = await client.PostAsync("/rest/api/3/search/jql", content);
+                            if (!r.IsSuccessStatusCode)
+                            {
+                                content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                                r = await client.PostAsync("/rest/api/3/search", content);
+                            }
+                            r.EnsureSuccessStatusCode();
+                            return await r.Content.ReadAsStringAsync();
+                        },
                         "Failed to fetch issue keys from Jira."
                     );
+
                     var json = JObject.Parse(response);
 
                     var dbUpdatedTimes = new Dictionary<string, string>();
@@ -325,11 +339,11 @@ public class JiraService
                         }
                     }
 
-                    foreach (var issue in json["issues"])
+                    foreach (var issue in json["issues"] ?? new JArray())
                     {
                         string key = (string)issue["key"];
-                        string jiraUpdated = issue["fields"]["updated"] != null
-                            ? ConvertToDbTimestamp((string)issue["fields"]["updated"])
+                        string jiraUpdated = issue["fields"]?["updated"] != null
+                            ? ConvertToDbTimestamp((string)issue["fields"]!["updated"]!)
                             : null;
                         string dbUpdated = dbUpdatedTimes.TryGetValue(key, out var val) ? val : null;
 
@@ -383,33 +397,44 @@ public class JiraService
                     await throttler.WaitAsync();
                     try
                     {
-                        string fieldsStr = "summary,description,issuetype,status,created,updated,issuelinks";
+                        string fieldsStr = "summary,description,issuetype,status,created,updated,issuelinks,attachment";
                         bool hasSortingField = !string.IsNullOrWhiteSpace(sortingField);
                         if (hasSortingField)
                         {
                             fieldsStr += $",{sortingField}";
                         }
-                        string url = $"{jiraBaseUrl}/rest/api/2/search" +
-                                     $"?jql={Uri.EscapeDataString(jql)}" +
-                                     $"&startAt={startAt}" +
-                                     $"&maxResults={pageSize}" +
-                                     $"&fields={Uri.EscapeDataString(fieldsStr)}";
 
-                        using var client = new HttpClient();
+                        using var client = GetJiraClient();
                         client.Timeout = TimeSpan.FromMinutes(15);
-                        client.BaseAddress = new Uri(jiraBaseUrl);
-                        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
-                            "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($"{username}:{apiToken}"))
-                        );
+
+                        var payload = new
+                        {
+                            jql,
+                            startAt = startAt,
+                            maxResults = pageSize,
+                            fields = fieldsStr.Split(',').Select(f => f.Trim()).ToArray()
+                        };
 
                         var response = await RetryWithMessageBoxAsync(
-                            () => client.GetStringAsync(url),
+                            async () =>
+                            {
+                                var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                                var r = await client.PostAsync("/rest/api/3/search/jql", content);
+                                if (!r.IsSuccessStatusCode)
+                                {
+                                    content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                                    r = await client.PostAsync("/rest/api/3/search", content);
+                                }
+                                r.EnsureSuccessStatusCode();
+                                return await r.Content.ReadAsStringAsync();
+                            },
                             "Failed to fetch issues from Jira."
                         );
+
                         var json = JObject.Parse(response);
                         var issues = new List<object[]>();
 
-                        foreach (var issue in json["issues"])
+                        foreach (var issue in json["issues"] ?? new JArray())
                         {
                             string key = (string)issue["key"];
                             if (updateType == "Difference" && relevantKeys != null && relevantKeys.Count > 0 && !relevantKeys.Contains(key))
@@ -417,40 +442,43 @@ public class JiraService
                                 continue;
                             }
 
-                            string created = ConvertToDbTimestamp((string)issue["fields"]["created"]);
-                            string updated = ConvertToDbTimestamp((string)issue["fields"]["updated"]);
-                            string summary = (string)issue["fields"]["summary"];
-                            string status = (string)issue["fields"]["status"]["name"].ToString();
-                            string issueType = (string)issue["fields"]["issuetype"]?["name"] ?? "";
+                            string created = ConvertToDbTimestamp((string)issue["fields"]!["created"]!);
+                            string updated = ConvertToDbTimestamp((string)issue["fields"]!["updated"]!);
+                            string summary = (string)issue["fields"]!["summary"]!;
+                            string status = (string)issue["fields"]!["status"]!["name"]!;
+                            string issueType = (string)(issue["fields"]!["issuetype"]?["name"] ?? "");
 
-                            // Fetch rendered HTML description, changelog, and offline attachments section (stored to DB)
                             string htmlDescription = "";
                             string history = "[]";
                             string attachmentsHtml = "";
 
-                            JObject detailJson = null;
                             try
                             {
+                                // v3 issue details; keep renderedFields if available in your tenant
                                 var detailResponseStr = await RetryWithMessageBoxAsync(
-                                    () => client.GetStringAsync($"/rest/api/2/issue/{key}?expand=renderedFields,changelog"),
+                                    async () =>
+                                    {
+                                        var r = await client.GetStringAsync($"/rest/api/3/issue/{key}?expand=renderedFields,changelog");
+                                        return r;
+                                    },
                                     $"Failed to fetch details for issue {key} from Jira."
                                 );
-                                detailJson = JObject.Parse(detailResponseStr);
-                                htmlDescription = detailJson["renderedFields"]?["description"]?.ToString() ?? issue["fields"]["description"]?.ToString() ?? "";
+
+                                var detailJson = JObject.Parse(detailResponseStr);
+                                htmlDescription = detailJson["renderedFields"]?["description"]?.ToString()
+                                                  ?? detailJson["fields"]?["description"]?.ToString()
+                                                  ?? "";
 
                                 if (detailJson["changelog"]?["histories"] is JArray histories)
                                 {
                                     history = BuildSlimChangelog(histories);
                                 }
 
-                                // Handle attachments: ensure directories exist, then download and overwrite files (no deletion)
-                                // Handle attachments: ensure directories exist, then download and overwrite files (no deletion)
                                 if (detailJson["fields"]?["attachment"] is JArray attachArray)
                                 {
                                     string attachmentsRoot = AttachmentsDir;
                                     string issueDir = Path.Combine(attachmentsRoot, key);
 
-                                    // Ensure directories exist (do not delete existing content) ONLY if there are attachments
                                     if (attachArray.Count > 0)
                                     {
                                         Directory.CreateDirectory(attachmentsRoot);
@@ -483,24 +511,18 @@ public class JiraService
                                                         $"Failed to download attachment for issue {key}."
                                                     );
 
-                                                    // Overwrite existing if present
                                                     await File.WriteAllBytesAsync(absPath, attBytes);
 
-                                                    // Generate/overwrite thumbnail for images
                                                     if (IsImageExtension(uniqueName))
                                                     {
                                                         TryGenerateThumbnail(absPath, Path.Combine(issueDir, ".thumbs"), 320);
                                                     }
                                                 }
-                                                catch
-                                                {
-                                                    // continue with other files
-                                                }
+                                                catch { /* continue with other files */ }
                                             }
 
                                             if (File.Exists(absPath))
                                             {
-                                                // Store only relative path from attachments folder
                                                 string relPath = $"{key}/{uniqueName}";
                                                 relPaths.Add(relPath);
                                             }
@@ -512,8 +534,6 @@ public class JiraService
                                     {
                                         attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                                     }
-
-                                    // use attachmentsHtml variable below (already present in your method)
                                 }
                                 else
                                 {
@@ -522,7 +542,7 @@ public class JiraService
                             }
                             catch
                             {
-                                htmlDescription = issue["fields"]["description"]?.ToString() ?? "";
+                                htmlDescription = issue["fields"]?["description"]?.ToString() ?? "";
                                 attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                             }
 
@@ -530,20 +550,19 @@ public class JiraService
                             htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
 
                             string sortingFieldValue = null;
-                            if (hasSortingField && issue["fields"][sortingField] != null)
+                            if (hasSortingField && issue["fields"]?[sortingField] != null)
                             {
-                                sortingFieldValue = issue["fields"][sortingField].ToString();
+                                sortingFieldValue = issue["fields"]![sortingField]!.ToString();
                             }
 
                             string parentKey = "";
                             string childrenKeys = "";
                             string relatesKeys = "";
-                            if (issue["fields"]["issuelinks"] is JArray linksArray)
+                            if (issue["fields"]?["issuelinks"] is JArray linksArray)
                             {
                                 var relates = linksArray
                                     .Where(link => (string)link["type"]?["name"] == "Relates")
-                                    .Select(link =>
-                                        (string)link["outwardIssue"]?["key"] ?? (string)link["inwardIssue"]?["key"])
+                                    .Select(link => (string)link["outwardIssue"]?["key"] ?? (string)link["inwardIssue"]?["key"])
                                     .Where(k => !string.IsNullOrWhiteSpace(k))
                                     .Distinct()
                                     .ToList();
@@ -551,7 +570,7 @@ public class JiraService
 
                                 var children = linksArray
                                     .Where(link => (string)link["type"]?["name"] == linkTypeName && link["outwardIssue"]?["key"] != null)
-                                    .Select(link => (string)link["outwardIssue"]["key"])
+                                    .Select(link => (string)link["outwardIssue"]!["key"]!)
                                     .Where(k => !string.IsNullOrWhiteSpace(k))
                                     .Distinct()
                                     .ToList();
@@ -559,26 +578,26 @@ public class JiraService
 
                                 var parentLink = linksArray
                                     .FirstOrDefault(link => (string)link["type"]?["name"] == linkTypeName && link["inwardIssue"]?["key"] != null);
-                                parentKey = parentLink != null ? (string)parentLink["inwardIssue"]["key"] : "";
+                                parentKey = parentLink != null ? (string)parentLink["inwardIssue"]!["key"]! : "";
                             }
 
                             issues.Add(new object[]
                             {
-                            created,
-                            updated,
-                            key,
-                            summary,
-                            htmlDescription,
-                            parentKey,
-                            childrenKeys,
-                            relatesKeys,
-                            sortingFieldValue,
-                            issueType,
-                            projectName,
-                            projectKey,
-                            status,
-                            history,
-                            attachmentsHtml
+                created,
+                updated,
+                key,
+                summary,
+                htmlDescription,
+                parentKey,
+                childrenKeys,
+                relatesKeys,
+                sortingFieldValue,
+                issueType,
+                projectName,
+                projectKey,
+                status,
+                history,
+                attachmentsHtml
                             });
 
                             int currentCompleted = Interlocked.Increment(ref completed);
@@ -1179,23 +1198,30 @@ public class JiraService
     {
         if (string.IsNullOrWhiteSpace(jql))
             jql = $"project={projectKey} ORDER BY key ASC";
-        using var httpClient = new HttpClient();
-        httpClient.BaseAddress = new Uri(jiraBaseUrl);
 
-        var authToken = Convert.ToBase64String(
-            System.Text.Encoding.ASCII.GetBytes($"{username}:{apiToken}"));
-        httpClient.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+        using var httpClient = GetJiraClient();
 
-        string url = $"/rest/api/2/search?jql={Uri.EscapeDataString(jql)}&maxResults=0";
+        var payload = new
+        {
+            jql,
+            startAt = 0,
+            maxResults = 0,
+            fields = new[] { "key" }
+        };
+        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-        var response = await httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
+        // Prefer new endpoint, fallback to classic v3 search
+        HttpResponseMessage resp = await httpClient.PostAsync("/rest/api/3/search/jql", content);
+        if (!resp.IsSuccessStatusCode)
+        {
+            content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            resp = await httpClient.PostAsync("/rest/api/3/search", content);
+            resp.EnsureSuccessStatusCode();
+        }
 
-        var json = await response.Content.ReadAsStringAsync();
+        var json = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
-        int total = doc.RootElement.GetProperty("total").GetInt32();
-        return total;
+        return doc.RootElement.GetProperty("total").GetInt32();
     }
 
     private static string ConvertToDbTimestamp(string jiraDate)
@@ -1366,7 +1392,7 @@ public class JiraService
 
         try
         {
-            var response = await client.GetAsync($"{jiraBaseUrl}/rest/api/2/issue/{childKey}");
+            var response = await client.GetAsync($"/rest/api/3/issue/{childKey}");
             if (!response.IsSuccessStatusCode)
             {
                 throw new InvalidOperationException($"Failed to fetch issue '{childKey}' from Jira. Status: {response.StatusCode}");
@@ -1392,7 +1418,7 @@ public class JiraService
                     if (match && link["id"] != null)
                     {
                         string linkId = link["id"]!.ToString();
-                        var delResponse = await client.DeleteAsync($"{jiraBaseUrl}/rest/api/2/issueLink/{linkId}");
+                        var delResponse = await client.DeleteAsync($"/rest/api/3/issueLink/{linkId}");
                         if (!delResponse.IsSuccessStatusCode)
                         {
                             throw new InvalidOperationException($"Failed to delete old parent link for issue '{childKey}'. Status: {delResponse.StatusCode}");
@@ -1418,17 +1444,17 @@ public class JiraService
                 };
 
                 var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), System.Text.Encoding.UTF8, "application/json");
-                var postResponse = await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+                var postResponse = await client.PostAsync($"/rest/api/3/issueLink", content);
                 if (!postResponse.IsSuccessStatusCode)
                 {
                     throw new InvalidOperationException(
                         $"Failed to create new parent link for issue '{childKey}' with link type '{linkTypeName}'. Status: {postResponse.StatusCode}");
                 }
-             }
+            }
         }
         catch (Exception ex)
         {
-             throw new InvalidOperationException(
+            throw new InvalidOperationException(
                 $"Error updating parent link for issue '{childKey}'.\nDetails: {ex.Message}", ex);
         }
     }
@@ -1641,7 +1667,7 @@ public class JiraService
             };
 
             var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
-            var response = await client.PostAsync($"{jiraBaseUrl}/rest/api/2/issueLink", content);
+            var response = await client.PostAsync($"/rest/api/3/issueLink", content);
             if (!response.IsSuccessStatusCode)
             {
                 throw new InvalidOperationException(

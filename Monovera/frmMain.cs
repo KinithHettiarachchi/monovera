@@ -48,7 +48,7 @@ namespace Monovera
         private WebSelfHost webHost;
 
         public static bool OFFLINE_MODE = true;
-        bool editorMode = false;
+        bool editorMode = true;
         private MouseButtons lastTreeMouseButton = MouseButtons.Left;
         private bool suppressAfterSelect = false;
         public static string SUMMARY_MISSING = "SUMMARY MISSING!";
@@ -460,7 +460,7 @@ namespace Monovera
 
             // Initialize context menu for tree
             InitializeContextMenu();
-            SetupSpinMessages();
+            //SetupSpinMessages();
 
             //Set menu icons
             mnuSettings.Image = GetImageFromImagesFolder("Settings.png");
@@ -731,21 +731,63 @@ namespace Monovera
                 }
 
                 int totalUpdates = 0;
+
+                // Prepare HttpClient once
+                using var client = new HttpClient();
+                client.BaseAddress = new Uri(jiraBaseUrl);
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+                    "Basic",
+                    Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"))
+                );
+
                 foreach (var kvp in projectMaxTimes)
                 {
                     string projectKey = kvp.Key;
                     DateTime maxTime = kvp.Value;
+
                     string jql = $"project = \"{projectKey}\" AND updated >= \"{maxTime:yyyy-MM-dd HH:mm}\"";
-                    var issues = await jiraService.SearchIssuesAsync(jql);
-                    foreach (var issue in issues ?? Enumerable.Empty<Atlassian.Jira.Issue>())
+
+                    // Ask for minimal fields to keep payload tiny
+                    var payload = new
                     {
-                        if (issue.Updated != null)
+                        jql,
+                        startAt = 0,
+                        maxResults = 1000,
+                        fields = new[] { "key", "updated" }
+                    };
+                    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+                    // Prefer the new v3 endpoint, fallback to classic v3 search if needed
+                    HttpResponseMessage resp = await client.PostAsync("/rest/api/3/search/jql", content);
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        // Fallback: POST /rest/api/3/search still widely supported
+                        content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                        resp = await client.PostAsync("/rest/api/3/search", content);
+                        resp.EnsureSuccessStatusCode();
+                    }
+
+                    string json = await resp.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+
+                    if (doc.RootElement.TryGetProperty("issues", out var issues) && issues.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var issue in issues.EnumerateArray())
                         {
-                            string issueUpdatedStr = issue.Updated.Value.ToString("yyyyMMddHHmmss");
-                            string maxTimeStr = maxTime.ToString("yyyyMMddHHmmss");
-                            if (string.Compare(issueUpdatedStr, maxTimeStr, StringComparison.Ordinal) > 0)
-                                totalUpdates++;
+                            if (issue.TryGetProperty("fields", out var fields) &&
+                                fields.TryGetProperty("updated", out var updatedProp) &&
+                                updatedProp.ValueKind == JsonValueKind.String &&
+                                DateTime.TryParse(updatedProp.GetString(), out var updatedDt))
+                            {
+                                if (updatedDt > maxTime)
+                                    totalUpdates++;
+                            }
                         }
+                    }
+                    else if (doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number)
+                    {
+                        // Some responses may return only 'total'
+                        totalUpdates += totalProp.GetInt32();
                     }
                 }
 

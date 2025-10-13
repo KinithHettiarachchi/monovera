@@ -169,7 +169,8 @@ namespace Monovera
                             if (context.Request.Query.TryGetValue("days", out var vals))
                                 int.TryParse(vals.FirstOrDefault(), out days);
 
-                            string html = BuildRecentUpdatesHtmlFinal(days);
+                            // Await the async builder to get the HTML string
+                            string html = await BuildRecentUpdatesHtmlFinalAsync(days);
                             context.Response.ContentType = "text/html; charset=utf-8";
                             await context.Response.WriteAsync(html);
                         });
@@ -539,42 +540,79 @@ namespace Monovera
         }
 
         // Builds the HTML for the Recent Updates tab using Jira REST (mirrors frmMain.ShowRecentlyUpdatedIssuesAsync)
-        private static string BuildRecentUpdatesHtmlFinal(int days)
+        private static async Task<string> BuildRecentUpdatesHtmlFinalAsync(int days)
         {
+            var projects = frmMain.projectList?.Where(p => !string.IsNullOrWhiteSpace(p)).ToList() ?? new List<string>();
+            if (projects.Count == 0 ||
+                string.IsNullOrWhiteSpace(frmMain.jiraBaseUrl) ||
+                string.IsNullOrWhiteSpace(frmMain.jiraEmail) ||
+                string.IsNullOrWhiteSpace(frmMain.jiraToken))
+            {
+                return @"<!DOCTYPE html><html><head><meta charset='UTF-8'></head>
+<body><div style='padding:12px;color:#888;font:14px Segoe UI'>
+No recent updates: Jira configuration is missing (projects/base URL/credentials).
+</div></body></html>";
+            }
+
             // Search Jira for recently created/updated issues across configured projects
             var rows = new List<(string Key, string Summary, string Type, string Status, DateTime Updated, DateTime? Created, List<string> Tags)>();
             try
             {
+                // New JQL Search API (GET /rest/api/3/search/jql with nextPageToken pagination)
                 string jql = $"({string.Join(" OR ", frmMain.projectList.Select(p => $"project = \"{p}\""))}) AND (created >= -{days}d OR updated >= -{days}d) ORDER BY updated DESC";
                 string baseUrl = frmMain.jiraBaseUrl?.TrimEnd('/') ?? "";
                 string authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{frmMain.jiraEmail}:{frmMain.jiraToken}"));
 
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
-
-                // Paginate /rest/api/3/search
-                int startAt = 0;
-                const int maxResults = 100;
                 var searchIssues = new List<(string Key, string Summary, string Type, string Status, DateTime Updated, DateTime? Created)>();
 
-                while (true)
-                {
-                    var url = $"{baseUrl}/rest/api/3/search?jql={WebUtility.UrlEncode(jql)}&fields=summary,issuetype,status,updated,created&startAt={startAt}&maxResults={maxResults}";
-                    var resp = client.GetAsync(url).Result;
-                    if (!resp.IsSuccessStatusCode) break;
+                using var client = new HttpClient();
+                client.BaseAddress = new Uri(baseUrl);
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+                client.DefaultRequestHeaders.Accept.Clear();
+                client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                client.Timeout = TimeSpan.FromSeconds(100);
 
-                    var json = resp.Content.ReadAsStringAsync().Result;
+                const int pageSize = 100; // typical upper bound for this API
+                string nextPageToken = null;
+
+                do
+                {
+                    var fieldsCsv = "summary,issuetype,status,updated,created";
+                    var qs = new List<string>
+            {
+                "jql=" + Uri.EscapeDataString(jql),
+                "maxResults=" + pageSize,
+                "fields=" + Uri.EscapeDataString(fieldsCsv)
+            };
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                        qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+
+                    var res = await client.GetAsync("/rest/api/3/search/jql?" + string.Join("&", qs));
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        var errBody = await res.Content.ReadAsStringAsync();
+                        throw new HttpRequestException($"Jira search failed: {(int)res.StatusCode} {res.ReasonPhrase}. {errBody}");
+                    }
+
+                    var json = await res.Content.ReadAsStringAsync();
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
 
-                    int total = root.TryGetProperty("total", out var totalProp) ? totalProp.GetInt32() : 0;
-                    if (!root.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array) break;
-                    int count = 0;
+                    // The response may be: { issues, nextPageToken } or { results: [ { issues, nextPageToken } ] }
+                    JsonElement page = root;
+                    if (root.TryGetProperty("results", out var resultsArr) && resultsArr.ValueKind == JsonValueKind.Array && resultsArr.GetArrayLength() > 0)
+                        page = resultsArr[0];
 
-                    foreach (var issue in issues.EnumerateArray())
+                    if (!page.TryGetProperty("issues", out var issuesEl) || issuesEl.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    int count = 0;
+                    foreach (var issue in issuesEl.EnumerateArray())
                     {
                         count++;
-                        var key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+
+                        string key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+                        if (string.IsNullOrWhiteSpace(key)) continue;
 
                         string summary = "";
                         string type = "";
@@ -582,31 +620,38 @@ namespace Monovera
                         DateTime updated = DateTime.MinValue;
                         DateTime? created = null;
 
-                        if (issue.TryGetProperty("fields", out var fields))
+                        if (issue.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Object)
                         {
                             if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String)
                                 summary = s.GetString() ?? "";
 
-                            if (fields.TryGetProperty("issuetype", out var it) && it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String)
+                            if (fields.TryGetProperty("issuetype", out var it) &&
+                                it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String)
                                 type = itn.GetString() ?? "";
 
-                            if (fields.TryGetProperty("status", out var st) && st.TryGetProperty("name", out var stn) && stn.ValueKind == JsonValueKind.String)
+                            if (fields.TryGetProperty("status", out var st) &&
+                                st.TryGetProperty("name", out var stn) && stn.ValueKind == JsonValueKind.String)
                                 status = stn.GetString() ?? "";
 
-                            if (fields.TryGetProperty("updated", out var up) && up.ValueKind == JsonValueKind.String && DateTime.TryParse(up.GetString(), out var dtUp))
+                            if (fields.TryGetProperty("updated", out var up) &&
+                                up.ValueKind == JsonValueKind.String && DateTime.TryParse(up.GetString(), out var dtUp))
                                 updated = dtUp;
 
-                            if (fields.TryGetProperty("created", out var cr) && cr.ValueKind == JsonValueKind.String && DateTime.TryParse(cr.GetString(), out var dtCr))
+                            if (fields.TryGetProperty("created", out var cr) &&
+                                cr.ValueKind == JsonValueKind.String && DateTime.TryParse(cr.GetString(), out var dtCr))
                                 created = dtCr;
                         }
 
-                        if (!string.IsNullOrWhiteSpace(key) && updated != DateTime.MinValue)
+                        if (updated != DateTime.MinValue)
                             searchIssues.Add((key, summary, type, status, updated, created));
                     }
 
-                    startAt += count;
-                    if (count == 0 || startAt >= total) break;
-                }
+                    nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String
+                        ? tokenEl.GetString()
+                        : null;
+
+                    if (count == 0) break;
+                } while (!string.IsNullOrWhiteSpace(nextPageToken));
 
                 // For each issue: fetch changelog to derive "Changes" tags for the day of its Updated date
                 foreach (var it in searchIssues)
@@ -614,11 +659,11 @@ namespace Monovera
                     var tags = new List<string>();
                     try
                     {
-                        var issueUrl = $"{baseUrl}/rest/api/3/issue/{WebUtility.UrlEncode(it.Key)}?expand=changelog&fields=created";
-                        var resp = client.GetAsync(issueUrl).Result;
+                        var issueUrl = $"/rest/api/3/issue/{WebUtility.UrlEncode(it.Key)}?expand=changelog&fields=created";
+                        var resp = await client.GetAsync(issueUrl);
                         if (resp.IsSuccessStatusCode)
                         {
-                            var json = resp.Content.ReadAsStringAsync().Result;
+                            var json = await resp.Content.ReadAsStringAsync();
                             using var doc = JsonDocument.Parse(json);
                             var root = doc.RootElement;
 
@@ -722,7 +767,7 @@ namespace Monovera
       <div id='issue-type-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
         <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
         {string.Join("\n", allIssueTypesGlobal.Select(t =>
-                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+                            $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
       </div>
     </div>
 
@@ -732,7 +777,7 @@ namespace Monovera
       <div id='change-type-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
         <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
         {string.Join("\n", allChangeTypesGlobal.Select(t =>
-                    $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+                            $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
       </div>
     </div>")}
 
@@ -904,7 +949,6 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             sb.Append("</body></html>");
             return sb.ToString();
         }
-
         public async Task StopAsync()
         {
             if (webHost != null)
@@ -1348,31 +1392,58 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
 
                 while (startAt < total)
                 {
-                    var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,updated";
-                    var res = await client.GetAsync(url);
-                    if (!res.IsSuccessStatusCode) break;
+                    var payload = new
+                    {
+                        jql,
+                        startAt,
+                        maxResults = pageSize,
+                        fields = new[] { "summary", "issuetype", "updated" }
+                    };
+                    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+
+                    HttpResponseMessage res = await client.PostAsync("/rest/api/3/search/jql", content);
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                        res = await client.PostAsync("/rest/api/3/search", content);
+                        if (!res.IsSuccessStatusCode) break;
+                    }
+
                     string json = await res.Content.ReadAsStringAsync();
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
-                    if (root.TryGetProperty("total", out var totalProp)) total = totalProp.GetInt32(); else total = 0;
+
+                    total = root.TryGetProperty("total", out var totalProp) ? totalProp.GetInt32() : 0;
                     if (!root.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array) break;
 
                     foreach (var issue in issues.EnumerateArray())
                     {
                         string key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
+                        if (string.IsNullOrWhiteSpace(key)) continue;
+
                         var fields = issue.TryGetProperty("fields", out var f) ? f : default;
                         string summary = "";
                         string type = "";
                         DateTime? updated = null;
+
                         if (fields.ValueKind == JsonValueKind.Object)
                         {
-                            if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String) summary = s.GetString() ?? "";
-                            if (fields.TryGetProperty("issuetype", out var it) && it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String) type = itn.GetString() ?? "";
-                            if (fields.TryGetProperty("updated", out var up) && up.ValueKind == JsonValueKind.String && DateTime.TryParse(up.GetString(), out var dt)) updated = dt;
+                            if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String)
+                                summary = s.GetString() ?? "";
+
+                            if (fields.TryGetProperty("issuetype", out var it) &&
+                                it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String)
+                                type = itn.GetString() ?? "";
+
+                            if (fields.TryGetProperty("updated", out var up) &&
+                                up.ValueKind == JsonValueKind.String &&
+                                DateTime.TryParse(up.GetString(), out var dt))
+                                updated = dt;
                         }
-                        if (!string.IsNullOrWhiteSpace(key))
-                            list.Add((key, summary, type, updated));
+
+                        list.Add((key, summary, type, updated));
                     }
+
                     startAt += pageSize;
                 }
             }
@@ -1647,10 +1718,10 @@ body {{ overflow: hidden; }}
       </section>
     </div>
     <footer class='status'>
-      <span id='statusUser'>👤 Connected as: -</span>
-      <span id='statusMode'>🌐 Mode: -</span>
+      <!--<span id='statusUser'>👤 Connected as: -</span>
+      <span id='statusMode'>🌐 Mode: -</span> -->
       <span id='statusUpdated'>🕒 DB Updated: -</span>
-      <span style='margin-left:auto;'>Monovera Web</span>
+      <span style='margin-left:auto;'>Monovera</span>
     </footer>
   </div>
 
@@ -1747,9 +1818,9 @@ body {{ overflow: hidden; }}
   async function refreshStatus(){
     try {
       const s = await (await fetch('/api/status')).json();
-      document.getElementById('statusUser').textContent = '👤 Connected as: ' + (s.connectedUser || '-');
-      document.getElementById('statusMode').textContent = '🌐 Mode: ' + (s.offline ? 'Offline' : 'Online');
-      document.getElementById('statusUpdated').textContent = '🕒 DB Updated: ' + (s.lastDbUpdated || 'N/A');
+      //document.getElementById('statusUser').textContent = '👤 Connected as: ' + (s.connectedUser || '-');
+      //document.getElementById('statusMode').textContent = '🌐 Mode: ' + (s.offline ? 'Offline' : 'Online');
+      document.getElementById('statusUpdated').textContent = '🕒 Last Synced : ' + (s.lastDbUpdated || 'N/A');
     } catch {}
   }
   refreshStatus(); setInterval(refreshStatus, 10000);

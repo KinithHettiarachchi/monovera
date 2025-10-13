@@ -496,48 +496,90 @@ namespace Monovera
 
         public static async Task<List<JiraIssueDictionary>> SearchJiraIssues(string jql, IProgress<(int done, int total)> progress = null)
         {
+            if (string.IsNullOrWhiteSpace(jql))
+                throw new ArgumentException("JQL must not be empty for the new /search/jql endpoint.", nameof(jql));
+
+            static string Truncate(string s, int max) =>
+                string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s.Substring(0, max) + " …");
+
             var list = new List<JiraIssueDictionary>();
 
             try
             {
-                // Set up Jira REST API client
+                var baseUrl = jiraBaseUrl?.TrimEnd('/') ?? throw new InvalidOperationException("jiraBaseUrl is not configured.");
                 var authToken = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"));
-                using var client = new HttpClient();
-                client.BaseAddress = new Uri(jiraBaseUrl);
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
 
-                const int pageSize = 100;
-                int startAt = 0;
-                int total = int.MaxValue;
+                using var client = new HttpClient { BaseAddress = new Uri(baseUrl) };
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", authToken);
+                client.DefaultRequestHeaders.Accept.Clear();
+                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                client.Timeout = TimeSpan.FromSeconds(100);
+
+                const int pageSize = 100; // default is usually 50; 100 is acceptable
+                string nextPageToken = null;
                 int collected = 0;
 
-                // Fetch results in pages
-                while (startAt < total)
+                do
                 {
-                    var url = $"/rest/api/3/search?jql={Uri.EscapeDataString(jql)}&startAt={startAt}&maxResults={pageSize}&fields=summary,issuetype,status,updated";
+                    var fieldsCsv = "summary,issuetype,status,updated";
+                    var qs = new List<string>
+            {
+                "jql=" + Uri.EscapeDataString(jql),
+                "maxResults=" + pageSize,
+                "fields=" + Uri.EscapeDataString(fieldsCsv)
+            };
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                        qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
 
+                    var url = "/rest/api/3/search/jql?" + string.Join("&", qs);
                     var res = await client.GetAsync(url);
-                    res.EnsureSuccessStatusCode();
-
-                    string json = await res.Content.ReadAsStringAsync();
-                    using var doc = JsonDocument.Parse(json);
-
-                    var root = doc.RootElement;
-                    total = root.GetProperty("total").GetInt32();
-
-                    // Parse issues from response
-                    foreach (var issue in root.GetProperty("issues").EnumerateArray())
+                    if (!res.IsSuccessStatusCode)
                     {
-                        var key = issue.GetProperty("key").GetString();
-                        var fields = issue.GetProperty("fields");
-                        var summary = fields.GetProperty("summary").GetString();
-                        var type = fields.GetProperty("issuetype").GetProperty("name").GetString();
+                        var err = await res.Content.ReadAsStringAsync();
+                        throw new HttpRequestException($"Jira search failed: {(int)res.StatusCode} {res.ReasonPhrase}. {Truncate(err, 2000)}");
+                    }
 
+                    var json = await res.Content.ReadAsStringAsync();
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    // Two possible shapes: top-level { issues, nextPageToken } or { results: [ { issues, nextPageToken } ] }
+                    JsonElement page;
+                    if (root.TryGetProperty("results", out var resultsArr) && resultsArr.ValueKind == JsonValueKind.Array && resultsArr.GetArrayLength() > 0)
+                        page = resultsArr[0];
+                    else
+                        page = root;
+
+                    if (!page.TryGetProperty("issues", out var issuesEl) || issuesEl.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    int count = 0;
+                    foreach (var issue in issuesEl.EnumerateArray())
+                    {
+                        count++;
+
+                        var key = issue.TryGetProperty("key", out var kProp) ? kProp.GetString() : null;
+                        if (string.IsNullOrWhiteSpace(key)) continue;
+
+                        var fields = issue.TryGetProperty("fields", out var fProp) ? fProp : default;
+
+                        string summary = null;
+                        string type = null;
                         DateTime? updated = null;
-                        if (fields.TryGetProperty("updated", out var updatedProp) &&
-                            DateTime.TryParse(updatedProp.GetString(), out var dt))
+
+                        if (fields.ValueKind == JsonValueKind.Object)
                         {
-                            updated = dt;
+                            if (fields.TryGetProperty("summary", out var sProp) && sProp.ValueKind == JsonValueKind.String)
+                                summary = sProp.GetString();
+
+                            if (fields.TryGetProperty("issuetype", out var it) &&
+                                it.TryGetProperty("name", out var itn) && itn.ValueKind == JsonValueKind.String)
+                                type = itn.GetString();
+
+                            if (fields.TryGetProperty("updated", out var up) &&
+                                up.ValueKind == JsonValueKind.String &&
+                                DateTime.TryParse(up.GetString(), out var dt))
+                                updated = dt;
                         }
 
                         list.Add(new JiraIssueDictionary
@@ -549,16 +591,21 @@ namespace Monovera
                         });
                     }
 
-                    collected += root.GetProperty("issues").GetArrayLength();
-                    progress?.Report((collected, total));
+                    collected += count;
+                    // New API often doesn’t return a total; report incremental progress
+                    progress?.Report((collected, collected));
 
-                    startAt += pageSize;
-                }
+                    nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String
+                        ? tokenEl.GetString()
+                        : null;
+
+                    if (count == 0) break;
+                } while (!string.IsNullOrWhiteSpace(nextPageToken));
             }
             catch (Exception ex)
             {
-                throw new Exception("The Jira search could not be completed. " +
-                    "Please check your connection/query and try again.\n\n" +
+                throw new Exception(
+                    "The Jira search could not be completed. Please check your connection/query and try again.\n\n" +
                     "Error details: " + ex.Message, ex);
             }
 
