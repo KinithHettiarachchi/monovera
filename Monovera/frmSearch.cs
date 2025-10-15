@@ -146,6 +146,24 @@ namespace Monovera
             txtSearch.Focus();
         }
 
+        private void UpdateProgressFromService(int done, int total, double percent)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdateProgressFromService(done, total, percent)));
+                return;
+            }
+
+            pbProgress.Visible = true;
+            pbProgress.Maximum = 100;
+            pbProgress.Value = Math.Clamp((int)Math.Round(percent), 0, 100);
+
+            lblProgress.Visible = true;
+            lblProgress.Text = done == 0
+                ? $"Preparing to load... ({total:N0} issue{(total == 1 ? "" : "s")})"
+                : $"Loading {done:N0}/{total:N0} ({percent:0.0}%)";
+        }
+
         private void TxtSearch_TextChanged(object sender, EventArgs e)
         {
             if (chkJQL.Checked || string.IsNullOrWhiteSpace(txtSearch.Text))

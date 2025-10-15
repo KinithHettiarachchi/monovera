@@ -198,14 +198,14 @@ public class JiraService
     /// A list of <see cref="JiraIssueDictionary"/> objects representing the issues in the project.
     /// </returns>
     public async Task<List<JiraIssueDictionary>> UpdateLocalIssueRepositoryAndLoadTree(
-    string projectKey,
-    string projectName,
-    string sortingField,
-    string linkTypeName = "Blocks",
-    bool forceSync = false,
-    Action<int, int, double> progressUpdate = null,
-    int maxParallelism = 250,
-    string updateType = "Complete")
+        string projectKey,
+        string projectName,
+        string sortingField,
+        string linkTypeName = "Blocks",
+        bool forceSync = false,
+        Action<int, int, double> progressUpdate = null,
+        int maxParallelism = 250,
+        string updateType = "Complete")
     {
         var connStr = $"Data Source={DatabasePath};";
 
@@ -263,10 +263,15 @@ public class JiraService
         List<string> relevantKeys = null;
         string jql;
 
+        // Shared Jira client for all HTTP calls
+        using var client = GetJiraClient();
+        client.Timeout = TimeSpan.FromMinutes(15);
+
         if (tableEmpty || forceSync)
         {
             if (updateType == "Difference")
             {
+                // Find last UPDATEDTIME in DB for incremental search
                 string latestUpdateTimeOnDatabase = null;
                 using (var conn = new SqliteConnection(connStr))
                 {
@@ -286,95 +291,185 @@ public class JiraService
                     latestUpdateTimeToCheckInJira = DateTime.ParseExact(latestUpdateTimeOnDatabase, "yyyyMMddHHmmss", null).ToString("yyyy-MM-dd HH:mm");
                 }
 
-                if (!string.IsNullOrWhiteSpace(latestUpdateTimeToCheckInJira))
-                    jql = $"project={projectKey} AND (updated > \"{latestUpdateTimeToCheckInJira}\")";
-                else
-                    jql = $"project={projectKey}";
+                jql = !string.IsNullOrWhiteSpace(latestUpdateTimeToCheckInJira)
+                    ? $"project = \"{projectKey}\" AND (updated > \"{latestUpdateTimeToCheckInJira}\")"
+                    : $"project = \"{projectKey}\"";
 
                 relevantKeys = new List<string>();
 
-                using (var client = GetJiraClient())
+                // Build in-memory map of DB updated times for comparison
+                var dbUpdatedTimes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                using (var conn = new SqliteConnection(connStr))
                 {
-                    var payload = new
+                    conn.Open();
+                    using (var cmd = conn.CreateCommand())
                     {
-                        jql,
-                        startAt = 0,
-                        maxResults = 1000,
-                        fields = new[] { "key", "updated" }
-                    };
-
-                    var response = await RetryWithMessageBoxAsync(
-                        async () =>
+                        cmd.CommandText = "SELECT KEY, UPDATEDTIME FROM issue WHERE PROJECTCODE = @pcode";
+                        cmd.Parameters.AddWithValue("@pcode", projectKey);
+                        using (var reader = cmd.ExecuteReader())
                         {
-                            var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                            var r = await client.PostAsync("/rest/api/3/search/jql", content);
-                            if (!r.IsSuccessStatusCode)
+                            while (reader.Read())
                             {
-                                content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                                r = await client.PostAsync("/rest/api/3/search", content);
-                            }
-                            r.EnsureSuccessStatusCode();
-                            return await r.Content.ReadAsStringAsync();
-                        },
-                        "Failed to fetch issue keys from Jira."
-                    );
-
-                    var json = JObject.Parse(response);
-
-                    var dbUpdatedTimes = new Dictionary<string, string>();
-                    using (var conn = new SqliteConnection(connStr))
-                    {
-                        conn.Open();
-                        using (var cmd = conn.CreateCommand())
-                        {
-                            cmd.CommandText = "SELECT KEY, UPDATEDTIME FROM issue WHERE PROJECTCODE = @pcode";
-                            cmd.Parameters.AddWithValue("@pcode", projectKey);
-                            using (var reader = cmd.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    dbUpdatedTimes[reader.GetString(0)] = reader.GetString(1);
-                                }
+                                dbUpdatedTimes[reader.GetString(0)] = reader.GetString(1);
                             }
                         }
                     }
+                }
 
-                    foreach (var issue in json["issues"] ?? new JArray())
+                // Use new JQL Search API with nextPageToken; avoid deprecated endpoints
+                relevantKeys = new List<string>();
+                const int pageSize = 100;
+                string nextPageToken = null;
+
+                do
+                {
+                    var qs = new List<string>
+    {
+        "jql=" + Uri.EscapeDataString(jql),
+        "maxResults=" + pageSize,
+        "fields=" + Uri.EscapeDataString("updated")
+    };
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                        qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+
+                    var url = "/rest/api/3/search/jql?" + string.Join("&", qs);
+                    HttpResponseMessage res = await client.GetAsync(url);
+                    if (!res.IsSuccessStatusCode)
                     {
-                        string key = (string)issue["key"];
-                        string jiraUpdated = issue["fields"]?["updated"] != null
-                            ? ConvertToDbTimestamp((string)issue["fields"]!["updated"]!)
-                            : null;
-                        string dbUpdated = dbUpdatedTimes.TryGetValue(key, out var val) ? val : null;
+                        // Retry to the same endpoint via POST (some tenants/proxies prefer POST), but do NOT call classic /search
+                        var body = new { jql, maxResults = pageSize, fields = new[] { "updated" } };
+                        var content = new StringContent(System.Text.Json.JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                        var postUrl = "/rest/api/3/search/jql" + (string.IsNullOrWhiteSpace(nextPageToken) ? "" : "?nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+                        res = await client.PostAsync(postUrl, content);
+                        if (!res.IsSuccessStatusCode)
+                        {
+                            var err = await res.Content.ReadAsStringAsync();
+                            throw new InvalidOperationException($"Jira search/jql failed: {(int)res.StatusCode} {res.ReasonPhrase}. {err}");
+                        }
+                    }
 
-                        if (!string.IsNullOrEmpty(jiraUpdated) && (string.IsNullOrEmpty(dbUpdated) || string.Compare(jiraUpdated, dbUpdated, StringComparison.Ordinal) > 0))
+                    var json = await res.Content.ReadAsStringAsync();
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    // Page may be top-level or wrapped under results[0]
+                    var page = root.TryGetProperty("results", out var resultsArr) &&
+                               resultsArr.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                               resultsArr.GetArrayLength() > 0
+                        ? resultsArr[0]
+                        : root;
+
+                    if (!page.TryGetProperty("issues", out var issues) || issues.ValueKind != System.Text.Json.JsonValueKind.Array)
+                        break;
+
+                    foreach (var issue in issues.EnumerateArray())
+                    {
+                        var key = issue.TryGetProperty("key", out var kEl) ? kEl.GetString() ?? "" : "";
+                        if (string.IsNullOrWhiteSpace(key)) continue;
+
+                        string jiraUpdatedDbFmt = null;
+                        if (issue.TryGetProperty("fields", out var fieldsEl) &&
+                            fieldsEl.TryGetProperty("updated", out var upd) &&
+                            upd.ValueKind == System.Text.Json.JsonValueKind.String)
+                        {
+                            jiraUpdatedDbFmt = ConvertToDbTimestamp(upd.GetString());
+                        }
+
+                        dbUpdatedTimes.TryGetValue(key, out var dbUpdated);
+                        if (!string.IsNullOrEmpty(jiraUpdatedDbFmt) &&
+                            (string.IsNullOrEmpty(dbUpdated) || string.Compare(jiraUpdatedDbFmt, dbUpdated, StringComparison.Ordinal) > 0))
                         {
                             relevantKeys.Add(key);
                         }
                     }
+                    progressUpdate?.Invoke(0, relevantKeys.Count, 0.0);
 
-                    totalCount = relevantKeys.Count;
-                }
+                    nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? tokenEl.GetString()
+                        : null;
+
+                } while (!string.IsNullOrWhiteSpace(nextPageToken));
+
+                totalCount = relevantKeys.Count;
+                // Final total to process (after filtering by updated)
+                progressUpdate?.Invoke(totalCount, totalCount, 0.0);
             }
-            else // Complete
+            else // Complete (full sync)
             {
-                jql = $"project={projectKey}";
-                totalCount = await RetryWithMessageBoxAsync(
-                    () => GetTotalIssueCountAsync(projectKey, jql),
-                    "Failed to fetch total issue count from Jira."
-                );
+                jql = $"project = \"{projectKey}\"";
+
+                // Use new JQL Search API with nextPageToken; avoid deprecated endpoints
+                var allKeys = new List<string>();
+                const int pageSize = 100;
+                string nextPageToken = null;
+
+                do
+                {
+                    var qs = new List<string>
+    {
+        "jql=" + Uri.EscapeDataString(jql),
+        "maxResults=" + pageSize,
+        "fields=" + Uri.EscapeDataString("key")
+    };
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                        qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+
+                    var url = "/rest/api/3/search/jql?" + string.Join("&", qs);
+                    HttpResponseMessage res = await client.GetAsync(url);
+                    if (!res.IsSuccessStatusCode)
+                    {
+                        // Retry once with POST to the same endpoint; do NOT use classic /search
+                        var body = new { jql, maxResults = pageSize, fields = new[] { "key" } };
+                        var content = new StringContent(System.Text.Json.JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                        var postUrl = "/rest/api/3/search/jql" + (string.IsNullOrWhiteSpace(nextPageToken) ? "" : "?nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+                        res = await client.PostAsync(postUrl, content);
+                        if (!res.IsSuccessStatusCode)
+                        {
+                            var err = await res.Content.ReadAsStringAsync();
+                            throw new InvalidOperationException($"Jira search/jql failed: {(int)res.StatusCode} {res.ReasonPhrase}. {err}");
+                        }
+                    }
+
+                    var json = await res.Content.ReadAsStringAsync();
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    var page = root.TryGetProperty("results", out var resultsArr) &&
+                               resultsArr.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                               resultsArr.GetArrayLength() > 0
+                        ? resultsArr[0]
+                        : root;
+
+                    if (!page.TryGetProperty("issues", out var issues) || issues.ValueKind != System.Text.Json.JsonValueKind.Array)
+                        break;
+
+                    foreach (var issue in issues.EnumerateArray())
+                    {
+                        var key = issue.TryGetProperty("key", out var kEl) ? kEl.GetString() ?? "" : "";
+
+                        if (!string.IsNullOrWhiteSpace(key))
+                            allKeys.Add(key);
+                    }
+
+                    progressUpdate?.Invoke(0, allKeys.Count, 0.0);
+                   
+
+                    nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? tokenEl.GetString()
+                        : null;
+
+                } while (!string.IsNullOrWhiteSpace(nextPageToken));
+
+                relevantKeys = allKeys.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                totalCount = relevantKeys.Count;
+                // Final total to process
+                progressUpdate?.Invoke(totalCount, totalCount, 0.0);
             }
 
             if (totalCount > 0)
             {
-                const int pageSize = 100;
-                int totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
-                var pageStarts = Enumerable.Range(0, totalPages).Select(i => i * pageSize).ToList();
-
-                int completed = 0;
-                var throttler = new SemaphoreSlim(Math.Min(maxParallelism, 4));
-
-                var existingKeys = new HashSet<string>();
+                // Load existing keys to decide insert vs update
+                var existingKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 using (var conn = new SqliteConnection(connStr))
                 {
                     conn.Open();
@@ -385,96 +480,88 @@ public class JiraService
                         using (var reader = cmd.ExecuteReader())
                         {
                             while (reader.Read())
-                            {
                                 existingKeys.Add(reader.GetString(0));
-                            }
                         }
                     }
                 }
 
-                var tasks = pageStarts.Select(async startAt =>
+                // Concurrency control for per-issue processing
+                var throttler = new SemaphoreSlim(Math.Min(Math.Max(1, maxParallelism), 8)); // cap concurrency to a sane number
+                var rows = new System.Collections.Concurrent.ConcurrentBag<object[]>();
+                int completed = 0;
+
+                // Whether to try to read a custom sorting field from details
+                bool hasSortingField = !string.IsNullOrWhiteSpace(sortingField);
+
+                // Process each relevant key: fetch details and prepare DB rows
+                var tasks = relevantKeys.Select(async key =>
                 {
-                    await throttler.WaitAsync();
+                    await throttler.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        string fieldsStr = "summary,description,issuetype,status,created,updated,issuelinks,attachment";
-                        bool hasSortingField = !string.IsNullOrWhiteSpace(sortingField);
-                        if (hasSortingField)
+                        string created = null;
+                        string updated = null;
+                        string summary = "";
+                        string status = "";
+                        string issueType = "";
+
+                        string htmlDescription = "";
+                        string history = "[]";
+                        string attachmentsHtml = "";
+                        string sortingFieldValue = null;
+                        string parentKey = "";
+                        string childrenKeys = "";
+                        string relatesKeys = "";
+
+                        try
                         {
-                            fieldsStr += $",{sortingField}";
-                        }
+                            // Pull everything we need in one details call (fields + rendered description + changelog)
+                            var detailUrl = $"/rest/api/3/issue/{key}?fields=summary,description,issuetype,status,created,updated,issuelinks,attachment{(hasSortingField ? ("," + sortingField) : "")}&expand=renderedFields,changelog";
+                            var detailResponseStr = await RetryWithMessageBoxAsync(
+                                async () => await client.GetStringAsync(detailUrl).ConfigureAwait(false),
+                                $"Failed to fetch details for issue {key} from Jira."
+                            ).ConfigureAwait(false);
 
-                        using var client = GetJiraClient();
-                        client.Timeout = TimeSpan.FromMinutes(15);
+                            var detailJson = JObject.Parse(detailResponseStr);
+                            var fields = detailJson["fields"] as JObject;
 
-                        var payload = new
-                        {
-                            jql,
-                            startAt = startAt,
-                            maxResults = pageSize,
-                            fields = fieldsStr.Split(',').Select(f => f.Trim()).ToArray()
-                        };
-
-                        var response = await RetryWithMessageBoxAsync(
-                            async () =>
+                            if (fields != null)
                             {
-                                var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                                var r = await client.PostAsync("/rest/api/3/search/jql", content);
-                                if (!r.IsSuccessStatusCode)
+                                created = ConvertToDbTimestamp(fields["created"]?.ToString() ?? "");
+                                updated = ConvertToDbTimestamp(fields["updated"]?.ToString() ?? "");
+                                summary = fields["summary"]?.ToString() ?? "";
+                                status = fields["status"]?["name"]?.ToString() ?? "";
+                                issueType = fields["issuetype"]?["name"]?.ToString() ?? "";
+
+                                if (hasSortingField && fields[sortingField] != null)
+                                    sortingFieldValue = fields[sortingField]?.ToString();
+
+                                // Links
+                                if (fields["issuelinks"] is JArray linksArray)
                                 {
-                                    content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                                    r = await client.PostAsync("/rest/api/3/search", content);
-                                }
-                                r.EnsureSuccessStatusCode();
-                                return await r.Content.ReadAsStringAsync();
-                            },
-                            "Failed to fetch issues from Jira."
-                        );
+                                    var relates = linksArray
+                                        .Where(link => (string)link["type"]?["name"] == "Relates")
+                                        .Select(link => (string)link["outwardIssue"]?["key"] ?? (string)link["inwardIssue"]?["key"])
+                                        .Where(k => !string.IsNullOrWhiteSpace(k))
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList();
+                                    relatesKeys = string.Join(",", relates);
 
-                        var json = JObject.Parse(response);
-                        var issues = new List<object[]>();
+                                    var children = linksArray
+                                        .Where(link => (string)link["type"]?["name"] == linkTypeName && link["outwardIssue"]?["key"] != null)
+                                        .Select(link => (string)link["outwardIssue"]!["key"]!)
+                                        .Where(k => !string.IsNullOrWhiteSpace(k))
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList();
+                                    childrenKeys = string.Join(",", children);
 
-                        foreach (var issue in json["issues"] ?? new JArray())
-                        {
-                            string key = (string)issue["key"];
-                            if (updateType == "Difference" && relevantKeys != null && relevantKeys.Count > 0 && !relevantKeys.Contains(key))
-                            {
-                                continue;
-                            }
-
-                            string created = ConvertToDbTimestamp((string)issue["fields"]!["created"]!);
-                            string updated = ConvertToDbTimestamp((string)issue["fields"]!["updated"]!);
-                            string summary = (string)issue["fields"]!["summary"]!;
-                            string status = (string)issue["fields"]!["status"]!["name"]!;
-                            string issueType = (string)(issue["fields"]!["issuetype"]?["name"] ?? "");
-
-                            string htmlDescription = "";
-                            string history = "[]";
-                            string attachmentsHtml = "";
-
-                            try
-                            {
-                                // v3 issue details; keep renderedFields if available in your tenant
-                                var detailResponseStr = await RetryWithMessageBoxAsync(
-                                    async () =>
-                                    {
-                                        var r = await client.GetStringAsync($"/rest/api/3/issue/{key}?expand=renderedFields,changelog");
-                                        return r;
-                                    },
-                                    $"Failed to fetch details for issue {key} from Jira."
-                                );
-
-                                var detailJson = JObject.Parse(detailResponseStr);
-                                htmlDescription = detailJson["renderedFields"]?["description"]?.ToString()
-                                                  ?? detailJson["fields"]?["description"]?.ToString()
-                                                  ?? "";
-
-                                if (detailJson["changelog"]?["histories"] is JArray histories)
-                                {
-                                    history = BuildSlimChangelog(histories);
+                                    var parentLink = linksArray
+                                        .FirstOrDefault(link => (string)link["type"]?["name"] == linkTypeName && link["inwardIssue"]?["key"] != null);
+                                    parentKey = parentLink != null ? (string)parentLink["inwardIssue"]!["key"]! : "";
                                 }
 
-                                if (detailJson["fields"]?["attachment"] is JArray attachArray)
+                                // Attachments to disk + HTML
+                                if (fields["attachment"] is JArray attachArray)
                                 {
                                     string attachmentsRoot = AttachmentsDir;
                                     string issueDir = Path.Combine(attachmentsRoot, key);
@@ -485,190 +572,181 @@ public class JiraService
                                         Directory.CreateDirectory(issueDir);
                                     }
 
-                                    if (attachArray.Count > 0)
+                                    var relPaths = new List<string>();
+                                    foreach (var att in attachArray)
                                     {
-                                        var relPaths = new List<string>();
+                                        string filename = att["filename"]?.ToString() ?? "attachment";
+                                        string id = att["id"]?.ToString() ?? "";
+                                        string contentUrl = att["content"]?.ToString();
 
-                                        foreach (var att in attachArray)
+                                        if (string.IsNullOrWhiteSpace(filename))
+                                            filename = "attachment";
+
+                                        string safeName = SanitizeFileName(filename);
+                                        string uniqueName = (!string.IsNullOrEmpty(id) ? $"{id}_" : "") + safeName;
+                                        string absPath = Path.Combine(issueDir, uniqueName);
+
+                                        if (!string.IsNullOrWhiteSpace(contentUrl))
                                         {
-                                            string filename = att["filename"]?.ToString() ?? "attachment";
-                                            string id = att["id"]?.ToString() ?? "";
-                                            string contentUrl = att["content"]?.ToString();
-
-                                            if (string.IsNullOrWhiteSpace(filename))
-                                                filename = "attachment";
-
-                                            string safeName = SanitizeFileName(filename);
-                                            string uniqueName = (!string.IsNullOrEmpty(id) ? $"{id}_" : "") + safeName;
-                                            string absPath = Path.Combine(issueDir, uniqueName);
-
-                                            if (!string.IsNullOrWhiteSpace(contentUrl))
+                                            try
                                             {
-                                                try
+                                                var attBytes = await RetryWithMessageBoxAsync(
+                                                    () => client.GetByteArrayAsync(contentUrl),
+                                                    $"Failed to download attachment for issue {key}."
+                                                ).ConfigureAwait(false);
+
+                                                await File.WriteAllBytesAsync(absPath, attBytes).ConfigureAwait(false);
+
+                                                if (IsImageExtension(uniqueName))
                                                 {
-                                                    var attBytes = await RetryWithMessageBoxAsync(
-                                                        () => client.GetByteArrayAsync(contentUrl),
-                                                        $"Failed to download attachment for issue {key}."
-                                                    );
-
-                                                    await File.WriteAllBytesAsync(absPath, attBytes);
-
-                                                    if (IsImageExtension(uniqueName))
-                                                    {
-                                                        TryGenerateThumbnail(absPath, Path.Combine(issueDir, ".thumbs"), 320);
-                                                    }
+                                                    TryGenerateThumbnail(absPath, Path.Combine(issueDir, ".thumbs"), 320);
                                                 }
-                                                catch { /* continue with other files */ }
                                             }
-
-                                            if (File.Exists(absPath))
-                                            {
-                                                string relPath = $"{key}/{uniqueName}";
-                                                relPaths.Add(relPath);
-                                            }
+                                            catch { /* continue */ }
                                         }
 
-                                        attachmentsHtml = BuildOfflineAttachmentsHtml(relPaths);
+                                        if (File.Exists(absPath))
+                                        {
+                                            string relPath = $"{key}/{uniqueName}";
+                                            relPaths.Add(relPath);
+                                        }
                                     }
-                                    else
-                                    {
-                                        attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
-                                    }
+
+                                    attachmentsHtml = relPaths.Count > 0
+                                        ? BuildOfflineAttachmentsHtml(relPaths)
+                                        : "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                                 }
                                 else
                                 {
                                     attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                                 }
                             }
-                            catch
-                            {
-                                htmlDescription = issue["fields"]?["description"]?.ToString() ?? "";
-                                attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
-                            }
+
+                            // Description (rendered if available), fallback to fields.description
+                            htmlDescription = detailJson["renderedFields"]?["description"]?.ToString()
+                                              ?? fields?["description"]?.ToString()
+                                              ?? "";
 
                             // Transform description HTML
                             htmlDescription = BuildHTMLSection_DESCRIPTION(htmlDescription, key);
 
-                            string sortingFieldValue = null;
-                            if (hasSortingField && issue["fields"]?[sortingField] != null)
+                            // Changelog (slim)
+                            if (detailJson["changelog"]?["histories"] is JArray histories)
                             {
-                                sortingFieldValue = issue["fields"]![sortingField]!.ToString();
+                                history = BuildSlimChangelog(histories);
                             }
-
-                            string parentKey = "";
-                            string childrenKeys = "";
-                            string relatesKeys = "";
-                            if (issue["fields"]?["issuelinks"] is JArray linksArray)
-                            {
-                                var relates = linksArray
-                                    .Where(link => (string)link["type"]?["name"] == "Relates")
-                                    .Select(link => (string)link["outwardIssue"]?["key"] ?? (string)link["inwardIssue"]?["key"])
-                                    .Where(k => !string.IsNullOrWhiteSpace(k))
-                                    .Distinct()
-                                    .ToList();
-                                relatesKeys = string.Join(",", relates);
-
-                                var children = linksArray
-                                    .Where(link => (string)link["type"]?["name"] == linkTypeName && link["outwardIssue"]?["key"] != null)
-                                    .Select(link => (string)link["outwardIssue"]!["key"]!)
-                                    .Where(k => !string.IsNullOrWhiteSpace(k))
-                                    .Distinct()
-                                    .ToList();
-                                childrenKeys = string.Join(",", children);
-
-                                var parentLink = linksArray
-                                    .FirstOrDefault(link => (string)link["type"]?["name"] == linkTypeName && link["inwardIssue"]?["key"] != null);
-                                parentKey = parentLink != null ? (string)parentLink["inwardIssue"]!["key"]! : "";
-                            }
-
-                            issues.Add(new object[]
-                            {
-                created,
-                updated,
-                key,
-                summary,
-                htmlDescription,
-                parentKey,
-                childrenKeys,
-                relatesKeys,
-                sortingFieldValue,
-                issueType,
-                projectName,
-                projectKey,
-                status,
-                history,
-                attachmentsHtml
-                            });
-
-                            int currentCompleted = Interlocked.Increment(ref completed);
-                            double percent = totalCount > 0 ? (currentCompleted * 100.0 / totalCount) : 100.0;
-                            progressUpdate?.Invoke(currentCompleted, totalCount, percent);
+                        }
+                        catch
+                        {
+                            // Best-effort fallback if details failed
+                            htmlDescription = "";
+                            attachmentsHtml = "<div class='no-attachments'>No attachments found.</div></section>\r\n</details>";
                         }
 
-                        using (var conn = new SqliteConnection(connStr))
+                        // Make sure minimal fields are set even if details failed
+                        created ??= "";
+                        updated ??= "";
+                        summary ??= "";
+                        status ??= "";
+                        issueType ??= "";
+
+                        rows.Add(new object[]
                         {
-                            conn.Open();
-                            var toInsert = new List<object[]>();
-                            var toUpdate = new List<object[]>();
+                        created,
+                        updated,
+                        key,
+                        summary,
+                        htmlDescription,
+                        parentKey,
+                        childrenKeys,
+                        relatesKeys,
+                        sortingFieldValue,
+                        issueType,
+                        projectName,
+                        projectKey,
+                        status,
+                        history,
+                        attachmentsHtml
+                        });
 
-                            foreach (var row in issues)
-                            {
-                                string key = (string)row[2];
-                                if (existingKeys.Contains(key))
-                                    toUpdate.Add(row);
-                                else
-                                    toInsert.Add(row);
-                            }
+                        int currentCompleted = Interlocked.Increment(ref completed);
+                        double percent = totalCount > 0 ? (currentCompleted * 100.0 / totalCount) : 100.0;
+                        progressUpdate?.Invoke(currentCompleted, totalCount, percent);
+                    }
+                    finally
+                    {
+                        throttler.Release();
+                    }
+                }).ToList();
 
-                            if (toInsert.Count > 0)
-                            {
-                                var transaction = conn.BeginTransaction();
-                                using (var cmd = conn.CreateCommand())
-                                {
-                                    cmd.CommandText = @"
+                await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                // Persist rows in DB (bulk insert/update)
+                using (var conn = new SqliteConnection(connStr))
+                {
+                    conn.Open();
+
+                    var toInsert = new List<object[]>();
+                    var toUpdate = new List<object[]>();
+
+                    foreach (var row in rows)
+                    {
+                        string key = (string)row[2];
+                        if (existingKeys.Contains(key))
+                            toUpdate.Add(row);
+                        else
+                            toInsert.Add(row);
+                    }
+
+                    if (toInsert.Count > 0)
+                    {
+                        var transaction = conn.BeginTransaction();
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = @"
                                 INSERT INTO issue
                                 (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
                                 VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
-                                    int batchCount = 0;
-                                    foreach (var row in toInsert)
-                                    {
-                                        cmd.Parameters.Clear();
-                                        cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
-                                        cmd.ExecuteNonQuery();
+                            int batchCount = 0;
+                            foreach (var row in toInsert)
+                            {
+                                cmd.Parameters.Clear();
+                                cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
+                                cmd.ExecuteNonQuery();
 
-                                        batchCount++;
-                                        if (batchCount % 100 == 0)
-                                        {
-                                            transaction.Commit();
-                                            transaction.Dispose();
-                                            transaction = conn.BeginTransaction();
-                                        }
-                                    }
+                                batchCount++;
+                                if (batchCount % 100 == 0)
+                                {
                                     transaction.Commit();
                                     transaction.Dispose();
+                                    transaction = conn.BeginTransaction();
                                 }
                             }
+                            transaction.Commit();
+                            transaction.Dispose();
+                        }
+                    }
 
-                            if (toUpdate.Count > 0)
-                            {
-                                var transaction = conn.BeginTransaction();
-                                using (var cmd = conn.CreateCommand())
-                                {
-                                    cmd.CommandText = @"
+                    if (toUpdate.Count > 0)
+                    {
+                        var transaction = conn.BeginTransaction();
+                        using (var cmd = conn.CreateCommand())
+                        {
+                            cmd.CommandText = @"
                                 UPDATE issue SET
                                     CREATEDTIME = @created,
                                     UPDATEDTIME = @updated,
@@ -685,48 +763,40 @@ public class JiraService
                                     HISTORY = @history, 
                                     ATTACHMENTS = @attachments
                                 WHERE KEY = @key";
-                                    int batchCount = 0;
-                                    foreach (var row in toUpdate)
-                                    {
-                                        cmd.Parameters.Clear();
-                                        cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
-                                        cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
-                                        cmd.ExecuteNonQuery();
+                            int batchCount = 0;
+                            foreach (var row in toUpdate)
+                            {
+                                cmd.Parameters.Clear();
+                                cmd.Parameters.AddWithValue("@created", row[0] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@updated", row[1] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@key", row[2] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@summary", row[3] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@desc", row[4] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@parent", row[5] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@children", row[6] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@relates", row[7] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@sorting", row[8] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@issueType", row[9] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@pname", row[10] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@pcode", row[11] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@status", row[12] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@history", row[13] ?? (object)DBNull.Value);
+                                cmd.Parameters.AddWithValue("@attachments", row[14] ?? (object)DBNull.Value);
+                                cmd.ExecuteNonQuery();
 
-                                        batchCount++;
-                                        if (batchCount % 100 == 0)
-                                        {
-                                            transaction.Commit();
-                                            transaction.Dispose();
-                                            transaction = conn.BeginTransaction();
-                                        }
-                                    }
+                                batchCount++;
+                                if (batchCount % 100 == 0)
+                                {
                                     transaction.Commit();
                                     transaction.Dispose();
+                                    transaction = conn.BeginTransaction();
                                 }
                             }
+                            transaction.Commit();
+                            transaction.Dispose();
                         }
                     }
-                    finally
-                    {
-                        throttler.Release();
-                    }
-                }).ToList();
-
-                await Task.WhenAll(tasks);
+                }
             }
         }
 
@@ -973,7 +1043,8 @@ public class JiraService
             }
         }
     }
-
+    
+    
     // Add to JiraService class (near other private helpers)
 
     private static readonly object AttachmentsCleanupSync = new();
@@ -1193,35 +1264,63 @@ public class JiraService
         }
     }
 
-    // Update GetTotalIssueCountAsync to accept JQL
+    // Update GetTotalIssueCountAsync to use the new JQL search endpoint (avoids 410 Gone)
     private async Task<int> GetTotalIssueCountAsync(string projectKey, string jql = null)
     {
         if (string.IsNullOrWhiteSpace(jql))
-            jql = $"project={projectKey} ORDER BY key ASC";
+            jql = $"project = \"{projectKey}\"";
 
         using var httpClient = GetJiraClient();
 
-        var payload = new
-        {
-            jql,
-            startAt = 0,
-            maxResults = 0,
-            fields = new[] { "key" }
-        };
-        var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+        var qs = new List<string>
+    {
+        "jql=" + Uri.EscapeDataString(jql),
+        "maxResults=0",                        // count only
+        "fields=" + Uri.EscapeDataString("key"),
+        "reconcileIssues=true"                 // recommended for JQL search
+    };
 
-        // Prefer new endpoint, fallback to classic v3 search
-        HttpResponseMessage resp = await httpClient.PostAsync("/rest/api/3/search/jql", content);
+        // Prefer the new JQL search endpoint (GET); fallback to POST if needed
+        HttpResponseMessage resp = await httpClient.GetAsync("/rest/api/3/search/jql?" + string.Join("&", qs));
         if (!resp.IsSuccessStatusCode)
         {
-            content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-            resp = await httpClient.PostAsync("/rest/api/3/search", content);
+            var body = new
+            {
+                jql,
+                maxResults = 0,
+                fields = new[] { "key" }
+            };
+            var content = new StringContent(System.Text.Json.JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            resp = await httpClient.PostAsync("/rest/api/3/search/jql", content);
             resp.EnsureSuccessStatusCode();
         }
 
         var json = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
-        return doc.RootElement.GetProperty("total").GetInt32();
+        var root = doc.RootElement;
+
+        // Support both shapes:
+        // 1) { total, issues: [...] }
+        // 2) { results: [ { total, issues: [...], nextPageToken } ] }
+        if (root.TryGetProperty("total", out var totalEl) && totalEl.ValueKind == JsonValueKind.Number)
+            return totalEl.GetInt32();
+
+        if (root.TryGetProperty("results", out var resultsEl) &&
+            resultsEl.ValueKind == JsonValueKind.Array &&
+            resultsEl.GetArrayLength() > 0)
+        {
+            var page = resultsEl[0];
+            if (page.TryGetProperty("total", out var pageTotal) && pageTotal.ValueKind == JsonValueKind.Number)
+                return pageTotal.GetInt32();
+
+            if (page.TryGetProperty("issues", out var pageIssues) && pageIssues.ValueKind == JsonValueKind.Array)
+                return pageIssues.GetArrayLength();
+        }
+
+        if (root.TryGetProperty("issues", out var issuesEl) && issuesEl.ValueKind == JsonValueKind.Array)
+            return issuesEl.GetArrayLength();
+
+        return 0;
     }
 
     private static string ConvertToDbTimestamp(string jiraDate)

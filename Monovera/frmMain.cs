@@ -460,7 +460,7 @@ namespace Monovera
 
             // Initialize context menu for tree
             InitializeContextMenu();
-            //SetupSpinMessages();
+            SetupSpinMessages();
 
             //Set menu icons
             mnuSettings.Image = GetImageFromImagesFolder("Settings.png");
@@ -708,6 +708,18 @@ namespace Monovera
         {
             try
             {
+                // Respect offline mode
+                if (string.IsNullOrWhiteSpace(jiraBaseUrl))
+                {
+                    this.Invoke(() =>
+                    {
+                        lblSyncStatus.Text = "⏸ Offline mode";
+                        lblSyncStatus.ForeColor = Color.Gray;
+                    });
+                    return;
+                }
+
+                // 1) Read latest UPDATEDTIME per project from local DB
                 var projectMaxTimes = new Dictionary<string, DateTime>();
                 string connStr = $"Data Source={DatabasePath};";
                 using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr))
@@ -716,81 +728,177 @@ namespace Monovera
                     foreach (var project in projectList)
                     {
                         string projectKey = project.Split('-')[0];
-                        using (var cmd = conn.CreateCommand())
+                        using var cmd = conn.CreateCommand();
+                        cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTNAME = @pcode";
+                        cmd.Parameters.AddWithValue("@pcode", projectKey);
+                        var result = cmd.ExecuteScalar();
+                        if (result != DBNull.Value && result != null &&
+                            DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
                         {
-                            cmd.CommandText = "SELECT MAX(UPDATEDTIME) FROM issue WHERE PROJECTNAME = @pcode";
-                            cmd.Parameters.AddWithValue("@pcode", projectKey);
-                            var result = cmd.ExecuteScalar();
-                            if (result != DBNull.Value && result != null &&
-                                DateTime.TryParseExact(result.ToString(), "yyyyMMddHHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                            {
-                                projectMaxTimes[projectKey] = dt;
-                            }
+                            projectMaxTimes[projectKey] = dt;
                         }
                     }
                 }
 
-                int totalUpdates = 0;
+                if (projectMaxTimes.Count == 0)
+                {
+                    this.Invoke(() =>
+                    {
+                        lblSyncStatus.Text = "✅ You are in sync!";
+                        lblSyncStatus.ForeColor = Color.Green;
+                    });
+                    return;
+                }
 
-                // Prepare HttpClient once
-                using var client = new HttpClient();
-                client.BaseAddress = new Uri(jiraBaseUrl);
+                // 2) Prepare HTTP client
+                using var client = new HttpClient { BaseAddress = new Uri(jiraBaseUrl) };
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
                     "Basic",
                     Convert.ToBase64String(Encoding.ASCII.GetBytes($"{jiraEmail}:{jiraToken}"))
                 );
+                client.DefaultRequestHeaders.Accept.Clear();
+                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                client.Timeout = TimeSpan.FromSeconds(30);
 
+                int totalUpdates = 0;
+
+                // 3) For each project, query Jira for issues updated since our max time
                 foreach (var kvp in projectMaxTimes)
                 {
                     string projectKey = kvp.Key;
                     DateTime maxTime = kvp.Value;
 
+                    // Use >= for safety; you may switch to > if double-counting is observed
                     string jql = $"project = \"{projectKey}\" AND updated >= \"{maxTime:yyyy-MM-dd HH:mm}\"";
 
-                    // Ask for minimal fields to keep payload tiny
-                    var payload = new
-                    {
-                        jql,
-                        startAt = 0,
-                        maxResults = 1000,
-                        fields = new[] { "key", "updated" }
-                    };
-                    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                    // Try the newer GET /rest/api/3/search/jql with nextPageToken pagination
+                    // Fallback to classic POST /rest/api/3/search with startAt/maxResults
+                    int projectUpdates = 0;
 
-                    // Prefer the new v3 endpoint, fallback to classic v3 search if needed
-                    HttpResponseMessage resp = await client.PostAsync("/rest/api/3/search/jql", content);
-                    if (!resp.IsSuccessStatusCode)
+                    // Attempt 1: GET /rest/api/3/search/jql
+                    try
                     {
-                        // Fallback: POST /rest/api/3/search still widely supported
-                        content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                        resp = await client.PostAsync("/rest/api/3/search", content);
-                        resp.EnsureSuccessStatusCode();
-                    }
-
-                    string json = await resp.Content.ReadAsStringAsync();
-                    using var doc = JsonDocument.Parse(json);
-
-                    if (doc.RootElement.TryGetProperty("issues", out var issues) && issues.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var issue in issues.EnumerateArray())
+                        string? nextPageToken = null;
+                        const int pageSize = 100; // Jira typically caps around 100
+                        do
                         {
-                            if (issue.TryGetProperty("fields", out var fields) &&
-                                fields.TryGetProperty("updated", out var updatedProp) &&
-                                updatedProp.ValueKind == JsonValueKind.String &&
-                                DateTime.TryParse(updatedProp.GetString(), out var updatedDt))
+                            var qs = new List<string>
+                    {
+                        "jql=" + Uri.EscapeDataString(jql),
+                        "maxResults=" + pageSize,
+                        "fields=" + Uri.EscapeDataString("updated,key") // minimal fields
+                    };
+                            if (!string.IsNullOrWhiteSpace(nextPageToken))
+                                qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+
+                            using var res = await client.GetAsync("/rest/api/3/search/jql?" + string.Join("&", qs));
+                            if (!res.IsSuccessStatusCode)
+                                throw new HttpRequestException($"GET /search/jql failed: {(int)res.StatusCode}");
+
+                            var json = await res.Content.ReadAsStringAsync();
+                            using var doc = JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+
+                            // Some previews may return { issues, nextPageToken }, some return { results: [ { issues, nextPageToken } ] }
+                            JsonElement page = root;
+                            if (root.TryGetProperty("results", out var resultsArr)
+                                && resultsArr.ValueKind == JsonValueKind.Array
+                                && resultsArr.GetArrayLength() > 0)
                             {
-                                if (updatedDt > maxTime)
-                                    totalUpdates++;
+                                page = resultsArr[0];
+                            }
+
+                            int pageCount = 0;
+                            if (page.TryGetProperty("issues", out var issuesEl) && issuesEl.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var issue in issuesEl.EnumerateArray())
+                                {
+                                    pageCount++;
+                                    if (issue.TryGetProperty("fields", out var fields) &&
+                                        fields.TryGetProperty("updated", out var updatedProp) &&
+                                        updatedProp.ValueKind == JsonValueKind.String &&
+                                        DateTime.TryParse(updatedProp.GetString(), out var updatedDt))
+                                    {
+                                        if (updatedDt.ToString("yyyy-M-dd HH:mm:ss") != maxTime.ToString("yyyy-M-dd HH:mm:ss") && updatedDt > maxTime)
+                                        {
+                                            projectUpdates++;
+                                        }
+                                    }
+                                }
+                            }
+                            else if (page.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number)
+                            {
+                                // If only 'total' is provided
+                                projectUpdates += totalProp.GetInt32();
+                            }
+
+                            nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String
+                                ? tokenEl.GetString()
+                                : null;
+
+                            if (pageCount == 0 && string.IsNullOrWhiteSpace(nextPageToken))
+                                break;
+                        }
+                        while (!string.IsNullOrWhiteSpace(nextPageToken));
+                    }
+                    catch
+                    {
+                        // Attempt 2: POST /rest/api/3/search with startAt paging
+                        int startAt = 0;
+                        const int maxResults = 100;
+                        int total = int.MaxValue; // unknown until first response
+
+                        while (startAt < total)
+                        {
+                            var payload = new
+                            {
+                                jql,
+                                startAt,
+                                maxResults,
+                                fields = new[] { "updated" }
+                            };
+                            using var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                            using var res = await client.PostAsync("/rest/api/3/search", content);
+                            if (!res.IsSuccessStatusCode)
+                                break; // best-effort
+
+                            var json = await res.Content.ReadAsStringAsync();
+                            using var doc = JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+
+                            total = root.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number
+                                ? totalProp.GetInt32()
+                                : 0;
+
+                            if (root.TryGetProperty("issues", out var issuesEl) && issuesEl.ValueKind == JsonValueKind.Array)
+                            {
+                                int got = 0;
+                                foreach (var issue in issuesEl.EnumerateArray())
+                                {
+                                    got++;
+                                    if (issue.TryGetProperty("fields", out var fields) &&
+                                        fields.TryGetProperty("updated", out var updatedProp) &&
+                                        updatedProp.ValueKind == JsonValueKind.String &&
+                                        DateTime.TryParse(updatedProp.GetString(), out var updatedDt))
+                                    {
+                                        if (updatedDt > maxTime)
+                                            projectUpdates++;
+                                    }
+                                }
+                                if (got == 0) break;
+                                startAt += got;
+                            }
+                            else
+                            {
+                                break;
                             }
                         }
                     }
-                    else if (doc.RootElement.TryGetProperty("total", out var totalProp) && totalProp.ValueKind == JsonValueKind.Number)
-                    {
-                        // Some responses may return only 'total'
-                        totalUpdates += totalProp.GetInt32();
-                    }
+
+                    totalUpdates += projectUpdates;
                 }
 
+                // 4) Update UI
                 this.Invoke(() =>
                 {
                     if (totalUpdates > 0)
@@ -807,7 +915,7 @@ namespace Monovera
             }
             catch
             {
-                // ignore
+                // Best-effort status check; ignore errors
             }
         }
 
@@ -2200,6 +2308,24 @@ namespace Monovera
             return path;
         }
 
+        private void UpdateProgressFromService(int done, int total, double percent)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => UpdateProgressFromService(done, total, percent)));
+                return;
+            }
+
+            pbProgress.Visible = true;
+            pbProgress.Maximum = 100;
+            pbProgress.Value = Math.Clamp((int)Math.Round(percent), 0, 100);
+
+            lblProgress.Visible = true;
+            lblProgress.Text = done == 0
+                ? $"Preparing to load... ({total:N0} issue{(total == 1 ? "" : "s")})"
+                : $"Loading {done:N0}/{total:N0} ({percent:0.0}%)";
+        }
+
         /// <summary>
         /// Handles mouse down events on the tab control, closes tab if close button is clicked.
         /// </summary>
@@ -2792,11 +2918,11 @@ namespace Monovera
                 webHost = new WebSelfHost(8090);
                 await webHost.StartAsync();
 
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = webHost.BaseUrl,
-                    UseShellExecute = true
-                });
+                //System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                //{
+                //    FileName = webHost.BaseUrl,
+                //    UseShellExecute = true
+                //});
             }
             catch (Exception ex)
             {

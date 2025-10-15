@@ -1376,6 +1376,7 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
         }
 
         // Build Search Results HTML for the SPA (triggered by /api/search/html)
+        // Build Search Results HTML for the SPA (triggered by /api/search/html)
         private static async Task<string> BuildSearchResultsHtml(string jql)
         {
             var list = new List<(string Key, string Summary, string Type, DateTime? Updated)>();
@@ -1385,48 +1386,68 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
                 using var client = new HttpClient();
                 client.BaseAddress = new Uri(frmMain.jiraBaseUrl?.TrimEnd('/') ?? "");
                 client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+                client.DefaultRequestHeaders.Accept.Clear();
+                client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                client.Timeout = TimeSpan.FromSeconds(100);
 
                 const int pageSize = 100;
-                int startAt = 0;
-                int total = int.MaxValue;
+                string nextPageToken = null;
 
-                while (startAt < total)
+                do
                 {
-                    var payload = new
+                    var fieldsCsv = "summary,issuetype,updated";
+                    var qs = new List<string>
                     {
-                        jql,
-                        startAt,
-                        maxResults = pageSize,
-                        fields = new[] { "summary", "issuetype", "updated" }
+                        "jql=" + Uri.EscapeDataString(jql),
+                        "maxResults=" + pageSize,
+                        "fields=" + Uri.EscapeDataString(fieldsCsv)
                     };
-                    var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                        qs.Add("nextPageToken=" + Uri.EscapeDataString(nextPageToken));
 
-                    HttpResponseMessage res = await client.PostAsync("/rest/api/3/search/jql", content);
+                    // Only use the new JQL search endpoint; no fallback to classic (avoids 410 Gone)
+                    HttpResponseMessage res = await client.GetAsync("/rest/api/3/search/jql?" + string.Join("&", qs));
                     if (!res.IsSuccessStatusCode)
                     {
-                        content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                        res = await client.PostAsync("/rest/api/3/search", content);
-                        if (!res.IsSuccessStatusCode) break;
+                        // Retry once with POST to the same JQL endpoint (some tenants/proxies prefer POST)
+                        var body = new { jql, maxResults = pageSize, fields = new[] { "summary", "issuetype", "updated" } };
+                        var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+                        var postUrl = "/rest/api/3/search/jql" + (string.IsNullOrWhiteSpace(nextPageToken) ? "" : "?nextPageToken=" + Uri.EscapeDataString(nextPageToken));
+                        res = await client.PostAsync(postUrl, content);
+                        if (!res.IsSuccessStatusCode)
+                        {
+                            var err = await res.Content.ReadAsStringAsync();
+                            throw new HttpRequestException($"Jira search/jql failed: {(int)res.StatusCode} {res.ReasonPhrase}. {err}");
+                        }
                     }
 
                     string json = await res.Content.ReadAsStringAsync();
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
 
-                    total = root.TryGetProperty("total", out var totalProp) ? totalProp.GetInt32() : 0;
-                    if (!root.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array) break;
+                    // Two possible shapes: top-level { issues, nextPageToken } or { results: [ { issues, nextPageToken } ] }
+                    JsonElement page;
+                    if (root.TryGetProperty("results", out var resultsArr) && resultsArr.ValueKind == JsonValueKind.Array && resultsArr.GetArrayLength() > 0)
+                        page = resultsArr[0];
+                    else
+                        page = root;
 
+                    if (!page.TryGetProperty("issues", out var issues) || issues.ValueKind != JsonValueKind.Array)
+                        break;
+
+                    int count = 0;
                     foreach (var issue in issues.EnumerateArray())
                     {
+                        count++;
+
                         string key = issue.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "";
                         if (string.IsNullOrWhiteSpace(key)) continue;
 
-                        var fields = issue.TryGetProperty("fields", out var f) ? f : default;
                         string summary = "";
                         string type = "";
                         DateTime? updated = null;
 
-                        if (fields.ValueKind == JsonValueKind.Object)
+                        if (issue.TryGetProperty("fields", out var fields) && fields.ValueKind == JsonValueKind.Object)
                         {
                             if (fields.TryGetProperty("summary", out var s) && s.ValueKind == JsonValueKind.String)
                                 summary = s.GetString() ?? "";
@@ -1444,8 +1465,13 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
                         list.Add((key, summary, type, updated));
                     }
 
-                    startAt += pageSize;
+                    nextPageToken = page.TryGetProperty("nextPageToken", out var tokenEl) && tokenEl.ValueKind == JsonValueKind.String
+                        ? tokenEl.GetString()
+                        : null;
+
+                    if (count == 0) break;
                 }
+                while (!string.IsNullOrWhiteSpace(nextPageToken));
             }
             catch
             {
