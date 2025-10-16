@@ -698,15 +698,17 @@ public class JiraService
                             toInsert.Add(row);
                     }
 
+                    // INSERT batch
                     if (toInsert.Count > 0)
                     {
                         var transaction = conn.BeginTransaction();
                         using (var cmd = conn.CreateCommand())
                         {
+                            cmd.Transaction = transaction; // bind command to current transaction
                             cmd.CommandText = @"
-                                INSERT INTO issue
-                                (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
-                                VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
+            INSERT INTO issue
+            (CREATEDTIME, UPDATEDTIME, KEY, SUMMARY, DESCRIPTION, PARENTKEY, CHILDRENKEYS, RELATESKEYS, SORTINGFIELD, ISSUETYPE, PROJECTNAME, PROJECTCODE, STATUS, HISTORY, ATTACHMENTS)
+            VALUES (@created, @updated, @key, @summary, @desc, @parent, @children, @relates, @sorting, @issueType, @pname, @pcode, @status, @history, @attachments)";
                             int batchCount = 0;
                             foreach (var row in toInsert)
                             {
@@ -734,6 +736,7 @@ public class JiraService
                                     transaction.Commit();
                                     transaction.Dispose();
                                     transaction = conn.BeginTransaction();
+                                    cmd.Transaction = transaction; // rebind to the new transaction
                                 }
                             }
                             transaction.Commit();
@@ -741,28 +744,30 @@ public class JiraService
                         }
                     }
 
+                    // UPDATE batch
                     if (toUpdate.Count > 0)
                     {
                         var transaction = conn.BeginTransaction();
                         using (var cmd = conn.CreateCommand())
                         {
+                            cmd.Transaction = transaction; // bind command to current transaction
                             cmd.CommandText = @"
-                                UPDATE issue SET
-                                    CREATEDTIME = @created,
-                                    UPDATEDTIME = @updated,
-                                    SUMMARY = @summary,
-                                    DESCRIPTION = @desc,
-                                    PARENTKEY = @parent,
-                                    CHILDRENKEYS = @children,
-                                    RELATESKEYS = @relates,
-                                    SORTINGFIELD = @sorting,
-                                    ISSUETYPE = @issueType,
-                                    PROJECTNAME = @pname,
-                                    PROJECTCODE = @pcode,
-                                    STATUS = @status,
-                                    HISTORY = @history, 
-                                    ATTACHMENTS = @attachments
-                                WHERE KEY = @key";
+            UPDATE issue SET
+                CREATEDTIME = @created,
+                UPDATEDTIME = @updated,
+                SUMMARY = @summary,
+                DESCRIPTION = @desc,
+                PARENTKEY = @parent,
+                CHILDRENKEYS = @children,
+                RELATESKEYS = @relates,
+                SORTINGFIELD = @sorting,
+                ISSUETYPE = @issueType,
+                PROJECTNAME = @pname,
+                PROJECTCODE = @pcode,
+                STATUS = @status,
+                HISTORY = @history, 
+                ATTACHMENTS = @attachments
+            WHERE KEY = @key";
                             int batchCount = 0;
                             foreach (var row in toUpdate)
                             {
@@ -790,6 +795,7 @@ public class JiraService
                                     transaction.Commit();
                                     transaction.Dispose();
                                     transaction = conn.BeginTransaction();
+                                    cmd.Transaction = transaction; // rebind to the new transaction
                                 }
                             }
                             transaction.Commit();
