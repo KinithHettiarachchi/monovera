@@ -2308,7 +2308,7 @@ namespace Monovera
             return path;
         }
 
-        private void UpdateProgressFromService(int done, int total, double percent)
+        public void UpdateProgressFromService(int done, int total, double percent)
         {
             if (InvokeRequired)
             {
@@ -7327,6 +7327,89 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             frmTalkToAIInstance.InitializeOllamaRagUI(DatabasePath, "http://localhost:11434");
             frmTalkToAIInstance.Show(this);
             frmTalkToAIInstance.BringToFront();
+        }
+
+        private void mnuUpdateSquash_Click(object sender, EventArgs e)
+        {
+            RunFullSquashSyncWithCancellationAsync();
+        }
+
+        private async Task RunFullSquashSyncWithCancellationAsync()
+        {
+            // Load Squash configuration from squash.conf (key=value)
+            string confPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "squash.conf");
+            if (!File.Exists(confPath))
+            {
+                MessageBox.Show("Missing squash.conf file. Please create it with SQUASH_API_URL, SQUASH_TOKEN, and SQUASH_PROJECT.", "Configuration Missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string baseUrl = "";
+            string apiToken = "";
+            string projectName = "";
+
+            try
+            {
+                foreach (var rawLine in File.ReadAllLines(confPath))
+                {
+                    var line = rawLine?.Trim();
+                    if (string.IsNullOrEmpty(line)) continue;
+                    if (line.StartsWith("#") || line.StartsWith("//")) continue;
+
+                    int eq = line.IndexOf('=');
+                    if (eq <= 0) continue;
+
+                    string key = line.Substring(0, eq).Trim();
+                    string value = line.Substring(eq + 1).Trim();
+
+                    // Unquote if quoted
+                    if (value.Length >= 2 && ((value.StartsWith("\"") && value.EndsWith("\"")) || (value.StartsWith("'") && value.EndsWith("'"))))
+                        value = value.Substring(1, value.Length - 2);
+
+                    switch (key)
+                    {
+                        case "SQUASH_API_URL":
+                            baseUrl = value;
+                            break;
+                        case "SQUASH_TOKEN":
+                            apiToken = value;
+                            break;
+                        case "SQUASH_PROJECT":
+                            projectName = value;
+                            break;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Failed to read squash.conf: " + ex.Message, "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(apiToken) || string.IsNullOrWhiteSpace(projectName))
+            {
+                MessageBox.Show("Invalid squash.conf. Ensure SQUASH_API_URL, SQUASH_TOKEN, and SQUASH_PROJECT are set.", "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Inject UI progress callback
+            var handler = new Monovera.SquashHandler(
+                baseUrl.TrimEnd('/'),
+                apiToken,
+                projectName: projectName,
+                progress: (done, total, percent) => UpdateProgressFromService(done, total, percent)
+            );
+
+            try
+            {
+                await handler.UpdateSquashAsync(CancellationToken.None);
+                MessageBox.Show("Squash sync completed.");
+            }
+            catch (HttpRequestException ex)
+            {
+                MessageBox.Show($"Squash sync failed: {ex.Message}");
+                throw;
+            }
         }
     }
 

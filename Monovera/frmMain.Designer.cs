@@ -45,10 +45,12 @@
             mnuAITestCases = new ToolStripMenuItem();
             mnuPutMeInContext = new ToolStripMenuItem();
             toolStripSeparator1 = new ToolStripSeparator();
+            mnuOllama = new ToolStripMenuItem();
             toolStripStatusLabel2 = new ToolStripStatusLabel();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
             mnuConfiguration = new ToolStripMenuItem();
+            mnuUpdateSquash = new ToolStripMenuItem();
             toolStripStatusLabel3 = new ToolStripStatusLabel();
             pbProgress = new ToolStripProgressBar();
             lblProgress = new ToolStripStatusLabel();
@@ -59,7 +61,6 @@
             toolStripStatusLabel7 = new ToolStripStatusLabel();
             lblShortcuts = new ToolStripStatusLabel();
             toolTip1 = new ToolTip(components);
-            mnuOllama = new ToolStripMenuItem();
             ((System.ComponentModel.ISupportInitialize)splitContainer1).BeginInit();
             splitContainer1.Panel1.SuspendLayout();
             splitContainer1.Panel2.SuspendLayout();
@@ -204,6 +205,13 @@
             toolStripSeparator1.Name = "toolStripSeparator1";
             toolStripSeparator1.Size = new Size(288, 6);
             // 
+            // mnuOllama
+            // 
+            mnuOllama.Name = "mnuOllama";
+            mnuOllama.Size = new Size(291, 22);
+            mnuOllama.Text = "Ollama Querying";
+            mnuOllama.Click += mnuOllama_Click;
+            // 
             // toolStripStatusLabel2
             // 
             toolStripStatusLabel2.Name = "toolStripStatusLabel2";
@@ -212,7 +220,7 @@
             // 
             // mnuSettings
             // 
-            mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, mnuConfiguration });
+            mnuSettings.DropDownItems.AddRange(new ToolStripItem[] { mnuUpdateHierarchy, mnuConfiguration, mnuUpdateSquash });
             mnuSettings.Font = new Font("Microsoft Sans Serif", 9.75F);
             mnuSettings.ImageTransparentColor = Color.Magenta;
             mnuSettings.Name = "mnuSettings";
@@ -234,6 +242,13 @@
             mnuConfiguration.Size = new Size(184, 22);
             mnuConfiguration.Text = "Configuration...";
             mnuConfiguration.Click += configurationToolStripMenuItem_Click;
+            // 
+            // mnuUpdateSquash
+            // 
+            mnuUpdateSquash.Name = "mnuUpdateSquash";
+            mnuUpdateSquash.Size = new Size(184, 22);
+            mnuUpdateSquash.Text = "Update Squash...";
+            mnuUpdateSquash.Click += mnuUpdateSquash_Click;
             // 
             // toolStripStatusLabel3
             // 
@@ -299,13 +314,6 @@
             // 
             toolTip1.ToolTipIcon = ToolTipIcon.Info;
             // 
-            // mnuOllama
-            // 
-            mnuOllama.Name = "mnuOllama";
-            mnuOllama.Size = new Size(291, 22);
-            mnuOllama.Text = "Ollama Querying";
-            mnuOllama.Click += mnuOllama_Click;
-            // 
             // frmMain
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -360,5 +368,6 @@
         private ToolStripStatusLabel lblSyncStatus;
         private ToolStripSeparator toolStripSeparator1;
         private ToolStripMenuItem mnuOllama;
+        private ToolStripMenuItem mnuUpdateSquash;
     }
 }
