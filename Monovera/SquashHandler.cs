@@ -1,48 +1,51 @@
-﻿using System;
+﻿using Microsoft.Data.Sqlite;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Data.Sqlite;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Xml.Linq;
 
 namespace Monovera
 {
     /// <summary>
     /// SquashHandler synchronizes Requirements and Scripted Test Cases from the local SQLite database to Squash TM.
-    ///
-    /// End-to-end flow:
-    /// 1) Ensure the default Squash project exists (creates if missing).
-    /// 2) Ensure top-level folders under the project:
-    ///    - Requirements root folder (for REQ hierarchy)
-    ///    - Tests root folder (for TST hierarchy)
-    /// 3) Load all issues from SQLite and build parent-child maps.
-    /// 4) Upsert folders and entities following the DB hierarchy:
-    ///    - Folder nodes (IssueType = Folder/Menu/Project) create Squash folders.
-    ///    - Leaf nodes create/update requirements or scripted test cases.
-    ///    - Each entity stores DB KEY in custom field "cf_jiraref".
-    /// 5) Synchronize coverage:
-    ///    - Each test case verifies requirements listed in DB "RELATESKEYS" for that TST item.
-    ///    - Links are replaced to exactly match the DB (strict sync).
-    ///
-    /// Progress reporting:
-    /// - Shows phase and counters during requirements, test cases, and coverage sync via frmMain.UpdateProgressFromService.
     /// </summary>
     public sealed class SquashHandler
     {
         private readonly HttpClient _http;
         private readonly string _baseUrl;
         private readonly string _projectName;
-        private readonly Action<int, int, double>? _progress;
+        private readonly string _description;
+        private readonly string _jiraBaseUrl;
 
+        // Injected UI progress reporter: (done, total, percent)
+        private readonly Action<string,int, int, double>? _progress;
+
+        // Configurable main roots loaded from squash.conf (single root per project)
+        private string? _reqHierarchyRootKey;
+        private string? _tstHierarchyRootKey;
+
+        // Caches for existing entities by cf_jiraref (Jira KEY)
+        private readonly Dictionary<string, int> _tcIdByJiraRef = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _tcFolderIdByJiraRef = new(StringComparer.OrdinalIgnoreCase);
+
+        // At fields section (near _tcIdByJiraRef/_tcFolderIdByJiraRef)
+        private readonly Dictionary<string, int> _reqIdByJiraRef = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _reqFolderIdByJiraRef = new(StringComparer.OrdinalIgnoreCase);
+
+        private const string DefaultProjectName = "Monovera";
         private const string RequirementsRootFolderName = "Requirements";
         private const string TestsRootFolderName = "Tests";
 
-        public SquashHandler(string baseUrl, string apiToken, string projectName = "Project Monovera", Action<int, int, double>? progress = null)
+        public SquashHandler(string baseUrl, string apiToken, string jiraBaseURL, string projectName = DefaultProjectName, Action<string,int, int, double>? progress = null)
         {
             if (string.IsNullOrWhiteSpace(baseUrl)) throw new ArgumentException("Squash baseUrl is required.");
             if (string.IsNullOrWhiteSpace(apiToken)) throw new ArgumentException("Squash API token is required.");
@@ -50,28 +53,50 @@ namespace Monovera
             _baseUrl = baseUrl.TrimEnd('/');
             _projectName = projectName;
             _progress = progress;
+            _jiraBaseUrl = jiraBaseURL;
 
             _http = new HttpClient();
             _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiToken);
             _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+            // Load main roots from squash.conf if present
+            LoadSquashRootsFromConf();
         }
 
+        /// <summary>
+        /// Main synchronization entry point.
+        /// </summary>
         public async Task UpdateSquashAsync(CancellationToken ct = default)
         {
+            // 1) Ensure project
             int projectId = await EnsureProjectAsync(_projectName, ct).ConfigureAwait(false);
 
+            // 2) Ensure root folders
             int reqRootFolderId = await EnsureRequirementRootFolderAsync(projectId, ct).ConfigureAwait(false);
             int tstRootFolderId = await EnsureTestCaseRootFolderAsync(projectId, ct).ConfigureAwait(false);
 
+            // 2.5) Prefetch caches for efficient lookups
+            await LoadAllTestCaseIdsByJiraRefAsync(ct).ConfigureAwait(false);
+            await LoadAllTestCaseFolderIdsByJiraRefAsync(projectId, ct).ConfigureAwait(false);
+
+            await LoadAllRequirementIdsByJiraRefAsync(ct).ConfigureAwait(false);
+            await LoadAllRequirementFolderIdsByJiraRefAsync(projectId, ct).ConfigureAwait(false);
+
+            // 3) Load DB issues
             var allIssues = await LoadAllIssuesAsync(ct).ConfigureAwait(false);
 
-            var reqIssues = allIssues
+            // Split by project code
+            var reqIssuesRaw = allIssues
                 .Where(p => string.Equals(p.Value.ProjectCode, "REQ", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
 
-            var tstIssues = allIssues
+            var tstIssuesRaw = allIssues
                 .Where(p => string.Equals(p.Value.ProjectCode, "TST", StringComparison.OrdinalIgnoreCase))
                 .ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+
+            // Enforce ancestry to configured main roots
+            var reqIssues = FilterIssuesToHierarchyRoot(reqIssuesRaw, _reqHierarchyRootKey);
+            var tstIssues = FilterIssuesToHierarchyRoot(tstIssuesRaw, _tstHierarchyRootKey);
 
             var reqChildren = BuildChildrenMap(reqIssues);
             var tstChildren = BuildChildrenMap(tstIssues);
@@ -81,7 +106,8 @@ namespace Monovera
             int doneTcLeaves = 0;
             ReportPhaseProgress("Syncing test cases", doneTcLeaves, totalTcLeaves);
 
-            await UpsertTestCaseHierarchyAsync(projectId, tstRootFolderId, tstIssues, tstChildren, ct,
+            await UpsertTestCaseHierarchyAsync(
+                projectId, tstRootFolderId, tstIssues, tstChildren, ct,
                 onLeafUpserted: () =>
                 {
                     doneTcLeaves++;
@@ -93,21 +119,21 @@ namespace Monovera
             int doneReqLeaves = 0;
             ReportPhaseProgress("Syncing requirements", doneReqLeaves, totalReqLeaves);
 
-            await UpsertRequirementHierarchyAsync(projectId, reqRootFolderId, reqIssues, reqChildren, ct,
+            await UpsertRequirementHierarchyAsync(
+                projectId, reqRootFolderId, reqIssues, reqChildren, ct,
                 onLeafUpserted: () =>
                 {
                     doneReqLeaves++;
                     ReportPhaseProgress("Syncing requirements", doneReqLeaves, totalReqLeaves);
                 }).ConfigureAwait(false);
 
-          
-
-            // Progress: Coverage (count per test case)
+            // Progress: Coverage (count per test case leaf)
             int totalCoverage = tstIssues.Values.Count(i => !IsFolderNode(i));
             int doneCoverage = 0;
             ReportPhaseProgress("Syncing coverage", doneCoverage, totalCoverage);
 
-            await SyncAllCoverageByJiraRefAsync(reqIssues, tstIssues, ct,
+            await SyncAllCoverageByJiraRefAsync(
+                reqIssues, tstIssues, ct,
                 onTestCoverageSynced: () =>
                 {
                     doneCoverage++;
@@ -137,7 +163,7 @@ namespace Monovera
             var dict = new Dictionary<string, DbIssueRow>(StringComparer.OrdinalIgnoreCase);
             string connStr = $"Data Source={frmMain.DatabasePath};";
 
-            await using var conn = new SqliteConnection(connStr);
+            await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(connStr);
             await conn.OpenAsync(ct).ConfigureAwait(false);
 
             await using var cmd = conn.CreateCommand();
@@ -249,34 +275,135 @@ namespace Monovera
             return sb.ToString();
         }
 
+        // Clean plain-text BDD script from HTML description content
         private static string BuildBddScriptFromDescription(string description)
         {
             if (string.IsNullOrWhiteSpace(description))
                 return "# To be added";
 
-            // Remove common Confluence-export wrapper around gherkin code
-            string s = description
-                .Replace("<p><span class=\"error\"><pre><code class=\"language-gherkin\">", string.Empty)
-                .Replace("</code></pre></span></p>", string.Empty)
-                .Replace("<pre><code class=\"language-gherkin\">", string.Empty)
-                .Replace("</code></pre>", string.Empty);
+            string decoded = System.Net.WebUtility.HtmlDecode(description);
+            decoded = Regex.Replace(decoded, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+            decoded = Regex.Replace(decoded, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+            decoded = Regex.Replace(decoded, @"<[^>]+>", string.Empty);
+            decoded = decoded.Replace("\r\n", "\n").Replace("\r", "\n");
 
-            // Decode HTML entities to plain text (e.g., &quot; → ", &amp; → &, etc.)
-            s = System.Net.WebUtility.HtmlDecode(s);
+            var lines = decoded.Split('\n');
+            var sb = new StringBuilder();
+            bool lastBlank = false;
+            foreach (var line in lines)
+            {
+                var trimmed = line.TrimEnd();
+                bool isBlank = string.IsNullOrWhiteSpace(trimmed);
+                if (isBlank && lastBlank) continue;
+                sb.AppendLine(trimmed);
+                lastBlank = isBlank;
+            }
 
-            // Optional: normalize CRLFs
-            s = s.Replace("\r\n", "\n");
+            string result = sb.ToString().Trim();
+            return string.IsNullOrWhiteSpace(result) ? "# To be added" : result;
+        }
 
-            // Trim surrounding whitespace
-            return s.Trim();
+        // Load root keys from squash.conf (key=value lines)
+        private void LoadSquashRootsFromConf()
+        {
+            try
+            {
+                var candidates = new[]
+                {
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "squash.conf"),
+                    Path.Combine(Environment.CurrentDirectory, "squash.conf")
+                };
+                var confPath = candidates.FirstOrDefault(File.Exists);
+                if (confPath is null) return;
+
+                foreach (var raw in File.ReadAllLines(confPath))
+                {
+                    var line = raw?.Trim();
+                    if (string.IsNullOrEmpty(line)) continue;
+                    if (line.StartsWith("#") || line.StartsWith("//")) continue;
+
+                    var idx = line.IndexOf('=');
+                    if (idx <= 0) continue;
+
+                    var key = line.Substring(0, idx).Trim();
+                    var val = line.Substring(idx + 1).Trim().Trim('"').Trim('\'');
+
+                    if (key.Equals("SQAUSH_REQ_ROOT", StringComparison.OrdinalIgnoreCase))
+                        _reqHierarchyRootKey = val;
+                    else if (key.Equals("SQAUSH_TST_ROOT", StringComparison.OrdinalIgnoreCase))
+                        _tstHierarchyRootKey = val;
+                }
+            }
+            catch
+            {
+                // Non-fatal; filtering will be skipped if roots aren't loaded.
+            }
+        }
+
+        // Keep only issues whose ancestry reaches the given rootKey.
+        private static Dictionary<string, DbIssueRow> FilterIssuesToHierarchyRoot(
+            Dictionary<string, DbIssueRow> issues,
+            string? rootKey)
+        {
+            if (string.IsNullOrWhiteSpace(rootKey))
+            {
+                return issues;
+            }
+
+            if (!issues.ContainsKey(rootKey))
+            {
+                return new Dictionary<string, DbIssueRow>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            var parentByChild = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in issues)
+            {
+                var child = kvp.Key;
+                var parent = kvp.Value.ParentKey ?? "";
+                if (!string.IsNullOrWhiteSpace(parent))
+                {
+                    parentByChild[child] = parent;
+                }
+            }
+
+            bool ReachesRoot(string key)
+            {
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var cur = key;
+                while (!string.IsNullOrWhiteSpace(cur))
+                {
+                    if (!seen.Add(cur)) break;
+                    if (string.Equals(cur, rootKey, StringComparison.OrdinalIgnoreCase)) return true;
+                    if (!parentByChild.TryGetValue(cur, out var p)) break;
+                    cur = p;
+                }
+                return false;
+            }
+
+            var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootKey };
+            foreach (var k in issues.Keys)
+            {
+                if (string.Equals(k, rootKey, StringComparison.OrdinalIgnoreCase)) continue;
+                if (ReachesRoot(k)) allowed.Add(k);
+            }
+
+            var pruned = new Dictionary<string, DbIssueRow>(StringComparer.OrdinalIgnoreCase);
+            foreach (var k in allowed)
+            {
+                if (issues.TryGetValue(k, out var row))
+                    pruned[k] = row;
+            }
+            return pruned;
         }
 
         #endregion
 
-        #region Project and top-level folders
+        #region Project and root folders
 
         private async Task<int> EnsureProjectAsync(string name, CancellationToken ct)
         {
+            ReportPhaseProgress("Ensuring project root folders...", 100, 100);
+
             int id = await FindProjectIdByNameAsync(name, ct).ConfigureAwait(false);
             if (id > 0) return id;
 
@@ -289,6 +416,9 @@ namespace Monovera
             };
 
             await PostAsync("/projects", payload, ct).ConfigureAwait(false);
+
+            ReportPhaseProgress("Ensuring requirement root folders - Completed!", 100, 100);
+
             return await FindProjectIdByNameAsync(name, ct).ConfigureAwait(false);
         }
 
@@ -348,6 +478,8 @@ namespace Monovera
 
         private async Task<int> EnsureRequirementRootFolderAsync(int projectId, CancellationToken ct)
         {
+            ReportPhaseProgress("Ensuring requirement root folders...", 100, 100);
+
             var tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
             var projectNode = (JObject)tree[0];
             var existing = FindFolderByName(projectNode, RequirementsRootFolderName);
@@ -366,11 +498,16 @@ namespace Monovera
             tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
             projectNode = (JObject)tree[0];
             var after = FindFolderByName(projectNode, RequirementsRootFolderName);
+
+            ReportPhaseProgress("Ensuring requirement root folders - Completed!", 100, 100);
+
             return after != null ? (int)after["id"] : 0;
         }
 
         private async Task<int> EnsureTestCaseRootFolderAsync(int projectId, CancellationToken ct)
         {
+            ReportPhaseProgress("Ensuring test case root folders...", 100, 100);
+
             var tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
             var projectNode = (JObject)tree[0];
             var existing = FindFolderByName(projectNode, TestsRootFolderName);
@@ -389,135 +526,10 @@ namespace Monovera
             tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
             projectNode = (JObject)tree[0];
             var after = FindFolderByName(projectNode, TestsRootFolderName);
+
+            ReportPhaseProgress("Ensuring test case root folders - Completed!", 100, 100);
+
             return after != null ? (int)after["id"] : 0;
-        }
-
-        private async Task<int> EnsureRequirementFolderAsync(
-    int projectId,
-    string name,
-    int parentId,
-    string parentType,
-    string issueKey,
-    string? nodeDescription,
-    IEnumerable<string> relatedKeys,
-    CancellationToken ct)
-        {
-            // 1) Prefer match by cf_jiraref == KEY (DB)
-            int byJiraRefId = await FindRequirementFolderIdByJiraRefAsync(projectId, issueKey, ct).ConfigureAwait(false);
-            string descriptionToSend = !string.IsNullOrWhiteSpace(nodeDescription)
-                                        ? nodeDescription
-                                        : "";
-
-            if (byJiraRefId > 0)
-            {
-                // Update and ensure cf_jiraref remains set
-                var updatePayload = new
-                {
-                    _type = "requirement-folder",
-                    name = name,
-                    description = descriptionToSend,
-                    custom_fields = new object[]
-                    {
-                new { code = "cf_jiraref", value = issueKey }
-                    }
-                };
-
-                await PatchAsync($"/requirement-folders/{byJiraRefId}", updatePayload, ct).ConfigureAwait(false);
-                return byJiraRefId;
-            }
-
-            // 2) Fallback: find by name in tree; if found, treat as update and set cf_jiraref
-            var tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            var projectNode = (JObject)tree[0];
-            var existing = FindFolderByName(projectNode, name);
-            if (existing != null)
-            {
-                int id = (int)existing["id"];
-                var updatePayload = new
-                {
-                    _type = "requirement-folder",
-                    name = name,
-                    description = descriptionToSend,
-                    custom_fields = new object[]
-                    {
-                new { code = "cf_jiraref", value = issueKey }
-                    }
-                };
-                await PatchAsync($"/requirement-folders/{id}", updatePayload, ct).ConfigureAwait(false);
-                return id;
-            }
-
-            // 3) Create new folder with cf_jiraref
-            var createPayload = new
-            {
-                _type = "requirement-folder",
-                name = name,
-                description = descriptionToSend,
-                parent = new { _type = parentType, id = parentId },
-                custom_fields = new object[]
-                {
-            new { code = "cf_jiraref", value = issueKey }
-                }
-            };
-
-            await PostAsync("/requirement-folders", createPayload, ct).ConfigureAwait(false);
-
-            // Re-read tree and return the created folder id
-            tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            projectNode = (JObject)tree[0];
-            var after = FindFolderByName(projectNode, name);
-            return after != null ? (int)after["id"] : 0;
-        }
-
-        // Walks the requirement-folder tree and returns the folder id whose custom_fields contains cf_jiraref == jiraRef
-        private async Task<int> FindRequirementFolderIdByJiraRefAsync(int projectId, string jiraRef, CancellationToken ct)
-        {
-            //var tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            //if (tree == null || tree.Count == 0) return -1;
-
-            //var projectNode = (JObject)tree[0];
-            //var ids = new List<int>();
-
-            //void CollectIds(JArray folders)
-            //{
-            //    foreach (JObject f in folders)
-            //    {
-            //        if (f.TryGetValue("id", out var idToken) && idToken.Type == JTokenType.Integer)
-            //            ids.Add((int)idToken);
-            //        if (f["children"] is JArray sub && sub.Count > 0)
-            //            CollectIds(sub);
-            //    }
-            //}
-
-            //var rootFolders = (JArray)projectNode["folders"] ?? new JArray();
-            //CollectIds(rootFolders);
-
-            //foreach (var id in ids)
-            //{
-            //    // Fetch full folder details to read custom_fields
-            //    string res = await GetAsync($"/requirement-folders/{id}", ct).ConfigureAwait(false);
-            //    var json = JObject.Parse(res);
-
-            //    var cufs = json["custom_fields"] as JArray;
-            //    if (cufs == null) continue;
-
-            //    foreach (JObject cf in cufs)
-            //    {
-            //        var code = (string?)cf["code"];
-            //        var valueToken = cf["value"];
-            //        if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
-            //            continue;
-
-            //        var value = valueToken?.Type == JTokenType.Array
-            //            ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
-            //            : valueToken?.ToString();
-
-            //        if (string.Equals(value, jiraRef, StringComparison.OrdinalIgnoreCase))
-            //            return id;
-            //    }
-            //}
-
-            return -1;
         }
 
         private async Task<int> EnsureTestCaseFolderAsync(
@@ -526,126 +538,106 @@ namespace Monovera
     int parentId,
     string parentType,
     string issueKey,
-    string? nodeDescription,
+    string issueDescription,
     IEnumerable<string> relatedKeys,
     CancellationToken ct)
         {
-            // 1) Prefer match by cf_jiraref == KEY (DB)
-            int byJiraRefId = await FindTestCaseFolderIdByJiraRefAsync(projectId, issueKey, ct).ConfigureAwait(false);
-            string descriptionToSend = !string.IsNullOrWhiteSpace(nodeDescription)
-                                        ? nodeDescription
-                                        : "";
+            // Try resolve by cf_jiraref cache first
+            var existingId = await FindTestCaseFolderIdByJiraRefAsync(issueKey, projectId, ct).ConfigureAwait(false);
 
-            if (byJiraRefId > 0)
+            if (existingId > 0)
             {
-                // Update and ensure cf_jiraref remains set
-                var updatePayload = new
+                // Update without reloading the whole cache
+                var patchPayload = new
                 {
                     _type = "test-case-folder",
                     name = name,
-                    description = descriptionToSend,
+                    description = issueDescription,
+                    parent = new { _type = parentType, id = parentId },
                     custom_fields = new object[]
                     {
-                        new { code = "cf_jiraref", value = issueKey }
+                        new { code = "cf_jiraref", value = issueKey },
+                        new { code = "cf_jirarefurl", value = $"<a href='{_jiraBaseUrl}/browse/{issueKey}'>{_jiraBaseUrl}/browse/{issueKey}</a>" }
                     }
                 };
 
-                await PatchAsync($"/test-case-folders/{byJiraRefId}", updatePayload, ct).ConfigureAwait(false);
-                return byJiraRefId;
+                await PatchAsync($"/test-case-folders/{existingId}", patchPayload, ct).ConfigureAwait(false);
+
+                // Keep cache consistent
+                _tcFolderIdByJiraRef[issueKey] = existingId;
+                return existingId;
             }
 
-            // 2) Fallback: find by name in tree; if found, treat as update and set cf_jiraref
-            var tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            var projectNode = (JObject)tree[0];
-            var existing = FindFolderByName(projectNode, name);
-            if (existing != null)
-            {
-                int id = (int)existing["id"];
-                var updatePayload = new
-                {
-                    _type = "test-case-folder",
-                    name = name,
-                    description = descriptionToSend,
-                    custom_fields = new object[]
-                    {
-                        new { code = "cf_jiraref", value = issueKey }
-                    }
-                };
-                await PatchAsync($"/test-case-folders/{id}", updatePayload, ct).ConfigureAwait(false);
-                return id;
-            }
-
-            // 3) Create new folder with cf_jiraref
+            // Create new and set cf_jiraref
             var createPayload = new
             {
                 _type = "test-case-folder",
                 name = name,
-                description = descriptionToSend,
+                description = issueDescription,
                 parent = new { _type = parentType, id = parentId },
                 custom_fields = new object[]
                 {
-                    new { code = "cf_jiraref", value = issueKey }
+            new { code = "cf_jiraref", value = issueKey },
+            new { code = "cf_jirarefurl", value = $"<a href='{_jiraBaseUrl}/browse/{issueKey}'>{_jiraBaseUrl}/browse/{issueKey}</a>" }
                 }
             };
-            await PostAsync("/test-case-folders", createPayload, ct).ConfigureAwait(false);
 
-            // Re-read tree and return the created folder id
-            tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            projectNode = (JObject)tree[0];
-            var after = FindFolderByName(projectNode, name);
-            return after != null ? (int)after["id"] : 0;
+            // Avoid full cache reload: parse return body to get new id
+            var body = await PostAsync("/test-case-folders", createPayload, ct).ConfigureAwait(false);
+
+            try
+            {
+                var obj = JObject.Parse(body);
+                var newId = (int?)obj["id"] ?? 0;
+                if (newId > 0)
+                {
+                    _tcFolderIdByJiraRef[issueKey] = newId;
+                    return newId;
+                }
+            }
+            catch
+            {
+                // If the API doesn’t return the entity body or id is missing, fall back once to a targeted GET of the created folder.
+                // DO NOT reload the entire tree; instead, try a single GET using the parent folder to minimize cost.
+            }
+
+            // Fallback: single GET of the parent’s immediate children to find our newly created folder (lightweight compared to full tree)
+            try
+            {
+                // Some Squash instances expose children listing; if unavailable, you may need to call the detail GET by Location header.
+                // If Location header is needed, consider enhancing PostAsync to return headers too.
+                var parentTree = await GetAsync($"/test-case-folders/{parentId}", ct).ConfigureAwait(false);
+                var parentObj = JObject.Parse(parentTree);
+                var children = (JArray?)parentObj["_embedded"]?["folders"] ?? new JArray();
+                foreach (JObject f in children)
+                {
+                    var id = (int?)f["id"] ?? 0;
+                    var cufs = (JArray?)f["custom_fields"];
+                    if (id > 0 && cufs is not null)
+                    {
+                        foreach (JObject cf in cufs)
+                        {
+                            var code = (string?)cf["code"];
+                            var val = cf["value"]?.ToString();
+                            if (string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(val, issueKey, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _tcFolderIdByJiraRef[issueKey] = id;
+                                return id;
+                            }
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // swallow and fall through
+            }
+
+            // As a last resort, keep operating without id (will resolve on next global prefetch run)
+            return 0;
         }
 
-        // Walks the test-case folder tree and returns the folder id whose custom_fields contains cf_jiraref == jiraRef
-        private async Task<int> FindTestCaseFolderIdByJiraRefAsync(int projectId, string jiraRef, CancellationToken ct)
-        {
-            //var tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
-            //if (tree == null || tree.Count == 0) return -1;
-
-            //var projectNode = (JObject)tree[0];
-            //var ids = new List<int>();
-
-            //void CollectIds(JArray folders)
-            //{
-            //    foreach (JObject f in folders)
-            //    {
-            //        if (f.TryGetValue("id", out var idToken) && idToken.Type == JTokenType.Integer)
-            //            ids.Add((int)idToken);
-            //        if (f["children"] is JArray sub && sub.Count > 0)
-            //            CollectIds(sub);
-            //    }
-            //}
-
-            //var rootFolders = (JArray)projectNode["folders"] ?? new JArray();
-            //CollectIds(rootFolders);
-
-            //foreach (var id in ids)
-            //{
-            //    // Fetch full folder details to read custom_fields
-            //    string res = await GetAsync($"/test-case-folders/{id}", ct).ConfigureAwait(false);
-            //    var json = JObject.Parse(res);
-
-            //    var cufs = json["custom_fields"] as JArray;
-            //    if (cufs == null) continue;
-
-            //    foreach (JObject cf in cufs)
-            //    {
-            //        var code = (string?)cf["code"];
-            //        var valueToken = cf["value"];
-            //        if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
-            //            continue;
-
-            //        var value = valueToken?.Type == JTokenType.Array
-            //            ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
-            //            : valueToken?.ToString();
-
-            //        if (string.Equals(value, jiraRef, StringComparison.OrdinalIgnoreCase))
-            //            return id;
-            //    }
-            //}
-
-            return -1;
-        }
         #endregion
 
         #region Requirements upsert
@@ -689,123 +681,79 @@ namespace Monovera
         {
             if (!issues.TryGetValue(nodeKey, out var node)) return;
 
-            string displayName = $"{node.Key} {node.Summary}".Trim();
+            string displayName = Chop($"{node.Key} {node.Summary}".Trim());
 
             if (IsFolderNode(node))
             {
-                int folderId = await EnsureRequirementFolderAsync(
-                    projectId,
-                    displayName,
-                    parentId,
-                    parentType,
-                    node.Key,
-                    node.Description,
-                    node.Related,
-                    ct).ConfigureAwait(false);
-
+                int folderId = await EnsureRequirementFolderAsync(projectId, displayName, parentId, parentType, node.Key, node.Related, ct).ConfigureAwait(false);
                 if (childrenMap.TryGetValue(node.Key, out var childKeys))
                 {
                     foreach (var ck in childKeys)
                     {
-                        await UpsertRequirementNodeDfsAsync(
-                            projectId,
-                            ck,
-                            "requirement-folder",
-                            folderId,
-                            issues,
-                            childrenMap,
-                            ct,
-                            onLeafUpserted).ConfigureAwait(false);
+                        await UpsertRequirementNodeDfsAsync(projectId, ck, "requirement-folder", folderId, issues, childrenMap, ct, onLeafUpserted).ConfigureAwait(false);
                     }
                 }
             }
             else
             {
+                // Resolve existing requirement by cf_jiraref via cache
                 int reqId = await FindRequirementIdByJiraRefAsync(node.Key, ct).ConfigureAwait(false);
-                string descriptionToSend = BuildRequirementDescriptionHtml(node);
+
+                string descriptionHtml = node.Description;// BuildRequirementDescriptionHtml(node);
 
                 var currentVersion = new
                 {
                     _type = "requirement-version",
-                    name = string.IsNullOrWhiteSpace(node.Summary) ? node.Key : node.Summary,
-                    description = descriptionToSend,
+                    name = displayName,
+                    description = descriptionHtml,
                     status = "WORK_IN_PROGRESS",
-                    category = new { code = "CAT_USER_STORY" },
+                    category = new { code = "CAT_FUNCTIONAL" },
                     custom_fields = new object[]
                     {
-                        new { code = "cf_jiraref", value = node.Key }
+                        new { code = "cf_jiraref", value = node.Key },
+                        new { code = "cf_jirarefurl", value = $"{_jiraBaseUrl}/browse/{node.Key}" }
                     }
                 };
 
                 if (reqId > 0)
                 {
-                    await PatchAsync($"/requirements/{reqId}", new
-                    {
-                        _type = "requirement",
-                        current_version = currentVersion
-                    }, ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    await PostAsync("/requirements", new
+                    // PATCH minimal payload with current_version to enforce cf_jiraref
+                    var patchPayload = new
                     {
                         _type = "requirement",
                         current_version = currentVersion,
-                        parent = new { _type = parentType, id = parentId }
-                    }, ct).ConfigureAwait(false);
+                        parent = new { _type = "requirement-folder", id = parentId }
+                    };
+                    await PatchAsync($"/requirements/{reqId}", patchPayload, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    // POST new with parent and cf_jiraref
+                    var createPayload = new
+                    {
+                        _type = "requirement",
+                        current_version = currentVersion,
+                        parent = new { _type = "requirement-folder", id = parentId }
+                    };
+                    await PostAsync("/requirements", createPayload, ct).ConfigureAwait(false);
 
+                    // Update cache for fast future lookups
                     reqId = await FindRequirementIdByJiraRefAsync(node.Key, ct).ConfigureAwait(false);
+                    if (reqId > 0) _reqIdByJiraRef[node.Key] = reqId;
                 }
 
                 onLeafUpserted?.Invoke();
-
-                if (reqId > 0 && childrenMap.TryGetValue(node.Key, out var childKeys) && childKeys.Count > 0)
-                {
-                    foreach (var ck in childKeys)
-                    {
-                        await UpsertRequirementNodeDfsAsync(
-                            projectId,
-                            ck,
-                            "requirement",
-                            reqId,
-                            issues,
-                            childrenMap,
-                            ct,
-                            onLeafUpserted).ConfigureAwait(false);
-                    }
-                }
             }
         }
 
-        private async Task<int> FindRequirementIdByJiraRefAsync(string jiraRef, CancellationToken ct)
+        // Replace existing FindRequirementIdByJiraRefAsync with:
+        private Task<int> FindRequirementIdByJiraRefAsync(string jiraRef, CancellationToken ct)
         {
-            var res = await GetAsync("/requirements", ct).ConfigureAwait(false);
-            var json = JObject.Parse(res);
-            var arr = (JArray)json["_embedded"]?["requirements"] ?? new JArray();
-
-            foreach (JObject r in arr)
-            {
-                var currentVersion = (JObject?)r["current_version"];
-                var cufs = (JArray?)currentVersion?["custom_fields"];
-                if (cufs is null) continue;
-
-                foreach (JObject cf in cufs)
-                {
-                    var code = (string?)cf["code"];
-                    var valueToken = cf["value"];
-                    if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var value = valueToken?.Type == JTokenType.Array
-                        ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
-                        : valueToken?.ToString();
-
-                    if (string.Equals(value, jiraRef, StringComparison.OrdinalIgnoreCase))
-                        return (int)r["id"];
-                }
-            }
-
-            return -1;
+            if (string.IsNullOrWhiteSpace(jiraRef))
+                return Task.FromResult(-1);
+            if (_reqIdByJiraRef.TryGetValue(jiraRef, out var id))
+                return Task.FromResult(id);
+            return Task.FromResult(-1);
         }
 
         #endregion
@@ -851,10 +799,11 @@ namespace Monovera
         {
             if (!issues.TryGetValue(nodeKey, out var node)) return;
 
-            string displayName = $"{node.Key} {node.Summary}".Trim();
+            string displayName = Chop($"[{node.Key}] {node.Summary}".Trim());
 
             if (IsFolderNode(node))
             {
+                // Ensure/Update test case folder (already writes cf_jiraref)
                 int folderId = await EnsureTestCaseFolderAsync(
                     projectId,
                     displayName,
@@ -868,119 +817,80 @@ namespace Monovera
                 if (childrenMap.TryGetValue(node.Key, out var childKeys))
                 {
                     foreach (var ck in childKeys)
-                    {
-                        await UpsertTestCaseNodeDfsAsync(
-                            projectId,
-                            ck,
-                            "test-case-folder",
-                            folderId,
-                            issues,
-                            childrenMap,
-                            ct,
-                            onLeafUpserted).ConfigureAwait(false);
-                    }
+                        await UpsertTestCaseNodeDfsAsync(projectId, ck, "test-case-folder", folderId, issues, childrenMap, ct, onLeafUpserted).ConfigureAwait(false);
                 }
+                return;
+            }
+
+            // Resolve existing test case by cf_jiraref using prefetch cache
+            if (!_tcIdByJiraRef.TryGetValue(node.Key, out var tcId))
+            {
+                tcId = await FindTestCaseIdByJiraRefAsync(node.Key, ct).ConfigureAwait(false);
+                if (tcId > 0) _tcIdByJiraRef[node.Key] = tcId;
+            }
+
+            string script = BuildBddScriptFromDescription(node.Description);
+
+            if (tcId > 0)
+            {
+                // PATCH existing test case (minimal body + ensure cf_jiraref under current_version)
+                var patchPayload = new
+                {
+                    _type = "scripted-test-case",
+                    name = displayName,
+                    script = script,
+                    parent = new { _type = "test-case-folder", id = parentId },
+                    custom_fields = new object[]
+                                                {
+                                                    new
+                                                    {
+                                                        code = "cf_jiraref",
+                                                        value = node.Key
+                                                    },
+                                                    new
+                                                    {
+                                                        code = "cf_jirarefurl",
+                                                        value = $"<a href='{_jiraBaseUrl}/browse/{node.Key}'>{_jiraBaseUrl}/browse/{node.Key}</a>"
+                                                    }
+                                                }
+                };
+                await PatchAsync($"/test-cases/{tcId}", patchPayload, ct).ConfigureAwait(false);
             }
             else
             {
-                // Build script content from DB description
-                string descriptionToSend = BuildBddScriptFromDescription(node.Description);
-
-                // Decide create vs update by cf_jiraref matching KEY from DB
-                int tcId = await FindTestCaseIdByJiraRefAsync(node.Key, ct).ConfigureAwait(false);
-
-                if (tcId > 0)
+                // CREATE with parent and cf_jiraref under current_version
+                var createPayload = new
                 {
-                    // PATCH scripted test case – keep minimal fields and ensure cf_jiraref remains set under current_version
-                    var updatePayload = new
-                    {
-                        _type = "scripted-test-case",
-                        name = string.IsNullOrWhiteSpace(node.Summary) ? node.Key : $"{node.Key} {node.Summary}",
-                        script = descriptionToSend,
-                        custom_fields = new[]
-                                            {
-                                                new
-                                                {
-                                                    code = "cf_jiraref",
-                                                    value = node.Key
+                    _type = "scripted-test-case",
+                    name = displayName,
+                    importance = "MEDIUM",
+                    parent = new { _type = "test-case-folder", id = parentId },
+                    script = script,
+                    nature = new { code = "NAT_FUNCTIONAL_TESTING" },
+                    type = new { code = "TYP_REGRESSION_TESTING" },
+                    custom_fields = new object[]
+                                                 {
+                                                    new
+                                                    {
+                                                        code = "cf_jiraref",
+                                                        value = node.Key
+                                                    },
+                                                    new
+                                                    {
+                                                        code = "cf_jirarefurl",
+                                                        value = $"<a href='{_jiraBaseUrl}/browse/{node.Key}'>{_jiraBaseUrl}/browse/{node.Key}</a>"
+                                                    }
                                                 }
-                                            }
-                    };
+                };
 
-                    await PatchAsync($"/test-cases/{tcId}", updatePayload, ct).ConfigureAwait(false);
-                }
-                else
-                {
-                    // POST scripted test case – minimal documented shape + current_version custom field for cf_jiraref
-                    var createPayload = new
-                    {
-                        _type = "scripted-test-case",
-                        name = string.IsNullOrWhiteSpace(node.Summary) ? node.Key : $"{node.Key} {node.Summary}",
-                        parent = new { _type = parentType, id = parentId },
-                        script = descriptionToSend,
-                        custom_fields = new[]
-                                            {
-                                                new
-                                                {
-                                                    code = "cf_jiraref",
-                                                    value = node.Key
-                                                }
-                                            }
-                    };
+                await PostAsync("/test-cases", createPayload, ct).ConfigureAwait(false);
 
-                    await PostAsync("/test-cases", createPayload, ct).ConfigureAwait(false);
-                }
-
-                onLeafUpserted?.Invoke();
-
-                // If there are children beneath a leaf (rare), keep walking under the same parent folder
-                if (childrenMap.TryGetValue(node.Key, out var childKeys) && childKeys.Count > 0)
-                {
-                    foreach (var ck in childKeys)
-                    {
-                        await UpsertTestCaseNodeDfsAsync(
-                            projectId,
-                            ck,
-                            "test-case-folder",
-                            parentId,
-                            issues,
-                            childrenMap,
-                            ct,
-                            onLeafUpserted).ConfigureAwait(false);
-                    }
-                }
-            }
-        }
-
-        private async Task<int> FindTestCaseIdByJiraRefAsync(string jiraRef, CancellationToken ct)
-        {
-            var res = await GetAsync("/test-cases", ct).ConfigureAwait(false);
-            var json = JObject.Parse(res);
-            var arr = (JArray)json["_embedded"]?["test-cases"] ?? new JArray();
-
-            foreach (JObject t in arr)
-            {
-                var currentVersion = (JObject?)t["current_version"];
-                var cufs = (JArray?)currentVersion?["custom_fields"];
-                if (cufs is null) continue;
-
-                foreach (JObject cf in cufs)
-                {
-                    var code = (string?)cf["code"];
-                    var valueToken = cf["value"];
-                    if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    var value = valueToken?.Type == JTokenType.Array
-                        ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
-                        : valueToken?.ToString();
-
-                    if (string.Equals(value, jiraRef, StringComparison.OrdinalIgnoreCase))
-                        return (int)t["id"];
-                }
+                // Refresh cache entry for this key
+                var newId = await FindTestCaseIdByJiraRefAsync(node.Key, ct).ConfigureAwait(false);
+                if (newId > 0) _tcIdByJiraRef[node.Key] = newId;
             }
 
-            return -1;
+            onLeafUpserted?.Invoke();
         }
 
         #endregion
@@ -1028,15 +938,13 @@ namespace Monovera
 
         #endregion
 
-        #region HTTP helpers
+        #region HTTP helpers and caches
 
         private void ReportPhaseProgress(string phase, int done, int total)
         {
             double percent = total <= 0 ? 100.0 : (double)done / total * 100.0;
-            // Use injected progress reporter to avoid static/instance form issues
-            _progress?.Invoke(done, total, percent);
+            _progress?.Invoke(phase, done, total, percent);
         }
-
 
         private async Task<string> GetAsync(string relative, CancellationToken ct)
         {
@@ -1048,33 +956,33 @@ namespace Monovera
 
         private async Task<string> PostAsync(string relative, object payload, CancellationToken ct)
         {
-            var settings = new JsonSerializerSettings
-            {
-                NullValueHandling = NullValueHandling.Ignore,
-                StringEscapeHandling = StringEscapeHandling.EscapeHtml
-            };
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
             string json = JsonConvert.SerializeObject(payload, settings);
+
             using var req = new HttpRequestMessage(HttpMethod.Post, _baseUrl + relative)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
+
             req.Headers.Accept.Clear();
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/hal+json"));
+
             using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
             var body = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
             if (!res.IsSuccessStatusCode)
+            {
                 throw new HttpRequestException($"POST {relative} failed {(int)res.StatusCode}: {body}\nPayload: {json}");
+            }
             return body;
         }
 
         private async Task<string> PatchAsync(string relative, object payload, CancellationToken ct)
         {
-            var settings = new JsonSerializerSettings
-            {
-                NullValueHandling = NullValueHandling.Ignore,
-                StringEscapeHandling = StringEscapeHandling.EscapeHtml
-            };
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
             string json = JsonConvert.SerializeObject(payload, settings);
+
             var method = new HttpMethod("PATCH");
             using var req = new HttpRequestMessage(method, _baseUrl + relative)
             {
@@ -1083,21 +991,21 @@ namespace Monovera
             req.Headers.Accept.Clear();
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/hal+json"));
+
             using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
             var body = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!res.IsSuccessStatusCode)
+            {
                 throw new HttpRequestException($"PATCH {relative} failed {(int)res.StatusCode}: {body}\nPayload: {json}");
+            }
             return body;
         }
 
         private async Task<string> PutAsync(string relative, object payload, CancellationToken ct)
         {
-            var settings = new JsonSerializerSettings
-            {
-                NullValueHandling = NullValueHandling.Ignore,
-                StringEscapeHandling = StringEscapeHandling.EscapeHtml
-            };
+            var settings = new JsonSerializerSettings { NullValueHandling = NullValueHandling.Ignore };
             string json = JsonConvert.SerializeObject(payload, settings);
+
             using var req = new HttpRequestMessage(HttpMethod.Put, _baseUrl + relative)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -1105,13 +1013,404 @@ namespace Monovera
             req.Headers.Accept.Clear();
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/hal+json"));
+
             using var res = await _http.SendAsync(req, ct).ConfigureAwait(false);
             var body = await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             if (!res.IsSuccessStatusCode)
+            {
                 throw new HttpRequestException($"PUT {relative} failed {(int)res.StatusCode}: {body}\nPayload: {json}");
+            }
             return body;
         }
 
+        // Prefetch all scripted test cases and index by cf_jiraref
+        private async Task LoadAllTestCaseIdsByJiraRefAsync(CancellationToken ct)
+        {
+            _tcIdByJiraRef.Clear();
+
+            string nextUrl = "/test-cases?size=200&page=0";
+            int totalPages = -1;
+            int currentPage = 0;
+
+            while (!string.IsNullOrWhiteSpace(nextUrl))
+            {
+                var res = await GetAsync(nextUrl, ct).ConfigureAwait(false);
+                var json = JObject.Parse(res);
+
+                var pageObj = (JObject?)json["page"];
+                int size = pageObj?.Value<int?>("size") ?? 20;
+                currentPage = pageObj?.Value<int?>("number") ?? currentPage;
+                totalPages = pageObj?.Value<int?>("totalPages") ?? totalPages;
+
+                var arr = (JArray?)json["_embedded"]?["test-cases"] ?? new JArray();
+                int totalItemsThisPage = arr.Count;
+                int doneItemsThisPage = 0;
+
+                foreach (JObject t in arr)
+                {
+                    int id = t.Value<int>("id");
+
+                    var name = t.Value<string>("name");
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        var m = Regex.Match(name, @"\[(?<key>[A-Z]+-\d+)\]", RegexOptions.IgnoreCase);
+                        if (m.Success)
+                        {
+                            var k = m.Groups["key"].Value;
+                            if (!string.IsNullOrWhiteSpace(k))
+                                _tcIdByJiraRef[k] = id;
+                        }
+                    }
+
+                    var currentVersion = (JObject?)t["current_version"];
+                    var cufs = (JArray?)currentVersion?["custom_fields"];
+                    if (cufs is not null)
+                    {
+                        foreach (JObject cf in cufs)
+                        {
+                            var code = (string?)cf["code"];
+                            if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            var valueToken = cf["value"];
+                            var value = valueToken?.Type == JTokenType.Array
+                                ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
+                                : valueToken?.ToString();
+
+                            if (!string.IsNullOrWhiteSpace(value))
+                                _tcIdByJiraRef[value] = id;
+                        }
+                    }
+
+                    doneItemsThisPage++;
+                    ReportPhaseProgress("Indexing test cases (items)", doneItemsThisPage, totalItemsThisPage);
+                }
+
+                if (totalPages > 0)
+                    ReportPhaseProgress("Indexing test cases (pages)", currentPage + 1, totalPages);
+
+                var nextLink = (string?)json["_links"]?["next"]?["href"];
+                if (!string.IsNullOrWhiteSpace(nextLink))
+                {
+                    nextUrl = nextLink.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                        ? nextLink.Replace(_baseUrl, "", StringComparison.OrdinalIgnoreCase)
+                        : nextLink;
+                }
+                else if (totalPages >= 0 && currentPage + 1 < totalPages)
+                {
+                    nextUrl = $"/test-cases?size={size}&page={currentPage + 1}";
+                }
+                else
+                {
+                    nextUrl = null;
+                }
+            }
+
+            if (totalPages > 0)
+                ReportPhaseProgress("Indexing test cases (pages)", totalPages, totalPages);
+        }
+
+        // Replace FindTestCaseIdByJiraRefAsync with a cache-only version for O(1) lookups
+        public Task<int> FindTestCaseIdByJiraRefAsync(string jiraRef, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(jiraRef))
+                return Task.FromResult(-1);
+
+            if (_tcIdByJiraRef.TryGetValue(jiraRef, out var id))
+                return Task.FromResult(id);
+
+            // Optional: try name-based pattern if not in cache (handles cases where cf_jiraref is missing but name has [KEY])
+            // This is a best-effort fallback using the existing cache keys gathered from names during prefetch.
+            // If absent, return -1 without scanning the server again.
+            foreach (var kvp in _tcIdByJiraRef)
+            {
+                if (string.Equals(kvp.Key, jiraRef, StringComparison.OrdinalIgnoreCase))
+                    return Task.FromResult(kvp.Value);
+            }
+
+            return Task.FromResult(-1);
+        }
+
+        // Prefetch all test-case folders and index by cf_jiraref
+        private async Task LoadAllTestCaseFolderIdsByJiraRefAsync(int projectId, CancellationToken ct)
+        {
+            _tcFolderIdByJiraRef.Clear();
+
+            var tree = await GetTestCaseFolderTreeAsync(projectId, ct).ConfigureAwait(false);
+
+            var ids = new List<int>();
+            void Walk(JArray folders)
+            {
+                foreach (JObject f in folders)
+                {
+                    if (f["id"] != null)
+                        ids.Add((int)f["id"]);
+                    if (f["children"] is JArray sub && sub.Count > 0)
+                        Walk(sub);
+                }
+            }
+
+            if (tree.Count > 0 && tree[0] is JObject root)
+            {
+                var folders = (JArray?)root["folders"] ?? new JArray();
+                Walk(folders);
+            }
+
+            int total = ids.Count == 0 ? 1 : ids.Count;
+            int done = 0;
+
+            foreach (var id in ids)
+            {
+                try
+                {
+                    var res = await GetAsync($"/test-case-folders/{id}", ct).ConfigureAwait(false);
+                    var obj = JObject.Parse(res);
+                    var cufs = (JArray?)obj["custom_fields"];
+                    if (cufs is not null)
+                    {
+                        foreach (JObject cf in cufs)
+                        {
+                            var code = (string?)cf["code"];
+                            var val = cf["value"]?.ToString();
+                            if (string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase) &&
+                                !string.IsNullOrWhiteSpace(val))
+                            {
+                                _tcFolderIdByJiraRef[val] = id;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // ignore inaccessible folders
+                }
+                finally
+                {
+                    done++;
+                    ReportPhaseProgress("Indexing test case folders", done, total);
+                }
+            }
+
+            ReportPhaseProgress("Indexing test case folders", total, total);
+        }
+
+        private Task<int> FindTestCaseFolderIdByJiraRefAsync(string jiraRef, int projectId, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(jiraRef))
+                return Task.FromResult(-1);
+            if (_tcFolderIdByJiraRef.TryGetValue(jiraRef, out var id))
+                return Task.FromResult(id);
+            return Task.FromResult(-1);
+        }
+
+        private async Task LoadAllRequirementIdsByJiraRefAsync(CancellationToken ct)
+        {
+            _reqIdByJiraRef.Clear();
+
+            string nextUrl = "/requirements?size=200&page=0";
+            int totalPages = -1;
+            int currentPage = 0;
+
+            while (!string.IsNullOrWhiteSpace(nextUrl))
+            {
+                var res = await GetAsync(nextUrl, ct).ConfigureAwait(false);
+                var json = JObject.Parse(res);
+
+                var pageObj = (JObject?)json["page"];
+                int size = pageObj?.Value<int?>("size") ?? 20;
+                currentPage = pageObj?.Value<int?>("number") ?? currentPage;
+                totalPages = pageObj?.Value<int?>("totalPages") ?? totalPages;
+
+                var arr = (JArray?)json["_embedded"]?["requirements"] ?? new JArray();
+                int totalItemsThisPage = arr.Count;
+                int doneItemsThisPage = 0;
+
+                foreach (JObject r in arr)
+                {
+                    int id = r.Value<int>("id");
+                    var currentVersion = (JObject?)r["current_version"];
+                    var cufs = (JArray?)currentVersion?["custom_fields"];
+                    if (cufs is not null)
+                    {
+                        foreach (JObject cf in cufs)
+                        {
+                            var code = (string?)cf["code"];
+                            if (!string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            var valueToken = cf["value"];
+                            var value = valueToken?.Type == JTokenType.Array
+                                ? string.Join(",", ((JArray)valueToken!).Select(v => v?.ToString()))
+                                : valueToken?.ToString();
+
+                            if (!string.IsNullOrWhiteSpace(value))
+                                _reqIdByJiraRef[value] = id;
+                        }
+                    }
+
+                    doneItemsThisPage++;
+                    ReportPhaseProgress("Indexing requirements (items)", doneItemsThisPage, totalItemsThisPage);
+                }
+
+                if (totalPages > 0)
+                    ReportPhaseProgress("Indexing requirements (pages)", currentPage + 1, totalPages);
+
+                var nextLink = (string?)json["_links"]?["next"]?["href"];
+                if (!string.IsNullOrWhiteSpace(nextLink))
+                {
+                    nextUrl = nextLink.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                        ? nextLink.Replace(_baseUrl, "", StringComparison.OrdinalIgnoreCase)
+                        : nextLink;
+                }
+                else if (totalPages >= 0 && currentPage + 1 < totalPages)
+                {
+                    nextUrl = $"/requirements?size={size}&page={currentPage + 1}";
+                }
+                else
+                {
+                    nextUrl = null;
+                }
+            }
+
+            if (totalPages > 0)
+                ReportPhaseProgress("Indexing requirements (pages)", totalPages, totalPages);
+        }
+
+        private async Task LoadAllRequirementFolderIdsByJiraRefAsync(int projectId, CancellationToken ct)
+        {
+            _reqFolderIdByJiraRef.Clear();
+
+            var tree = await GetRequirementFolderTreeAsync(projectId, ct).ConfigureAwait(false);
+
+            var ids = new List<int>();
+            void Walk(JArray folders)
+            {
+                foreach (JObject f in folders)
+                {
+                    if (f["id"] != null)
+                        ids.Add((int)f["id"]);
+                    if (f["children"] is JArray sub && sub.Count > 0)
+                        Walk(sub);
+                }
+            }
+
+            if (tree.Count > 0 && tree[0] is JObject root)
+            {
+                var folders = (JArray?)root["folders"] ?? new JArray();
+                Walk(folders);
+            }
+
+            int total = ids.Count == 0 ? 1 : ids.Count;
+            int done = 0;
+
+            foreach (var id in ids)
+            {
+                try
+                {
+                    var res = await GetAsync($"/requirement-folders/{id}", ct).ConfigureAwait(false);
+                    var obj = JObject.Parse(res);
+                    var cufs = (JArray?)obj["custom_fields"];
+                    if (cufs is not null)
+                    {
+                        foreach (JObject cf in cufs)
+                        {
+                            var code = (string?)cf["code"];
+                            var val = cf["value"]?.ToString();
+                            if (string.Equals(code, "cf_jiraref", StringComparison.OrdinalIgnoreCase) &&
+                                !string.IsNullOrWhiteSpace(val))
+                            {
+                                _reqFolderIdByJiraRef[val] = id;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore inaccessible folders
+                }
+                finally
+                {
+                    done++;
+                    ReportPhaseProgress("Indexing requirement folders", done, total);
+                }
+            }
+
+            ReportPhaseProgress("Indexing requirement folders", total, total);
+        }
+
+        // Optimized to use the requirement-folder cache first; no full tree reloads after POST/PATCH
+        private async Task<int> EnsureRequirementFolderAsync(
+            int projectId,
+            string name,
+            int parentId,
+            string parentType,
+            string issueKey,
+            IEnumerable<string> relatedKeys,
+            CancellationToken ct)
+        {
+            if (_reqFolderIdByJiraRef.TryGetValue(issueKey, out var existingId) && existingId > 0)
+            {
+                var patchPayload = new
+                {
+                    _type = "requirement-folder",
+                    name = Chop(name),
+                    description = $"Reference: {issueKey}" + BuildRelatedPlainText(relatedKeys),
+                    parent = new { _type = parentType, id = parentId },
+                    custom_fields = new object[]
+                    {
+                        new { code = "cf_jiraref", value = issueKey },
+                        new { code = "cf_jirarefurl", value = $"<a href='{_jiraBaseUrl}/browse/{issueKey}'>{_jiraBaseUrl}/browse/{issueKey}</a>" }
+                    }
+                };
+                await PatchAsync($"/requirement-folders/{existingId}", patchPayload, ct).ConfigureAwait(false);
+                return existingId;
+            }
+
+            // Fallback: create and update cache using returned id
+            var createPayload = new
+            {
+                _type = "requirement-folder",
+                name = Chop(name),
+                description = $"Reference: {issueKey}" + BuildRelatedPlainText(relatedKeys),
+                parent = new { _type = parentType, id = parentId },
+                custom_fields = new object[]
+                {
+                    new { code = "cf_jiraref", value = issueKey },
+                    new { code = "cf_jirarefurl", value = $"<a href='{_jiraBaseUrl}/browse/{issueKey}'>{_jiraBaseUrl}/browse/{issueKey}</a>" }
+                }
+            };
+
+            var body = await PostAsync("/requirement-folders", createPayload, ct).ConfigureAwait(false);
+
+            try
+            {
+                var obj = JObject.Parse(body);
+                var newId = (int?)obj["id"] ?? 0;
+                if (newId > 0)
+                {
+                    _reqFolderIdByJiraRef[issueKey] = newId;
+                    return newId;
+                }
+            }
+            catch
+            {
+                // If the API doesn't echo the body, you could add a minimal fallback here if needed.
+            }
+
+            return 0;
+        }
+        #endregion
+
+        #region Common
+        static string Chop(string value, int max=255)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            return value.Length <= max
+                ? value
+                : value.Substring(0, max);
+        }
         #endregion
     }
 }

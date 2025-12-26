@@ -2308,11 +2308,11 @@ namespace Monovera
             return path;
         }
 
-        public void UpdateProgressFromService(int done, int total, double percent)
+        public void UpdateProgressFromService(string description, int done, int total, double percent)
         {
             if (InvokeRequired)
             {
-                BeginInvoke(new Action(() => UpdateProgressFromService(done, total, percent)));
+                BeginInvoke(new Action(() => UpdateProgressFromService(description, done, total, percent)));
                 return;
             }
 
@@ -2322,8 +2322,8 @@ namespace Monovera
 
             lblProgress.Visible = true;
             lblProgress.Text = done == 0
-                ? $"Preparing to load... ({total:N0} issue{(total == 1 ? "" : "s")})"
-                : $"Loading {done:N0}/{total:N0} ({percent:0.0}%)";
+                ? $"{description} ({total:N0} issue{(total == 1 ? "" : "s")})"
+                : $"{description} {done:N0}/{total:N0} ({percent:0.0}%)";
         }
 
         /// <summary>
@@ -7344,10 +7344,10 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 return;
             }
 
-            string baseUrl = "";
+            string squashBaseUrl = "";
             string apiToken = "";
             string projectName = "";
-
+            string jiraBaseURL = "";
             try
             {
                 foreach (var rawLine in File.ReadAllLines(confPath))
@@ -7369,13 +7369,16 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                     switch (key)
                     {
                         case "SQUASH_API_URL":
-                            baseUrl = value;
+                            squashBaseUrl = value;
                             break;
                         case "SQUASH_TOKEN":
                             apiToken = value;
                             break;
                         case "SQUASH_PROJECT":
                             projectName = value;
+                            break;
+                        case "SQUASH_JIRA_BASE_URL":
+                            jiraBaseURL = value;
                             break;
                     }
                 }
@@ -7386,18 +7389,19 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(apiToken) || string.IsNullOrWhiteSpace(projectName))
+            if (string.IsNullOrWhiteSpace(squashBaseUrl) || string.IsNullOrWhiteSpace(apiToken) || string.IsNullOrWhiteSpace(projectName) || string.IsNullOrWhiteSpace(jiraBaseURL))
             {
-                MessageBox.Show("Invalid squash.conf. Ensure SQUASH_API_URL, SQUASH_TOKEN, and SQUASH_PROJECT are set.", "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("Invalid squash.conf. Ensure SQUASH_API_URL, SQUASH_TOKEN, SQUASH_PROJECT and SQUASH_JIRA_BASE_URL are set.", "Configuration Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
-            // Inject UI progress callback
+            // Inject handler WITH progress callback to update UI
             var handler = new Monovera.SquashHandler(
-                baseUrl.TrimEnd('/'),
+                squashBaseUrl.TrimEnd('/'),
                 apiToken,
+                jiraBaseURL.TrimEnd('/'),
                 projectName: projectName,
-                progress: (done, total, percent) => UpdateProgressFromService(done, total, percent)
+                progress: (description, done, total, percent) => UpdateProgressFromService(description, done, total, percent)
             );
 
             try
