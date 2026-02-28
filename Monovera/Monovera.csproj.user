@@ -16,6 +16,9 @@
     <Compile Update="frmSearch.cs">
       <SubType>Form</SubType>
     </Compile>
+    <Compile Update="MonoveraChatControl.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Update="Properties\Resources.resx">

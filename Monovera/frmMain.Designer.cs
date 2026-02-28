@@ -46,6 +46,9 @@
             mnuPutMeInContext = new ToolStripMenuItem();
             toolStripSeparator1 = new ToolStripSeparator();
             mnuOllama = new ToolStripMenuItem();
+            toolStripSeparator2 = new ToolStripSeparator();
+            mnuAsk = new ToolStripMenuItem();
+            mnuTrain = new ToolStripMenuItem();
             toolStripStatusLabel2 = new ToolStripStatusLabel();
             mnuSettings = new ToolStripSplitButton();
             mnuUpdateHierarchy = new ToolStripMenuItem();
@@ -179,7 +182,7 @@
             // 
             // mnuAI
             // 
-            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext, toolStripSeparator1, mnuOllama });
+            mnuAI.DropDownItems.AddRange(new ToolStripItem[] { mnuAITestCases, mnuPutMeInContext, toolStripSeparator1, mnuOllama, toolStripSeparator2, mnuAsk, mnuTrain });
             mnuAI.Font = new Font("Microsoft Sans Serif", 9.75F);
             mnuAI.ImageTransparentColor = Color.Magenta;
             mnuAI.Name = "mnuAI";
@@ -211,6 +214,25 @@
             mnuOllama.Size = new Size(291, 22);
             mnuOllama.Text = "Ollama Querying";
             mnuOllama.Click += mnuOllama_Click;
+            // 
+            // toolStripSeparator2
+            // 
+            toolStripSeparator2.Name = "toolStripSeparator2";
+            toolStripSeparator2.Size = new Size(288, 6);
+            // 
+            // mnuAsk
+            // 
+            mnuAsk.Name = "mnuAsk";
+            mnuAsk.Size = new Size(291, 22);
+            mnuAsk.Text = "Ask Me...";
+            mnuAsk.Click += mnuAsk_Click;
+            // 
+            // mnuTrain
+            // 
+            mnuTrain.Name = "mnuTrain";
+            mnuTrain.Size = new Size(291, 22);
+            mnuTrain.Text = "Train Local Model";
+            mnuTrain.Click += mnuTrain_Click;
             // 
             // toolStripStatusLabel2
             // 
@@ -369,5 +391,8 @@
         private ToolStripSeparator toolStripSeparator1;
         private ToolStripMenuItem mnuOllama;
         private ToolStripMenuItem mnuUpdateSquash;
+        private ToolStripSeparator toolStripSeparator2;
+        private ToolStripMenuItem mnuTrain;
+        private ToolStripMenuItem mnuAsk;
     }
 }

@@ -20,7 +20,6 @@ using System.Security.Policy;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Text.RegularExpressions;
 using System.Web;
 using System.Windows.Forms; 
 using System.Xml.Linq;
@@ -431,6 +430,34 @@ namespace Monovera
         }
 
         /// <summary>
+        /// Ensures Robot.png and Wheel.png icons exist in the images folder
+        /// </summary>
+        private void EnsureMonoveraBotIcons()
+        {
+            try
+            {
+                string imagesFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "images");
+                Directory.CreateDirectory(imagesFolder);
+
+                string robotPath = Path.Combine(imagesFolder, "Robot.png");
+                if (!File.Exists(robotPath))
+                {
+                    IconCreator.CreateRobotIcon(robotPath);
+                }
+
+                string wheelPath = Path.Combine(imagesFolder, "Wheel.png");
+                if (!File.Exists(wheelPath))
+                {
+                    IconCreator.CreateWheelIcon(wheelPath);
+                }
+            }
+            catch
+            {
+                // Silently fail if icons can't be created
+            }
+        }
+
+        /// <summary>
         /// Initializes the main form, sets up UI controls, event handlers, and directories.
         /// </summary>
         public frmMain()
@@ -456,6 +483,9 @@ namespace Monovera
             InitializeComponent();
             InitializeNotifyIcon();
 
+            // Create Robot and Wheel icons if they don't exist
+            EnsureMonoveraBotIcons();
+
             StartJiraUpdateQueueWorker();
 
             // Initialize context menu for tree
@@ -476,6 +506,8 @@ namespace Monovera
             mnuAI.Image = GetImageFromImagesFolder("AI.png");
             mnuAITestCases.Image = GetImageFromImagesFolder("AITestCases.png");
             mnuPutMeInContext.Image = GetImageFromImagesFolder("PutMeInContext.png");
+            mnuTrain.Image = GetImageFromImagesFolder("Wheel.png");
+            mnuAsk.Image = GetImageFromImagesFolder("Robot.png");
 
             // Set up tab control for details panel
             tabDetails = new TabControl
@@ -1237,6 +1269,7 @@ namespace Monovera
 
             AddSearchMenu();
             AddGenerateReportMenu();
+            AddCreateFolderStructureMenu();
 
             if (editorMode)
             {
@@ -1326,6 +1359,256 @@ namespace Monovera
             };
 
             treeContextMenu.Items.Add(reportMenuItem);
+        }
+
+        private void AddCreateFolderStructureMenu()
+        {
+            var iconFolder = CreateUnicodeIcon("\ud83d\udcc1"); // 📁
+            var createFsMenuItem = new ToolStripMenuItem("Create Folder Structure on local disk...")
+            {
+                Image = iconFolder
+            };
+            createFsMenuItem.Click += async (s, e) => await CreateLocalFolderStructureAsync();
+            treeContextMenu.Items.Add(createFsMenuItem);
+        }
+
+        private static string NormalizeTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return "";
+            // Remove brackets part like " [KEY]"
+            int idx = title.LastIndexOf('[');
+            string head = idx > 0 ? title.Substring(0, idx).Trim() : title.Trim();
+            // Replace non-alphanumeric with spaces to preserve word boundaries
+            head = Regex.Replace(head, "[^A-Za-z0-9]+", " ");
+            // Collapse multiple spaces and trim
+            head = Regex.Replace(head, @"\s+", " ").Trim();
+            return head;
+        }
+
+        private static string ExtractKeyFromNodeText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return "";
+            var m = Regex.Match(text, @"\[(?<key>[A-Za-z]+-\d+)\]");
+            return m.Success ? m.Groups["key"].Value : "";
+        }
+
+        private static string BuildFsNameFromNodeText(string text)
+        {
+            string key = ExtractKeyFromNodeText(text);
+            string id = string.IsNullOrWhiteSpace(key) ? "" : key.Replace("-", "");
+            string title = NormalizeTitle(text);
+
+            // Convert title to CamelCase from any mixed-case or separators
+            string ToPascalCase(string input)
+            {
+                if (string.IsNullOrWhiteSpace(input))
+                    return string.Empty;
+
+                var words = Regex.Matches(input, @"[A-Za-z0-9]+")
+                                 .Select(m => m.Value);
+
+                var sb = new StringBuilder();
+
+                foreach (var word in words)
+                {
+                    var lower = word.ToLowerInvariant();
+                    sb.Append(char.ToUpperInvariant(lower[0]));
+                    if (lower.Length > 1)
+                        sb.Append(lower.Substring(1));
+                }
+
+                return sb.ToString();
+            }
+
+
+            string camel = ToPascalCase(title);
+            if (string.IsNullOrWhiteSpace(id)) return camel;
+            // Prefix with TSTID_ + numeric part
+            var num = Regex.Match(id, @"\d+").Value;
+            string prefix = string.IsNullOrWhiteSpace(num) ? id : $"TST{num}";
+            return prefix + "_" + camel;
+        }
+
+        private async Task CreateLocalFolderStructureAsync()
+        {
+            var selected = tree.SelectedNode;
+            if (selected == null)
+            {
+                MessageBox.Show("Please select a node first.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Build the path from root to selected, replacing first two levels with C:\\manual\\Release
+            // Build ordered list from root -> selected
+            var chainList = new List<TreeNode>();
+            var cur = selected;
+            while (cur != null)
+            {
+                chainList.Insert(0, cur);
+                cur = cur.Parent;
+            }
+
+            if (chainList.Count == 0)
+                return;
+
+            string baseRoot = @"C:\\manual\\Release";
+            var segments = new List<string>();
+            // skip the first two levels from tree and start at baseRoot
+            int skip = Math.Min(2, chainList.Count);
+            // Exclude the selected node itself to avoid duplication; take ancestors only
+            var ancestors = chainList.Skip(skip).Take(Math.Max(0, chainList.Count - skip - 1)).ToList();
+
+            string parentPath = baseRoot;
+            foreach (var node in ancestors)
+            {
+                string name = BuildFsNameFromNodeText(node.Text);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    segments.Add(name);
+                    parentPath = Path.Combine(parentPath, name);
+                }
+            }
+
+            // Collect all descendants of selected to create structure beneath the computed parentPath
+            var todo = new List<(string path, string type)>();
+
+            void Visit(TreeNode n, string currentPath)
+            {
+                bool hasChildren = n.Nodes != null && n.Nodes.Cast<TreeNode>().Any(child => child.Tag?.ToString() != "DUMMY");
+                string nodeName = BuildFsNameFromNodeText(n.Text);
+                string nodePath = Path.Combine(currentPath, nodeName);
+                if (hasChildren)
+                {
+                    // Folder node
+                    todo.Add((nodePath, "Folder"));
+                    foreach (TreeNode child in n.Nodes)
+                    {
+                        if (child.Tag?.ToString() == "DUMMY") continue;
+                        Visit(child, nodePath);
+                    }
+                }
+                else
+                {
+                    // Leaf -> feature file
+                    string featurePath = nodePath + ".feature";
+                    todo.Add((featurePath, "Feature"));
+                }
+            }
+
+            // Root of creation is the selected node under parentPath
+            string selectedFsName = BuildFsNameFromNodeText(selected.Text);
+            string creationRoot = Path.Combine(parentPath, selectedFsName);
+            todo.Insert(0, (creationRoot, "Folder"));
+            foreach (TreeNode child in selected.Nodes)
+            {
+                if (child.Tag?.ToString() == "DUMMY") continue;
+                Visit(child, creationRoot);
+            }
+
+            // Build confirmation dialog listing paths
+            using var dialog = new Form
+            {
+                Text = "Confirm Create Folder Structure",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                Width = 1020,
+                Height = 480,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                ShowInTaskbar = false,
+                Font = new Font("Segoe UI", 10),
+                BackColor = GetCSSColor_Tree_Background(cssPath),
+                Padding = new Padding(18)
+            };
+
+            var lbl = new Label
+            {
+                Text = "This will create missing folders and files in the child section of the selected hierarchy.\r\nAre you sure you want to continue?",
+                Dock = DockStyle.Top,
+                Height = 48,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+            };
+
+            var list = new System.Windows.Forms.ListView
+            {
+                View = View.Details,
+                Dock = DockStyle.Fill,
+                FullRowSelect = true,
+                BackColor = GetCSSColor_DataGrid_Background(cssPath),
+                ForeColor = GetCSSColor_DataGrid_Foreground(cssPath)
+            };
+            list.Columns.Add("Type", 100);
+            list.Columns.Add("Path", 1000);
+
+            foreach (var item in todo)
+            {
+                var lvi = new ListViewItem(new[] { item.type, item.path });
+                list.Items.Add(lvi);
+            }
+
+            var buttons = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.RightToLeft,
+                Dock = DockStyle.Bottom,
+                Height = 56,
+                Padding = new Padding(0, 8, 0, 0)
+            };
+            var btnYes = CreateDialogButton("Yes", DialogResult.OK, true);
+            var btnNo = CreateDialogButton("No", DialogResult.Cancel);
+            buttons.Controls.Add(btnYes);
+            buttons.Controls.Add(btnNo);
+
+            dialog.Controls.Add(list);
+            dialog.Controls.Add(lbl);
+            dialog.Controls.Add(buttons);
+            dialog.AcceptButton = btnYes;
+            dialog.CancelButton = btnNo;
+
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+            // Create missing paths
+            string lastFolder = creationRoot;
+            try
+            {
+                foreach (var item in todo)
+                {
+                    if (item.type == "Folder")
+                    {
+                        if (!Directory.Exists(item.path))
+                        {
+                            Directory.CreateDirectory(item.path);
+                        }
+                        lastFolder = item.path;
+                    }
+                    else // Feature
+                    {
+                        if (!File.Exists(item.path))
+                        {
+                            // Create a basic feature file
+                            var name = Path.GetFileNameWithoutExtension(item.path);
+                            var sb = new StringBuilder();
+                            sb.AppendLine($"Feature: {name}");
+                            sb.AppendLine();
+                            sb.AppendLine("  Scenario: TBD");
+                            sb.AppendLine("    Given TBD");
+                            File.WriteAllText(item.path, sb.ToString(), Encoding.UTF8);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Create Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Open last folder
+            try
+            {
+                Process.Start(new ProcessStartInfo(lastFolder) { UseShellExecute = true });
+            }
+            catch { }
         }
 
         private void AddEditMenu()
@@ -2915,7 +3198,7 @@ namespace Monovera
             // Start the self-hosted web server
             try
             {
-                webHost = new WebSelfHost(8090);
+                webHost = new WebSelfHost(8088);
                 await webHost.StartAsync();
 
                 //System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -7327,6 +7610,112 @@ document.getElementById('excludeFormattingCheck').addEventListener('change', fun
             frmTalkToAIInstance.InitializeOllamaRagUI(DatabasePath, "http://localhost:11434");
             frmTalkToAIInstance.Show(this);
             frmTalkToAIInstance.BringToFront();
+        }
+
+        private async void mnuTrain_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                // Show confirmation dialog
+                var result = MessageBox.Show(
+                    "This will train the MonoveraBot by reading all issues from the database and building a knowledge index.\n\n" +
+                    "This may take a few minutes depending on the database size.\n\n" +
+                    "Do you want to continue?",
+                    "Train MonoveraBot",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (result != DialogResult.Yes)
+                    return;
+
+                // Show progress
+                lblProgress.Text = "Training MonoveraBot...";
+                lblProgress.Visible = true;
+                pbProgress.Visible = true;
+                pbProgress.Style = ProgressBarStyle.Marquee;
+
+                var bot = new MonoveraBot(DatabasePath);
+                var progress = new Progress<string>(msg => 
+                {
+                    if (InvokeRequired)
+                        Invoke(new Action(() => lblProgress.Text = msg));
+                    else
+                        lblProgress.Text = msg;
+                });
+
+                await bot.TrainAsync(progress);
+
+                // Hide progress
+                lblProgress.Visible = false;
+                pbProgress.Visible = false;
+
+                MessageBox.Show("Training completed successfully!\n\nYou can now ask questions using 'AI Assistant > Ask Me...'", 
+                    "Training Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                lblProgress.Visible = false;
+                pbProgress.Visible = false;
+                MessageBox.Show($"Training failed: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void mnuAsk_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                // Check if tab already exists
+                const string mbotKey = "MBOT";
+
+                if (tabDetails != null)
+                {
+                    // Look for existing MBot tab
+                    foreach (TabPage tab in tabDetails.TabPages)
+                    {
+                        if (tab.Name == mbotKey)
+                        {
+                            tabDetails.SelectedTab = tab;
+                            return;
+                        }
+                    }
+
+                    // Create new Monovera Bot tab
+                    var mbotTab = new TabPage
+                    {
+                        Text = "Monovera Bot",
+                        Name = mbotKey,
+                        ToolTipText = "Monovera Bot - AI Assistant"
+                    };
+
+                    // Try to set robot icon
+                    var robotIcon = GetImageFromImagesFolder("Robot.png");
+                    if (robotIcon != null)
+                    {
+                        mbotTab.ImageIndex = tabDetails.ImageList?.Images.Count ?? -1;
+                        if (tabDetails.ImageList == null)
+                        {
+                            tabDetails.ImageList = new ImageList();
+                        }
+                        tabDetails.ImageList.Images.Add("robot", robotIcon);
+                        mbotTab.ImageKey = "robot";
+                    }
+
+                    // Create and add the chat control
+                    var chatControl = new MonoveraChatControl(DatabasePath)
+                    {
+                        Dock = DockStyle.Fill
+                    };
+                    mbotTab.Controls.Add(chatControl);
+
+                    // Add tab and select it
+                    tabDetails.TabPages.Add(mbotTab);
+                    tabDetails.SelectedTab = mbotTab;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to open MBot: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void mnuUpdateSquash_Click(object sender, EventArgs e)
