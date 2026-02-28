@@ -1,0 +1,14 @@
+# Squash TM Configuration Template
+# Copy this file to squash.conf and fill in your credentials
+
+# Squash TM API URL (base URL without trailing slash)
+SQUASH_API_URL=https://your-squash-instance.com/squash
+
+# Squash TM API Token (generate from Squash TM → Account → API Tokens)
+SQUASH_TOKEN=your-api-token-here
+
+# Squash TM Project Name
+SQUASH_PROJECT=Monovera
+
+# Jira Base URL (used for linking requirements)
+SQUASH_JIRA_BASE_URL=https://YOUR_JIRA_DOMAIN.atlassian.net

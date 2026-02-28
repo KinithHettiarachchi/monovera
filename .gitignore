@@ -1,0 +1,129 @@
+# Monovera - Git Ignore File
+# This prevents sensitive files from being committed to Git
+
+# ===========================
+# 🔒 CREDENTIALS (DO NOT COMMIT!)
+# ===========================
+configuration.json
+squash.conf
+credentials.json
+*.key
+*.token
+appsettings.*.json
+secrets.json
+
+# ===========================
+# 💾 DATA & DATABASES
+# ===========================
+Data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+monovera.sqlite
+monovera_*.db
+
+# MonoveraBot knowledge base files
+monovera_knowledge.idx
+monovera_model.dat
+monovera_vectors.db
+
+# ===========================
+# 📁 TEMPORARY FILES
+# ===========================
+temp/
+attachments/
+*.tmp
+*.temp
+*.cache
+
+# ===========================
+# 🏗️ BUILD OUTPUT
+# ===========================
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ===========================
+# 📦 NUGET PACKAGES
+# ===========================
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# ===========================
+# 🔧 RIDER (JetBrains)
+# ===========================
+.idea/
+*.sln.iml
+_ReSharper.Caches/
+
+# ===========================
+# 📝 USER-SPECIFIC FILES
+# ===========================
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ===========================
+# 🌐 WEB ASSETS
+# ===========================
+node_modules/
+wwwroot/lib/
+
+# ===========================
+# 📊 LOGS & REPORTS
+# ===========================
+*.log
+logs/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# ===========================
+# 🧪 TEST RESULTS
+# ===========================
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# ===========================
+# 📄 DOCUMENTATION (OPTIONAL)
+# ===========================
+# Uncomment if you want to ignore auto-generated docs
+# *.html
+# *.pdf
+
+# ===========================
+# 🔒 SECURITY AUDIT
+# ===========================
+# Keep this to track what should NEVER be committed:
+# - configuration.json (Jira credentials)
+# - squash.conf (Squash TM credentials)
+# - Any *.sqlite files (local data)
+# - Data/ folder (attachments, local storage)

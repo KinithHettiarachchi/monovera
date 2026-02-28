@@ -1,0 +1,26 @@
+{
+  "Jira": {
+    "Url": "https://YOUR_JIRA_DOMAIN.atlassian.net",
+    "Email": "YOUR_EMAIL@example.com",
+    "Token": "YOUR_JIRA_API_TOKEN_HERE",
+    "OfflineMode": true
+  },
+  "Projects": [
+    {
+      "Project": "PROJECT1",
+      "Root": "PRJ1-100",
+      "LinkTypeName": "Blocks",
+      "SortingField": "",
+      "Types": {
+        "Project": "type_project.png",
+        "Rule": "type_rule.png",
+        "User Story": "type_userreq.png"
+      },
+      "Status": {
+        "Draft": "status_draft.png",
+        "Published": "status_published.png",
+        "Rejected": "status_rejected.png"
+      }
+    }
+  ]
+}
