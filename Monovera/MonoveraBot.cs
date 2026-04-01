@@ -366,6 +366,45 @@ namespace Monovera
             progress?.Report("Clearing old embeddings from database...");
             _vectorStore.Clear();
 
+            int total = knowledge.Count;
+
+            // Use parallel processing for large datasets (>5000 issues)
+            if (total > 5000)
+            {
+                progress?.Report($"Large dataset detected ({total:N0} issues) - using parallel processing...");
+
+                // Estimate training time
+                progress?.Report("Estimating training time...");
+                var estimatedTime = await ParallelEmbeddingHelper.EstimateTrainingTimeAsync(
+                    _llmProvider,
+                    total,
+                    maxConcurrency: 5);
+                progress?.Report($"Estimated training time: {estimatedTime:hh\\:mm\\:ss} (with 5 parallel requests)");
+
+                // Generate embeddings in parallel
+                await ParallelEmbeddingHelper.GenerateEmbeddingsParallelAsync(
+                    knowledge,
+                    _llmProvider,
+                    _vectorStore,
+                    maxConcurrency: 5,
+                    progress: progress,
+                    cancellationToken: cancellationToken);
+            }
+            else
+            {
+                // Sequential processing for small datasets
+                progress?.Report($"Processing {total} issues sequentially...");
+                await GenerateEmbeddingsSequentialAsync(knowledge, progress, cancellationToken);
+            }
+
+            progress?.Report($"✅ All embeddings generated! No content was truncated - full text preserved.");
+        }
+
+        private async Task GenerateEmbeddingsSequentialAsync(
+            Dictionary<string, IssueKnowledge> knowledge,
+            IProgress<string>? progress,
+            CancellationToken cancellationToken)
+        {
             int processed = 0;
             int total = knowledge.Count;
 
@@ -382,25 +421,40 @@ namespace Monovera
                         textForEmbedding = issue.Key;
 
                     // Use chunked embeddings for long texts (preserves ALL content!)
+                    // Lowered threshold from 7000 to 4000 to avoid token limit errors
                     float[] embedding;
 
-                    if (textForEmbedding.Length > 7000)
+                    if (textForEmbedding.Length > 4000)
                     {
                         // Long text: Split into chunks, embed each, then average
                         // This preserves semantic meaning of the ENTIRE document!
                         embedding = await ChunkedEmbeddingHelper.GetChunkedEmbeddingAsync(
                             textForEmbedding,
                             _llmProvider,
-                            chunkSize: 7000,
+                            chunkSize: 4000,
                             overlapSize: 500,
                             cancellationToken);
 
-                        progress?.Report($"  └─ Generated chunked embedding for {issue.Key} ({textForEmbedding.Length} chars, {ChunkedEmbeddingHelper.ChunkText(textForEmbedding, 7000, 500).Count} chunks)");
+                        progress?.Report($"  └─ Generated chunked embedding for {issue.Key} ({textForEmbedding.Length} chars, {ChunkedEmbeddingHelper.ChunkText(textForEmbedding, 4000, 500).Count} chunks)");
                     }
                     else
                     {
-                        // Short text: Single embedding
-                        embedding = await _llmProvider.GetEmbeddingAsync(textForEmbedding, cancellationToken);
+                        try
+                        {
+                            // Short text: Single embedding
+                            embedding = await _llmProvider.GetEmbeddingAsync(textForEmbedding, cancellationToken);
+                        }
+                        catch (Exception ex) when (ex.Message.Contains("too long", StringComparison.OrdinalIgnoreCase))
+                        {
+                            // Fallback: If even "short" text is too long, use chunking
+                            progress?.Report($"  ⚠️ Text length issue for {issue.Key}, using chunking fallback...");
+                            embedding = await ChunkedEmbeddingHelper.GetChunkedEmbeddingAsync(
+                                textForEmbedding,
+                                _llmProvider,
+                                chunkSize: 3000,
+                                overlapSize: 500,
+                                cancellationToken);
+                        }
                     }
 
                     issue.Embedding = embedding;
@@ -415,9 +469,9 @@ namespace Monovera
                     });
 
                     processed++;
-                    if (processed % 5 == 0 || processed == total)
+                    if (processed % 50 == 0 || processed == total)
                     {
-                        progress?.Report($"Generated embeddings for {processed}/{total} issues...");
+                        progress?.Report($"Generated embeddings for {processed}/{total} issues ({processed * 100.0 / total:F1}%)");
                     }
                 }
                 catch (Exception ex)
@@ -426,8 +480,6 @@ namespace Monovera
                     // Continue with other issues
                 }
             }
-
-            progress?.Report($"✅ All embeddings generated! No content was truncated - full text preserved.");
         }
 
         // Remove the TruncateForEmbedding method - no longer needed!

@@ -460,6 +460,89 @@ namespace Monovera
                             }
                         });
 
+                        // AI Chat: Get bot status and training info
+                        endpoints.MapGet("/api/ai/status", async context =>
+                        {
+                            try
+                            {
+                                var dbPath = frmMain.DatabasePath;
+                                var modelDir = Path.GetDirectoryName(dbPath) ?? Environment.CurrentDirectory;
+                                var knowledgeIndexPath = Path.Combine(modelDir, "monovera_knowledge.idx");
+                                bool isTrained = System.IO.File.Exists(knowledgeIndexPath);
+
+                                var payload = new
+                                {
+                                    trained = isTrained,
+                                    databasePath = dbPath
+                                };
+
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // AI Chat: Ask a question
+                        endpoints.MapPost("/api/ai/ask", async context =>
+                        {
+                            try
+                            {
+                                using var reader = new StreamReader(context.Request.Body);
+                                var body = await reader.ReadToEndAsync();
+                                var request = JsonSerializer.Deserialize<JsonElement>(body);
+
+                                if (!request.TryGetProperty("question", out var questionProp))
+                                {
+                                    context.Response.StatusCode = 400;
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Missing question" }));
+                                    return;
+                                }
+
+                                string question = questionProp.GetString() ?? "";
+                                if (string.IsNullOrWhiteSpace(question))
+                                {
+                                    context.Response.StatusCode = 400;
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Question cannot be empty" }));
+                                    return;
+                                }
+
+                                // Create MonoveraBot instance
+                                using var bot = new MonoveraBot(frmMain.DatabasePath);
+
+                                if (!bot.IsTrained)
+                                {
+                                    var trainResponse = new { answer = "MonoveraBot is not trained yet. Please train it first from the desktop app (AI Assistant > Train Local Model) or wait for automatic training to complete." };
+                                    context.Response.ContentType = "application/json; charset=utf-8";
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(trainResponse));
+                                    return;
+                                }
+
+                                // Generate answer
+                                string answer = await bot.AskAsync(question);
+
+                                var successResponse = new { answer };
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(successResponse));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = $"Error: {ex.Message}" }));
+                            }
+                        });
+
+                        // AI Chat: HTML page
+                        endpoints.MapGet("/api/ai/chat", async context =>
+                        {
+                            var html = BuildAIChatHtml();
+                            context.Response.ContentType = "text/html; charset=utf-8";
+                            await context.Response.WriteAsync(html);
+                        });
+
                         // Search options for the dialog (projects/types/status)
                         endpoints.MapGet("/api/search/options", async context =>
                         {
@@ -1295,6 +1378,278 @@ document.querySelectorAll('a.recent-link[data-key]').forEach(link => {
             return sb.ToString();
         }
 
+        /// <summary>
+        /// Builds the HTML page for the AI Chat interface
+        /// </summary>
+        private static string BuildAIChatHtml()
+        {
+            var sb = new StringBuilder();
+            sb.Append($@"
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <title>Ask Me - Monovera AI Chat</title>
+  <link href='https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap' rel='stylesheet' />
+  <style>
+    * {{
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }}
+    body {{
+      font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }}
+    #chat-container {{
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      background: #fff;
+    }}
+    .message {{
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      border-radius: 8px;
+      max-width: 85%;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }}
+    .message-user {{
+      background: #e3f2fd;
+      color: #0d47a1;
+      margin-left: auto;
+      text-align: right;
+    }}
+    .message-bot {{
+      background: #f5f5f5;
+      color: #333;
+      border-left: 4px solid #1565c0;
+    }}
+    .message-error {{
+      background: #ffebee;
+      color: #c62828;
+      border-left: 4px solid #d32f2f;
+    }}
+    .message-label {{
+      font-weight: 600;
+      margin-bottom: 4px;
+      font-size: 0.85em;
+      opacity: 0.7;
+    }}
+    #input-container {{
+      display: flex;
+      gap: 10px;
+      padding: 16px;
+      background: #fafafa;
+      border-top: 1px solid #e0e0e0;
+    }}
+    #input-box {{
+      flex: 1;
+      padding: 12px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+      font-size: 14px;
+      resize: none;
+      min-height: 60px;
+      max-height: 120px;
+    }}
+    #send-btn {{
+      padding: 12px 24px;
+      background: #1565c0;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      font-size: 14px;
+    }}
+    #send-btn:hover:not(:disabled) {{
+      background: #0d47a1;
+    }}
+    #send-btn:disabled {{
+      background: #ccc;
+      cursor: not-allowed;
+    }}
+    .loading {{
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid #1565c0;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin-right: 8px;
+    }}
+    @keyframes spin {{
+      to {{ transform: rotate(360deg); }}
+    }}
+    .welcome-message {{
+      background: #e8f5e9;
+      border-left: 4px solid #4caf50;
+      padding: 16px;
+      margin-bottom: 16px;
+      border-radius: 6px;
+    }}
+    .welcome-message h3 {{
+      margin-bottom: 8px;
+      color: #2e7d32;
+    }}
+    .welcome-message ul {{
+      margin-left: 20px;
+      margin-top: 8px;
+    }}
+    .welcome-message li {{
+      margin: 4px 0;
+      color: #555;
+    }}
+  </style>
+</head>
+<body>
+  <div id='chat-container'></div>
+  <div id='input-container'>
+    <textarea id='input-box' placeholder='Ask me about your test cases, requirements, or projects...'></textarea>
+    <button id='send-btn'>Send</button>
+  </div>
+
+  <script>
+    const chatContainer = document.getElementById('chat-container');
+    const inputBox = document.getElementById('input-box');
+    const sendBtn = document.getElementById('send-btn');
+
+    // Check bot status and show welcome
+    async function init() {{
+      try {{
+        const response = await fetch('/api/ai/status');
+        const data = await response.json();
+
+        if (data.trained) {{
+          addBotMessage(`Hello! I'm Monovera Bot, your AI assistant. I can help you with:
+
+• Finding test cases and requirements
+• Explaining relationships between items
+• Checking status and progress
+• Understanding project structure (TST, REQ, STF)
+
+Try asking me questions like:
+- ""What test cases are related to login?""
+- ""Show me all requirements for authentication""
+- ""What is the status of payment testing?""
+- ""How many test cases are in progress?""
+
+What would you like to know?`, 'welcome');
+        }} else {{
+          addBotMessage('Hello! I\'m Monovera Bot. I need to be trained first to learn about your projects.\n\nPlease train me from the desktop app:\nAI Assistant > Train Local Model\n\nThis will read your database and build my knowledge base so I can answer your questions.', 'error');
+          inputBox.disabled = true;
+          sendBtn.disabled = true;
+        }}
+      }} catch (err) {{
+        addBotMessage('Error: Could not connect to Monovera Bot. ' + err.message, 'error');
+        inputBox.disabled = true;
+        sendBtn.disabled = true;
+      }}
+    }}
+
+    function addMessage(sender, text, className = '') {{
+      const messageDiv = document.createElement('div');
+      messageDiv.className = 'message ' + (className || (sender === 'You' ? 'message-user' : 'message-bot'));
+
+      const label = document.createElement('div');
+      label.className = 'message-label';
+      label.textContent = sender;
+
+      const content = document.createElement('div');
+      content.textContent = text;
+
+      messageDiv.appendChild(label);
+      messageDiv.appendChild(content);
+      chatContainer.appendChild(messageDiv);
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+
+      return messageDiv;
+    }}
+
+    function addUserMessage(text) {{
+      addMessage('You', text);
+    }}
+
+    function addBotMessage(text, type = 'bot') {{
+      if (type === 'welcome') {{
+        const div = document.createElement('div');
+        div.className = 'welcome-message';
+        div.innerHTML = '<h3>🤖 Monovera Bot</h3><div>' + text.replace(/\n/g, '<br>') + '</div>';
+        chatContainer.appendChild(div);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        return div;
+      }}
+      return addMessage('Monovera Bot', text, type === 'error' ? 'message-error' : 'message-bot');
+    }}
+
+    function addLoadingMessage() {{
+      const div = addMessage('Monovera Bot', '', 'message-bot');
+      div.querySelector('div:last-child').innerHTML = '<span class=""loading""></span>Thinking...';
+      return div;
+    }}
+
+    async function sendMessage() {{
+      const question = inputBox.value.trim();
+      if (!question) return;
+
+      addUserMessage(question);
+      inputBox.value = '';
+      inputBox.disabled = true;
+      sendBtn.disabled = true;
+
+      const loadingDiv = addLoadingMessage();
+
+      try {{
+        const response = await fetch('/api/ai/ask', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ question }})
+        }});
+
+        const data = await response.json();
+
+        chatContainer.removeChild(loadingDiv);
+
+        if (data.error) {{
+          addBotMessage(data.error, 'error');
+        }} else {{
+          addBotMessage(data.answer);
+        }}
+      }} catch (err) {{
+        chatContainer.removeChild(loadingDiv);
+        addBotMessage('Error: ' + err.message, 'error');
+      }} finally {{
+        inputBox.disabled = false;
+        sendBtn.disabled = false;
+        inputBox.focus();
+      }}
+    }}
+
+    sendBtn.addEventListener('click', sendMessage);
+    inputBox.addEventListener('keydown', (e) => {{
+      if (e.key === 'Enter' && !e.shiftKey) {{
+        e.preventDefault();
+        sendMessage();
+      }}
+    }});
+
+    init();
+  </script>
+</body>
+</html>");
+
+            return sb.ToString();
+        }
+
         private static string TryFormatDbTime(string raw)
         {
             if (string.IsNullOrWhiteSpace(raw)) return "";
@@ -1724,6 +2079,7 @@ body {{ overflow: hidden; }}
           <ul>
             <li data-action='search' role='menuitem' title='Ctrl+Q'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
             <li data-action='report' role='menuitem' title='Ctrl+P'>📄 Generate report… <span class='mv-search-hint'>(Ctrl+P)</span></li>
+            <li data-action='ask-ai' role='menuitem' title='Ctrl+M'>🤖 Ask Me… <span class='mv-search-hint'>(Ctrl+M)</span></li>
           </ul>
         </div>
       </aside>
@@ -2089,6 +2445,44 @@ body {{ overflow: hidden; }}
     if (activateTab) activate(key);
   }
 
+  // AI Chat Tab (robot icon, no brackets)
+  async function openAIChatTab({ activateTab = true } = {}) {
+    const key = 'AI-CHAT';
+    const tabId = makeTabId(key);
+    const viewId = makeViewId(key);
+    if (!document.getElementById(tabId)) {
+      const tab = document.createElement('div');
+      tab.className='mv-tab'; tab.id=tabId; tab.dataset.key=key; tab.title='Ask Me - AI Chat';
+      // robot icon
+      const robot = document.createElement('span'); robot.textContent='🤖'; tab.appendChild(robot);
+      const keySpan = document.createElement('span'); keySpan.className='mv-tab-label'; keySpan.textContent='Ask Me';
+      tab.appendChild(keySpan);
+
+      const close = document.createElement('span');
+      close.className='mv-tab-close'; close.textContent='×'; close.title='Close'; close.setAttribute('aria-label','Close');
+      close.addEventListener('click', (e) => { e.stopPropagation(); closeTabByKey(key); });
+
+      tab.addEventListener('click', () => { activate(key); });
+      tab.appendChild(close);
+      tabsEl.appendChild(tab);
+
+      const view = document.createElement('div'); view.className='mv-view'; view.id=viewId;
+      const iframe = document.createElement('iframe'); iframe.setAttribute('title', 'AI Chat'); view.appendChild(iframe);
+      viewsEl.appendChild(view);
+
+      try {
+        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading AI Chat...</div></body></html>`;
+        const html = await (await fetch('/api/ai/chat')).text();
+        iframe.srcdoc = html;
+      } catch {
+        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load AI Chat</div></body></html>`;
+      }
+
+      ensureTabVisible(tab);
+    }
+    if (activateTab) activate(key);
+  }
+
   // Message bridge
   window.addEventListener('message', (ev) => {
     try {
@@ -2126,6 +2520,7 @@ body {{ overflow: hidden; }}
     hideTreeMenu();
     if (action === 'search') openSearchDialog();
     if (action === 'report') generateReport();
+    if (action === 'ask-ai') openAIChatTab();
   });
 
   // Tab context menu
@@ -2384,14 +2779,25 @@ body {{ overflow: hidden; }}
         e.preventDefault(); generateReport();
       }
     }
-    if (e.key === 'Escape') {{ hideTreeMenu(); hideTabMenu(); }}
+    if (e.ctrlKey && (e.key === 'm' || e.key === 'M')) {
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && !(e.target?.isContentEditable)) {
+        e.preventDefault(); openAIChatTab();
+      }
+    }
+    if (e.key === 'Escape') {
+      hideTreeMenu(); 
+      hideTabMenu(); 
+      if (searchOverlay.style.display !== 'none') {
+        hideSearchDialog();
+      }
+    }
   });
 
   await loadRoots();
   await expandRootLevelOnce();
   await openRecentUpdatesTab({ days: 14, activateTab: true });
   updateTabScrollButtons();
-})(); ";
+})();";
 
             Directory.CreateDirectory(WebAppRoot);
             await System.IO.File.WriteAllTextAsync(Path.Combine(WebAppRoot, "index.html"), indexHtml, Encoding.UTF8);
