@@ -143,7 +143,9 @@ namespace Monovera
                                 connectedUser = frmMain.jiraUserName,
                                 offline = frmMain.OFFLINE_MODE,
                                 projects = frmMain.projectList,
-                                lastDbUpdated = GetMaxUpdatedTimeFromDbWeb()
+                                lastDbUpdated = GetMaxUpdatedTimeFromDbWeb(),
+                                syncStatus = frmMain.syncStatusCode,
+                                pendingUpdates = frmMain.pendingUpdateCount
                             };
                             context.Response.ContentType = "application/json; charset=utf-8";
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
@@ -584,12 +586,477 @@ namespace Monovera
                             var html = await BuildSearchResultsHtml(jql);
                             await context.Response.WriteAsync(html);
                         });
-                    });
-                })
-                .Build();
 
-            await webHost.StartAsync();
-        }
+                        // ── Configuration API ─────────────────────────────────────────────────
+                        endpoints.MapGet("/api/config", async context =>
+                        {
+                            try
+                            {
+                                var cfgPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.json");
+                                if (!System.IO.File.Exists(cfgPath))
+                                {
+                                    context.Response.ContentType = "application/json; charset=utf-8";
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new
+                                    {
+                                        jira = new { url = "", email = "", token = "", offlineMode = false },
+                                        projects = new object[0]
+                                    }));
+                                    return;
+                                }
+                                var raw = await System.IO.File.ReadAllTextAsync(cfgPath, Encoding.UTF8);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(raw);
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        endpoints.MapPost("/api/config", async context =>
+                        {
+                            try
+                            {
+                                using var sr = new StreamReader(context.Request.Body, Encoding.UTF8);
+                                var body = await sr.ReadToEndAsync();
+                                // Validate JSON
+                                using var doc = JsonDocument.Parse(body);
+                                var cfgPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "configuration.json");
+                                // Pretty-print before writing
+                                var pretty = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+                                await System.IO.File.WriteAllTextAsync(cfgPath, pretty, Encoding.UTF8);
+                                // Reload in-memory values (best-effort, full config reload requires restart)
+                                try
+                                {
+                                    var reloaded = JsonDocument.Parse(pretty).RootElement;
+                                    if (reloaded.TryGetProperty("Jira", out var jiraEl))
+                                    {
+                                        if (jiraEl.TryGetProperty("Url", out var urlEl))
+                                            frmMain.jiraBaseUrl = urlEl.GetString() ?? frmMain.jiraBaseUrl;
+                                        if (jiraEl.TryGetProperty("OfflineMode", out var omEl))
+                                            frmMain.OFFLINE_MODE = omEl.GetBoolean();
+                                    }
+                                }
+                                catch { /* reload is best-effort */ }
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { ok = true }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Hierarchy Update API ──────────────────────────────────────────────
+                        endpoints.MapPost("/api/hierarchy/update", async context =>
+                        {
+                            try
+                            {
+                                using var sr = new StreamReader(context.Request.Body, Encoding.UTF8);
+                                var body = await sr.ReadToEndAsync();
+                                using var doc = JsonDocument.Parse(body);
+                                var root = doc.RootElement;
+                                string updateType = root.TryGetProperty("updateType", out var ut) ? (ut.GetString() ?? "Difference") : "Difference";
+                                string project = root.TryGetProperty("project", out var proj) ? (proj.GetString() ?? "All") : "All";
+
+                                // Run on STA thread (LoadAllProjectsToTreeAsync requires UI thread access)
+                                var tcs = new System.Threading.Tasks.TaskCompletionSource<string>();
+                                var th = new System.Threading.Thread(() =>
+                                {
+                                    try
+                                    {
+                                        var main = System.Windows.Forms.Application.OpenForms.OfType<frmMain>().FirstOrDefault();
+                                        if (main == null) { tcs.TrySetResult("no_form"); return; }
+                                        main.Invoke(async () =>
+                                        {
+                                            try
+                                            {
+                                                string selectedProject = project == "All" ? null : project;
+                                                await main.LoadAllProjectsToTreeAsync(true, updateType, selectedProject);
+                                                tcs.TrySetResult("ok");
+                                            }
+                                            catch (Exception ex2) { tcs.TrySetException(ex2); }
+                                        });
+                                    }
+                                    catch (Exception ex) { tcs.TrySetException(ex); }
+                                });
+                                th.IsBackground = true;
+                                th.SetApartmentState(System.Threading.ApartmentState.STA);
+                                th.Start();
+
+                                var result = await tcs.Task;
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { ok = true, result }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Hierarchy Progress (polling) ──────────────────────────────────
+                        endpoints.MapGet("/api/hierarchy/progress", async context =>
+                        {
+                            var payload = new
+                            {
+                                inProgress = frmMain.updateInProgress,
+                                project    = frmMain.updateProgressProject,
+                                completed  = frmMain.updateProgressCompleted,
+                                total      = frmMain.updateProgressTotal,
+                                percent    = Math.Round(frmMain.updateProgressPercent, 1)
+                            };
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
+                        });
+
+                        // ── AI Train API ──────────────────────────────────────────────────────
+                        endpoints.MapPost("/api/ai/train", async context =>
+                        {
+                            try
+                            {
+                                var bot = new MonoveraBot(frmMain.DatabasePath);
+                                var messages = new System.Collections.Concurrent.ConcurrentQueue<string>();
+                                var progress = new Progress<string>(msg => messages.Enqueue(msg));
+                                await bot.TrainAsync(progress);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { ok = true }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Projects list (for hierarchy update dropdown) ──────────────────────
+                        endpoints.MapGet("/api/projects", async context =>
+                        {
+                            var list = frmMain.config?.Projects?.Select(p => p.Project).Where(p => !string.IsNullOrWhiteSpace(p)).ToList()
+                                       ?? new List<string>();
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(list));
+                        });
+
+                        // ── Last DB updated time ──────────────────────────────────────────────
+                        endpoints.MapGet("/api/db/updated", async context =>
+                        {
+                            var t = GetMaxUpdatedTimeFromDbWeb();
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new { updated = t }));
+                        });
+
+                        // ── Editor mode flag ──────────────────────────────────────────────────
+                        endpoints.MapGet("/api/editor/mode", async context =>
+                        {
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            var projects = frmMain.config?.Projects?.Select(p => new
+                            {
+                                projectKey  = p.Root?.Split('-')[0] ?? p.Project,
+                                projectName = p.Project,
+                                canCreate   = p.HasCreatePermission,
+                                canEdit     = p.HasEditPermission,
+                                issueTypes  = p.Types?.Keys.ToList() ?? new List<string>()
+                            }).ToList();
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new { editorMode = true, projects }));
+                        });
+
+                        // ── All issue keys + summaries for autocomplete ───────────────────────
+                        endpoints.MapGet("/api/issue/keys", async context =>
+                        {
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            var dict = frmMain.FlatJiraIssueDictionary.Select(kvp => new { key = kvp.Key, summary = kvp.Value.Summary ?? "" }).ToList();
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(dict));
+                        });
+
+                        // ── Add child / sibling issue ─────────────────────────────────────────
+                        endpoints.MapPost("/api/issue/create", async context =>
+                        {
+                            try
+                            {
+                                var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                string baseKey = body.GetProperty("baseKey").GetString() ?? "";
+                                string mode = body.GetProperty("mode").GetString() ?? "Child";
+                                string issueType = body.GetProperty("issueType").GetString() ?? "";
+                                string summary = body.GetProperty("summary").GetString() ?? "";
+
+                                string selectedKey = mode == "Sibling"
+                                    ? (frmMain.FlatJiraIssueDictionary.TryGetValue(baseKey, out var bi) ? bi.ParentKey ?? baseKey : baseKey)
+                                    : baseKey;
+
+                                string? newKey = await frmMain.jiraService.CreateAndLinkJiraIssueAsync(selectedKey, mode, issueType, summary, frmMain.config);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { success = true, newKey }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Link related issues ───────────────────────────────────────────────
+                        endpoints.MapPost("/api/issue/link-related", async context =>
+                        {
+                            try
+                            {
+                                var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                string baseKey = body.GetProperty("baseKey").GetString() ?? "";
+                                var keys = body.GetProperty("keys").EnumerateArray().Select(e => e.GetString() ?? "").Where(k => !string.IsNullOrWhiteSpace(k)).ToList();
+                                await frmMain.jiraService.LinkRelatedIssuesAsync(baseKey, keys);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { success = true }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Change parent ─────────────────────────────────────────────────────
+                        endpoints.MapPost("/api/issue/change-parent", async context =>
+                        {
+                            try
+                            {
+                                var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                string childKey = body.GetProperty("childKey").GetString() ?? "";
+                                string oldParentKey = body.TryGetProperty("oldParentKey", out var op) ? op.GetString() ?? "" : "";
+                                string newParentKey = body.GetProperty("newParentKey").GetString() ?? "";
+                                var dashIndex = childKey.IndexOf('-');
+                                var keyPrefix = dashIndex > 0 ? childKey.Substring(0, dashIndex) : childKey;
+                                var projectConfig = frmMain.config?.Projects?.FirstOrDefault(p => p.Root.StartsWith(keyPrefix, StringComparison.OrdinalIgnoreCase));
+                                string linkTypeName = projectConfig?.LinkTypeName ?? frmMain.hierarchyLinkTypeName.Split(',')[0];
+                                await frmMain.jiraService.UpdateParentLinkAsync(childKey, oldParentKey, newParentKey, linkTypeName);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { success = true }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        // ── Move node (up/down sequence) ──────────────────────────────────────
+                        endpoints.MapPost("/api/issue/move", async context =>
+                        {
+                            try
+                            {
+                                var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                string key = body.GetProperty("key").GetString() ?? "";
+                                int direction = body.GetProperty("direction").GetInt32(); // -1 = up, 1 = down
+                                if (!frmMain.FlatJiraIssueDictionary.TryGetValue(key, out var issue))
+                                {
+                                    context.Response.StatusCode = 404;
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Key not found" }));
+                                    return;
+                                }
+                                string? parentKey = issue.ParentKey;
+                                var siblings = frmMain.FlatJiraIssueDictionary
+                                    .Where(kvp => kvp.Value.ParentKey == parentKey)
+                                    .Select(kvp => kvp.Key)
+                                    .ToList();
+                                int idx = siblings.IndexOf(key);
+                                int newIdx = idx + direction;
+                                if (idx < 0 || newIdx < 0 || newIdx >= siblings.Count)
+                                {
+                                    context.Response.StatusCode = 400;
+                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Cannot move in that direction" }));
+                                    return;
+                                }
+                                siblings.RemoveAt(idx);
+                                siblings.Insert(newIdx, key);
+                                for (int i = 0; i < siblings.Count; i++)
+                                    await frmMain.jiraService.UpdateSequenceFieldAsync(siblings[i], i + 1);
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { success = true }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                                         await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                                                    }
+                                                });
+
+                                                // ── Folder structure preview ──────────────────────────────────────
+                                                endpoints.MapGet("/api/folder/preview", async context =>
+                                                {
+                                                    string key = context.Request.Query["key"].FirstOrDefault() ?? "";
+                                                    if (string.IsNullOrWhiteSpace(key))
+                                                    {
+                                                        context.Response.StatusCode = 400;
+                                                        await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "key required" }));
+                                                        return;
+                                                    }
+                                                    var todo = BuildFolderTodo(key);
+                                                    context.Response.ContentType = "application/json; charset=utf-8";
+                                                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { baseRoot = @"C:\manual\Release", items = todo }));
+                                                });
+
+                                                // ── Folder structure create ───────────────────────────────────────
+                                                endpoints.MapPost("/api/folder/create", async context =>
+                                                {
+                                                    try
+                                                    {
+                                                        var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                                        string key = body.GetProperty("key").GetString() ?? "";
+                                                        if (string.IsNullOrWhiteSpace(key))
+                                                        {
+                                                            context.Response.StatusCode = 400;
+                                                            await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "key required" }));
+                                                            return;
+                                                        }
+                                                        var todo = BuildFolderTodo(key);
+                                                        string lastFolder = "";
+                                                        foreach (var item in todo)
+                                                        {
+                                                            if (item.type == "Folder")
+                                                            {
+                                                                if (!Directory.Exists(item.path))
+                                                                    Directory.CreateDirectory(item.path);
+                                                                lastFolder = item.path;
+                                                            }
+                                                            else
+                                                            {
+                                                                if (!System.IO.File.Exists(item.path))
+                                                                {
+                                                                    var name = Path.GetFileNameWithoutExtension(item.path);
+                                                                    var sb = new StringBuilder();
+                                                                    sb.AppendLine($"Feature: {name}");
+                                                                    sb.AppendLine();
+                                                                    sb.AppendLine("  Scenario: TBD");
+                                                                    sb.AppendLine("    Given TBD");
+                                                                    await System.IO.File.WriteAllTextAsync(item.path, sb.ToString(), Encoding.UTF8);
+                                                                }
+                                                            }
+                                                        }
+                                                        if (!string.IsNullOrEmpty(lastFolder))
+                                                        {
+                                                            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(lastFolder) { UseShellExecute = true }); } catch { }
+                                                        }
+                                                        context.Response.ContentType = "application/json; charset=utf-8";
+                                                        await context.Response.WriteAsync(JsonSerializer.Serialize(new { ok = true, created = todo.Count }));
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        context.Response.StatusCode = 500;
+                                                        await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                                                    }
+                                                });
+                                            });
+                                        })
+                                        .Build();
+
+                                    await webHost.StartAsync();
+                                }
+
+                                // ── Folder-structure path helpers (mirrors frmMain.CreateLocalFolderStructureAsync) ──
+                                private static string FolderNormalizeTitle(string title)
+                                {
+                                    if (string.IsNullOrWhiteSpace(title)) return "";
+                                    int idx = title.LastIndexOf('[');
+                                    string head = idx > 0 ? title.Substring(0, idx).Trim() : title.Trim();
+                                    head = System.Text.RegularExpressions.Regex.Replace(head, "[^A-Za-z0-9]+", " ");
+                                    head = System.Text.RegularExpressions.Regex.Replace(head, @"\s+", " ").Trim();
+                                    return head;
+                                }
+
+                                private static string FolderBuildFsName(string issueKey, string summary)
+                                {
+                                    // Replicate BuildFsNameFromNodeText: node text is "{summary} [{key}]"
+                                    string nodeText = $"{summary} [{issueKey}]";
+                                    string key = issueKey ?? "";
+                                    string id = key.Replace("-", "");
+                                    string title = FolderNormalizeTitle(nodeText);
+
+                                    string ToPascalCase(string input)
+                                    {
+                                        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+                                        var words = System.Text.RegularExpressions.Regex.Matches(input, @"[A-Za-z0-9]+").Select(m => m.Value);
+                                        var sb = new StringBuilder();
+                                        foreach (var word in words)
+                                        {
+                                            var lower = word.ToLowerInvariant();
+                                            sb.Append(char.ToUpperInvariant(lower[0]));
+                                            if (lower.Length > 1) sb.Append(lower.Substring(1));
+                                        }
+                                        return sb.ToString();
+                                    }
+
+                                    string camel = ToPascalCase(title);
+                                    if (string.IsNullOrWhiteSpace(id)) return camel;
+                                    var num = System.Text.RegularExpressions.Regex.Match(id, @"\d+").Value;
+                                    string prefix = string.IsNullOrWhiteSpace(num) ? id : $"TST{num}";
+                                    return prefix + "_" + camel;
+                                }
+
+                                private static List<(string path, string type)> BuildFolderTodo(string rootKey)
+                                {
+                                    const string baseRoot = @"C:\manual\Release";
+                                    var todo = new List<(string path, string type)>();
+
+                                    // Build ancestor chain from root -> rootKey using ParentKey chain
+                                    // to compute parentPath (skip first 2 tree levels, replicate native logic)
+                                    var chain = new List<string>();
+                                    string cur = rootKey;
+                                    while (!string.IsNullOrEmpty(cur) && frmMain.FlatJiraIssueDictionary.TryGetValue(cur, out var ci))
+                                    {
+                                        chain.Insert(0, cur);
+                                        cur = ci.ParentKey;
+                                    }
+
+                                    int skip = Math.Min(2, chain.Count);
+                                    var ancestors = chain.Skip(skip).Take(Math.Max(0, chain.Count - skip - 1)).ToList();
+
+                                    string parentPath = baseRoot;
+                                    foreach (var ak in ancestors)
+                                    {
+                                        if (frmMain.FlatJiraIssueDictionary.TryGetValue(ak, out var ai))
+                                        {
+                                            string name = FolderBuildFsName(ak, ai.Summary ?? "");
+                                            if (!string.IsNullOrWhiteSpace(name))
+                                                parentPath = Path.Combine(parentPath, name);
+                                        }
+                                    }
+
+                                    // Walk selected node and all descendants
+                                    void Visit(string nodeKey, string currentPath)
+                                    {
+                                        if (!frmMain.FlatJiraIssueDictionary.TryGetValue(nodeKey, out var issue)) return;
+                                        string nodeName = FolderBuildFsName(nodeKey, issue.Summary ?? "");
+                                        string nodePath = Path.Combine(currentPath, nodeName);
+                                        var children = frmMain.childrenByParent.TryGetValue(nodeKey, out var ch)
+                                            ? ch.Select(c => c.Key).ToList()
+                                            : new List<string>();
+                                        if (children.Count > 0)
+                                        {
+                                            todo.Add((nodePath, "Folder"));
+                                            foreach (var childKey in children)
+                                                Visit(childKey, nodePath);
+                                        }
+                                        else
+                                        {
+                                            todo.Add((nodePath + ".feature", "Feature"));
+                                        }
+                                    }
+
+                                    if (frmMain.FlatJiraIssueDictionary.TryGetValue(rootKey, out var rootIssue))
+                                    {
+                                        string selectedFsName = FolderBuildFsName(rootKey, rootIssue.Summary ?? "");
+                                        string creationRoot = Path.Combine(parentPath, selectedFsName);
+                                        todo.Insert(0, (creationRoot, "Folder"));
+                                        var children = frmMain.childrenByParent.TryGetValue(rootKey, out var ch)
+                                            ? ch.Select(c => c.Key).ToList()
+                                            : new List<string>();
+                                        foreach (var childKey in children)
+                                            Visit(childKey, creationRoot);
+                                    }
+
+                                    return todo;
+                                }
 
         // Loader page: shows spinner (same look as desktop) then swaps in the final HTML
         private static string BuildRecentUpdatesHtml(int days)
@@ -1920,238 +2387,504 @@ What would you like to know?`, 'welcome');
 <html>
 <head>
   <meta charset='utf-8' />
-  <title>Monovera (Web)</title>
+  <title>Monovera</title>
+  <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap' rel='stylesheet'>
   <style>
 {css}
-html, body {{ height: 100%; margin: 0; }}
-body {{ overflow: hidden; }}
-.layout {{ display: grid; grid-template-rows: 1fr 32px; height: 100vh; }}
-.main {{ --left: 33%; display: grid; grid-template-columns: var(--left) 6px 1fr; gap: 8px; padding: 8px; box-sizing: border-box; min-height: 0; }}
-.splitter {{ grid-column: 2; background: linear-gradient(to right, transparent, #cbd8ea, transparent); cursor: col-resize; user-select: none; }}
-.splitter:hover {{ background: linear-gradient(to right, transparent, #b6c9e4, transparent); }}
-.sidebar {{ grid-column: 1; border: 1px solid #c0daf3; border-radius: 8px; background: #f5faff; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }}
-
-/* Tree (force no bullets) */
-#tree, #tree ul, #tree li {{
-  list-style: none !important;
-  list-style-type: none !important;
-  list-style-image: none !important;
-  margin: 0;
-  padding-left: 12px;
+/* ── Professional White + Light-Blue palette ────────────────────── */
+:root {{
+  --c-bg:        #f0f6ff;
+  --c-sidebar:   #e8f0fc;
+  --c-border:    #c2d8f5;
+  --c-accent:    #1a6bbf;
+  --c-accent2:   #3d8fd6;
+  --c-text:      #0d2340;
+  --c-text-soft: #4a6a8a;
+  --c-surface:   #ffffff;
+  --c-hover:     #dceeff;
+  --c-active:    #c5e0fa;
+  --c-danger:    #c0392b;
+  --c-success:   #1e8449;
+  --c-warn:      #b7770d;
+  --radius:      10px;
+  --shadow:      0 2px 16px rgba(26,107,191,.10);
+  --trans:       0.18s ease;
 }}
-#tree li::marker {{ content: '' !important; color: transparent !important; }}
-#tree li::before {{ content: none !important; }}
-#tree {{ padding: 8px; white-space: nowrap; flex: 1 1 auto; overflow: auto; font-size: 12px; }}
-#tree li {{ margin: 2px 0; }}
-#tree a {{ cursor: pointer; text-decoration: none; color: #1565c0; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; }}
-#tree a.selected {{ background:#e3f2fd; color:#0d47a1; outline:1px solid #b3d4f6; }}
-#tree .expander {{ display:inline-block; width:16px; text-align:center; margin-right:6px; cursor:pointer; user-select:none; color:#0d47a1; font-weight:700; font-family:Consolas,monospace; }}
-.node-icon {{ width:18px; height:18px; vertical-align:middle; border-radius:3px; }}
+*, *::before, *::after {{ box-sizing: border-box; }}
+html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:var(--c-bg); color:var(--c-text); overflow:hidden; }}
 
-/* Context menu (force no bullets) */
-.ctx-menu {{ position: fixed; display:none; z-index:10000; min-width:220px; background:#fff; border:1px solid #b3d4f6; border-radius:6px; box-shadow:0 4px 14px rgba(0,0,0,.15); font: 12px Segoe UI, sans-serif; }}
-.ctx-menu ul {{ margin:0; padding:4px; }}
-.ctx-menu ul, .ctx-menu li {{ list-style: none !important; list-style-type: none !important; list-style-image: none !important; }}
-.ctx-menu li::marker {{ content: '' !important; }}
-.ctx-menu li::before {{ content: none !important; }}
-.ctx-menu li {{ padding:6px 10px; cursor:pointer; border-radius:4px; color:#1565c0; display:flex; align-items:center; gap:8px; }}
-.ctx-menu li:hover {{ background:#e3f2fd; }}
+/* ── Layout ─────────────────────────────────────────────────────── */
+.layout {{ display:grid; grid-template-rows:1fr 30px; height:100vh; }}
+.main {{
+  --left:300px;
+  display:grid;
+  grid-template-columns:var(--left) 5px 1fr;
+  gap:0;
+  padding:10px;
+  box-sizing:border-box;
+  min-height:0;
+  gap:8px;
+}}
 
-/* Right workspace */
-.workspace {{ grid-column: 3; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }}
+/* ── Splitter ────────────────────────────────────────────────────── */
+.splitter {{
+  grid-column:2;
+  cursor:col-resize;
+  border-radius:4px;
+  background:var(--c-border);
+  transition:background var(--trans);
+  margin:4px 0;
+}}
+.splitter:hover {{ background:var(--c-accent2); }}
 
-/* Tabs */
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+.sidebar {{
+  grid-column:1;
+  background:var(--c-sidebar);
+  border:1px solid var(--c-border);
+  border-radius:var(--radius);
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+  overflow:hidden;
+  box-shadow:var(--shadow);
+}}
+.sidebar-toolbar {{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  padding:6px 8px;
+  border-bottom:1px solid var(--c-border);
+  background:rgba(255,255,255,.7);
+  flex-shrink:0;
+}}
+.sb-btn {{
+  appearance:none;
+  border:1px solid var(--c-border);
+  background:var(--c-surface);
+  color:var(--c-accent);
+  border-radius:6px;
+  padding:4px 8px;
+  font-size:13px;
+  cursor:pointer;
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  transition:background var(--trans),border-color var(--trans),box-shadow var(--trans);
+  white-space:nowrap;
+}}
+.sb-btn:hover {{ background:var(--c-hover); border-color:var(--c-accent2); box-shadow:0 2px 8px rgba(26,107,191,.14); }}
+.sb-btn:active {{ background:var(--c-active); }}
+.sb-btn-icon {{ font-size:14px; }}
+
+/* ── Tree ────────────────────────────────────────────────────────── */
+#tree, #tree ul, #tree li {{ list-style:none!important; list-style-type:none!important; list-style-image:none!important; margin:0; padding-left:14px; }}
+#tree li::marker, #tree li::before {{ content:none!important; color:transparent!important; }}
+#tree {{ padding:8px 6px; white-space:nowrap; flex:1 1 auto; overflow:auto; font-size:12px; }}
+#tree li {{ margin:1px 0; }}
+#tree a {{
+  cursor:pointer; text-decoration:none; color:var(--c-accent);
+  padding:3px 6px; border-radius:6px;
+  display:inline-flex; align-items:center; gap:5px;
+  transition:background var(--trans);
+}}
+#tree a:hover {{ background:var(--c-hover); }}
+#tree a.selected {{
+  background:var(--c-active);
+  color:var(--c-text);
+  outline:1.5px solid var(--c-accent2);
+  font-weight:500;
+}}
+#tree .expander {{
+  display:inline-block; width:16px; text-align:center;
+  cursor:pointer; user-select:none;
+  color:var(--c-accent2); font-weight:700; font-family:Consolas,monospace;
+  transition:transform var(--trans);
+}}
+.node-icon {{ width:16px; height:16px; vertical-align:middle; border-radius:3px; }}
+
+/* ── Workspace ───────────────────────────────────────────────────── */
+.workspace {{
+  grid-column:3;
+  display:flex;
+  flex-direction:column;
+  min-width:0;
+  min-height:0;
+  overflow:hidden;
+  background:var(--c-surface);
+  border:1px solid var(--c-border);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}}
+
+/* ── Tabs bar ────────────────────────────────────────────────────── */
 .mv-tabs-bar {{
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 6px;
-  border-bottom: 1px solid #b3d4f6;
-  background: #f2faff;
-  padding: 6px 6px 0 6px;
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  align-items:center;
+  gap:4px;
+  border-bottom:1px solid var(--c-border);
+  background:rgba(240,246,255,.9);
+  padding:5px 6px 0;
+  flex-shrink:0;
 }}
-/* The viewport is the scrolling container */
-.mv-tabs-viewport {{
-  overflow: hidden;
-  position: relative;
-}}
-/* The strip is wider than the viewport; we do programmatic scrolling of the viewport */
+.mv-tabs-viewport {{ overflow:hidden; position:relative; }}
 #mv-tabs {{
-  --tab-width: 240px;
-  position: relative;
-  display: inline-flex;
-  gap: 4px;
-  white-space: nowrap;
+  --tab-width:200px;
+  position:relative;
+  display:inline-flex;
+  gap:3px;
+  white-space:nowrap;
 }}
 .mv-tab {{
-  background:#fff;
-  border:1px solid #b3d4f6; border-bottom:none;
-  border-radius:6px 6px 0 0;
-  padding:6px 10px;
+  background:rgba(255,255,255,.7);
+  border:1px solid var(--c-border); border-bottom:none;
+  border-radius:7px 7px 0 0;
+  padding:5px 8px;
   cursor:pointer;
-  display:flex; align-items:center; gap:8px;
-  /* Fixed width tabs: no shrinking */
-  width: var(--tab-width);
-  min-width: var(--tab-width);
-  max-width: var(--tab-width);
-  flex: 0 0 var(--tab-width);
-  overflow: hidden;
+  display:flex; align-items:center; gap:6px;
+  width:var(--tab-width); min-width:var(--tab-width); max-width:var(--tab-width);
+  flex:0 0 var(--tab-width);
+  overflow:hidden;
+  transition:background var(--trans),border-color var(--trans);
 }}
-.mv-tab .mv-tab-label {{
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1 1 auto;
+.mv-tab:hover {{ background:var(--c-hover); }}
+.mv-tab .mv-tab-label {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; font-size:12px; }}
+.mv-tab.active {{
+  background:var(--c-surface);
+  border-bottom:2px solid var(--c-accent);
+  font-weight:600; color:var(--c-accent);
 }}
-.mv-tab.active {{ font-weight:600; color:#1565c0; border-bottom:2px solid #1565c0; }}
 .mv-tab-close {{
-  margin-left:6px;
-  width:16px; height:16px;
+  margin-left:4px; width:14px; height:14px;
   display:inline-flex; align-items:center; justify-content:center;
-  font-weight:700; font-size:12px; line-height:1;
-  color:#fff; background:#d32f2f; border:1px solid #b71c1c;
-  border-radius:3px; cursor:pointer; box-shadow:0 1px 2px rgba(0,0,0,.2);
-  flex: 0 0 auto;
+  font-weight:700; font-size:11px; line-height:1;
+  color:var(--c-text-soft);
+  border-radius:3px; cursor:pointer;
+  transition:background var(--trans),color var(--trans);
+  flex:0 0 auto;
 }}
-.mv-tab-close:hover {{ background:#b71c1c; border-color:#8a1111; }}
-
-/* Scroll buttons */
+.mv-tab-close:hover {{ background:var(--c-danger); color:#fff; }}
 .mv-tab-scroll {{
-  appearance: none; -webkit-appearance: none;
-  border: 1px solid #b3d4f6; background: #ffffff; color: #1565c0;
-  width: 28px; height: 24px; border-radius: 4px; display: none;
-  align-items: center; justify-content: center; cursor: pointer;
-  user-select: none;
+  appearance:none; -webkit-appearance:none;
+  border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-accent);
+  width:26px; height:22px; border-radius:5px; display:none;
+  align-items:center; justify-content:center; cursor:pointer;
+  transition:background var(--trans);
 }}
-.mv-tab-scroll[disabled] {{ opacity: .5; cursor: default; }}
+.mv-tab-scroll:hover {{ background:var(--c-hover); }}
+.mv-tab-scroll[disabled] {{ opacity:.4; cursor:default; }}
 
-/* Views */
-#mv-views {{ flex: 1 1 auto; position: relative; min-height: 0; overflow: hidden; }}
-.mv-view {{ position: absolute; inset: 0; display: none; background:#fff; }}
-.mv-view.active {{ display: block; }}
-.mv-view iframe {{ width: 100%; height: 100%; border: none; background: #fff; }}
+/* ── Views ───────────────────────────────────────────────────────── */
+#mv-views {{ flex:1 1 auto; position:relative; min-height:0; overflow:hidden; }}
+.mv-view {{ position:absolute; inset:0; display:none; background:var(--c-surface); animation:fadeIn .15s ease; }}
+.mv-view.active {{ display:block; }}
+.mv-view iframe {{ width:100%; height:100%; border:none; background:var(--c-surface); }}
+.home-splash {{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:var(--c-surface); }}
+.home-splash img {{ max-width:100%; max-height:100%; object-fit:contain; opacity:.85; }}
+@keyframes fadeIn {{ from {{ opacity:0; transform:translateY(4px); }} to {{ opacity:1; transform:none; }} }}
 
-/* Home splash */
-.home-splash {{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:#fff; }}
-.home-splash img {{ max-width:100%; max-height:100%; object-fit: contain; }}
+/* ── Status bar ──────────────────────────────────────────────────── */
+.status {{
+  display:flex; align-items:center; padding:0 14px;
+  border-top:1px solid var(--c-border); background:rgba(232,240,252,.95);
+  color:var(--c-text-soft); font-size:12px; gap:16px;
+}}
+.sync-indicator {{ display:flex; align-items:center; gap:5px; }}
+.sync-dot {{
+  width:9px; height:9px; border-radius:50%;
+  flex-shrink:0;
+  box-shadow:0 0 0 2px rgba(0,0,0,.06);
+  transition:background .4s;
+}}
+.sync-dot-ok      {{ background:#2ecc71; }}
+.sync-dot-updates {{ background:#e74c3c; box-shadow:0 0 0 2px rgba(231,76,60,.22); }}
+.sync-dot-offline {{ background:#b0bec5; }}
+.sync-dot-checking {{ background:#f39c12; }}
 
-.status {{ display: flex; align-items: center; padding: 0 12px; border-top: 1px solid #b3d4f6; background: #f2faff; color: #1565c0; gap: 16px; }}
-
-/* Search dialog */
-.mv-search {{ position:fixed; inset:0; background:rgba(0,0,0,.25); z-index:9999; display:none; }}
-.mv-search-panel {{ position:absolute; top:40px; left:50%; transform:translateX(-50%); width: min(1020px, calc(100% - 20px)); background:#fff; border:1px solid #b3d4f6; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.2); overflow:hidden; }}
-.mv-search-header {{ display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background:#f2faff; border-bottom:1px solid #b3d4f6; }}
-.mv-search-title {{ font-weight:600; color:#1565c0; }}
-.mv-search-close {{ appearance:none; border:1px solid #b3d4f6; background:#fff; color:#1565c0; border-radius:4px; padding:4px 8px; cursor:pointer; }}
-.mv-search-body {{ padding:8px; display:grid; grid-template-columns: 1fr; gap:8px; }}
-.mv-search-row {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
-.mv-search-row label {{ font-weight:600; color:#1565c0; min-width:64px; }}
-.mv-search-row select, .mv-search-row input[type='text'] {{ padding:6px 8px; border:1px solid #b3d4f6; border-radius:4px; min-width:160px; flex: 1 1 auto; }}
-.mv-search-actions {{ display:flex; gap:10px; justify-content:flex-end; }}
-.mv-search-btn {{ appearance:none; border:1px solid #b3d4f6; background:#ffffff; color:#1565c0; border-radius:4px; padding:6px 10px; cursor:pointer; }}
-.mv-search-results {{ height: 420px; border-top:1px solid #b3d4f6; }}
-.mv-search-results iframe {{ width:100%; height:100%; border:none; background:#fff; }}
-
-/* Confirmation overlay centered like history alerts */
-.mv-confirm {{
-  position:fixed; inset:0; background:rgba(0,0,0,.15);
-  z-index:10000; display:none;
+/* ── Overlay backdrop ────────────────────────────────────────────── */
+.mv-overlay {{
+  position:fixed; inset:0;
+  background:rgba(30,20,60,.25);
+  backdrop-filter:blur(4px) saturate(1.2);
+  z-index:9000;
   display:flex; align-items:center; justify-content:center;
+  animation:ovFadeIn .15s ease;
 }}
-.mv-confirm-panel {{
-  width:min(560px, calc(100% - 24px));
-  background:#fff; border:1px solid #b3d4f6; border-radius:8px;
-  box-shadow:0 8px 24px rgba(0,0,0,.2); overflow:hidden;
+@keyframes ovFadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
+.mv-overlay-panel {{
+  background:var(--c-surface);
+  border:1px solid var(--c-border);
+  border-radius:14px;
+  box-shadow:0 12px 48px rgba(26,107,191,.18);
+  overflow:hidden;
+  animation:panelPop .18s cubic-bezier(.34,1.56,.64,1);
 }}
-.mv-confirm-body {{ padding:12px; }}
-.mv-alert {{ background:#e3f2fd; border:1px solid #b3d4f6; color:#0d47a1; border-radius:6px; padding:10px; }}
-.mv-confirm-actions {{ display:flex; justify-content:flex-end; gap:8px; padding:8px 12px; background:#f2faff; border-top:1px solid #b3d4f6; }}
-.mv-btn {{ appearance:none; border:1px solid #b3d4f6; background:#fff; color:#1565c0; border-radius:4px; padding:6px 10px; cursor:pointer; }}
-.mv-btn-primary {{ background:#1565c0; color:#fff; border-color:#0d47a1; }}
+@keyframes panelPop {{ from {{ opacity:0; transform:scale(.94) translateY(12px); }} to {{ opacity:1; transform:none; }} }}
+.mv-overlay-header {{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:12px 16px;
+  background:linear-gradient(135deg,#dceeff,#f0f6ff);
+  border-bottom:1px solid var(--c-border);
+}}
+.mv-overlay-title {{ font-weight:600; font-size:14px; color:var(--c-text); }}
+.mv-overlay-close {{
+  appearance:none; border:1px solid var(--c-border); background:var(--c-surface);
+  color:var(--c-text-soft); border-radius:6px;
+  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:16px; line-height:1;
+  transition:background var(--trans),color var(--trans);
+}}
+.mv-overlay-close:hover {{ background:var(--c-danger); color:#fff; border-color:var(--c-danger); }}
+.mv-overlay-body {{ padding:16px; }}
+.mv-overlay-footer {{
+  display:flex; justify-content:flex-end; gap:8px;
+  padding:10px 16px;
+  background:rgba(240,246,255,.7);
+  border-top:1px solid var(--c-border);
+}}
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+.mv-btn {{
+  appearance:none;
+  border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-accent);
+  border-radius:7px; padding:7px 14px; font-size:13px; font-weight:500;
+  cursor:pointer; transition:background var(--trans),border-color var(--trans),box-shadow var(--trans);
+}}
+.mv-btn:hover {{ background:var(--c-hover); border-color:var(--c-accent2); box-shadow:0 2px 8px rgba(124,92,191,.12); }}
+.mv-btn-primary {{ background:var(--c-accent); color:#fff; border-color:var(--c-accent); }}
+.mv-btn-primary:hover {{ background:var(--c-accent2); border-color:var(--c-accent2); box-shadow:0 4px 12px rgba(26,107,191,.22); }}
+.mv-btn-danger {{ background:var(--c-danger); color:#fff; border-color:var(--c-danger); }}
+
+/* ── Form fields ─────────────────────────────────────────────────── */
+.mv-field {{ display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }}
+.mv-field label {{ font-size:12px; font-weight:500; color:var(--c-text-soft); }}
+.mv-field input, .mv-field select, .mv-field textarea {{
+  padding:7px 10px;
+  border:1px solid var(--c-border);
+  border-radius:7px;
+  font-size:13px;
+  color:var(--c-text);
+  background:var(--c-bg);
+  transition:border-color var(--trans), box-shadow var(--trans);
+  outline:none;
+}}
+.mv-field input:focus, .mv-field select:focus, .mv-field textarea:focus {{
+  border-color:var(--c-accent2);
+  box-shadow:0 0 0 3px rgba(26,107,191,.14);
+}}
+.mv-field .mv-hint {{ font-size:11px; color:var(--c-text-soft); }}
+
+/* ── Context menu ────────────────────────────────────────────────── */
+.ctx-menu {{
+  position:fixed; display:none; z-index:10000; min-width:210px;
+  background:var(--c-surface);
+  border:1px solid var(--c-border); border-radius:var(--radius);
+  box-shadow:0 8px 28px rgba(26,107,191,.16);
+  font-size:12px; padding:4px;
+  animation:panelPop .14s cubic-bezier(.34,1.56,.64,1);
+}}
+.ctx-menu ul {{ margin:0; padding:0; list-style:none!important; }}
+.ctx-menu li::marker, .ctx-menu li::before {{ content:none!important; }}
+.ctx-menu li {{
+  padding:7px 12px; cursor:pointer; border-radius:6px;
+  color:var(--c-accent); display:flex; align-items:center; gap:8px;
+  transition:background var(--trans);
+}}
+.ctx-menu li:hover {{ background:var(--c-hover); }}
+.ctx-menu .ctx-sep {{ height:1px; background:var(--c-border); margin:3px 4px; padding:0; cursor:default; }}
+
+/* ── Search overlay ──────────────────────────────────────────────── */
+#mv-search {{
+  position:fixed; inset:0; z-index:9100;
+  background:rgba(30,20,60,.25); backdrop-filter:blur(4px);
+  display:none;
+}}
+.mv-search-panel {{
+  position:absolute; top:48px; left:50%; transform:translateX(-50%);
+  width:min(1040px,calc(100% - 20px));
+  background:var(--c-surface);
+  border:1px solid var(--c-border);
+  border-radius:14px;
+  box-shadow:0 12px 48px rgba(26,107,191,.18);
+  overflow:hidden;
+  animation:panelPop .18s cubic-bezier(.34,1.56,.64,1);
+}}
+.mv-search-header {{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px;
+  background:linear-gradient(135deg,#dceeff,#f0f6ff);
+  border-bottom:1px solid var(--c-border);
+}}
+.mv-search-title {{ font-weight:600; color:var(--c-text); }}
+.mv-search-close {{ appearance:none; border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-text-soft); border-radius:6px; padding:4px 9px; cursor:pointer; transition:background var(--trans); }}
+.mv-search-close:hover {{ background:var(--c-danger); color:#fff; }}
+.mv-search-body {{ padding:10px 14px; display:flex; flex-direction:column; gap:8px; }}
+.mv-search-row {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+.mv-search-row label {{ font-size:12px; font-weight:500; color:var(--c-text-soft); min-width:48px; }}
+.mv-search-row select, .mv-search-row input[type='text'] {{ padding:6px 9px; border:1px solid var(--c-border); border-radius:7px; font-size:13px; min-width:140px; flex:1 1 auto; transition:border-color var(--trans); outline:none; }}
+.mv-search-row select:focus, .mv-search-row input:focus {{ border-color:var(--c-accent2); box-shadow:0 0 0 3px rgba(124,92,191,.10); }}
+.mv-search-hint {{ font-size:11px; color:var(--c-text-soft); }}
+.mv-search-actions {{ display:flex; gap:8px; justify-content:flex-end; }}
+.mv-search-btn {{ appearance:none; border:1px solid var(--c-border); background:var(--c-accent); color:#fff; border-radius:7px; padding:6px 16px; font-size:13px; cursor:pointer; transition:background var(--trans); }}
+.mv-search-btn:hover {{ background:var(--c-accent2); }}
+.mv-search-results {{ height:420px; border-top:1px solid var(--c-border); }}
+.mv-search-results iframe {{ width:100%; height:100%; border:none; background:var(--c-surface); }}
+
+/* ── Toast notifications ─────────────────────────────────────────── */
+#mv-toast-area {{ position:fixed; bottom:40px; left:50%; transform:translateX(-50%); z-index:11000; display:flex; flex-direction:column; gap:8px; pointer-events:none; }}
+.mv-toast {{
+  background:var(--c-text); color:#fff;
+  padding:9px 18px; border-radius:8px;
+  font-size:13px; box-shadow:0 4px 16px rgba(0,0,0,.18);
+  animation:toastIn .2s ease; pointer-events:none; white-space:nowrap;
+}}
+.mv-toast.success {{ background:var(--c-success); }}
+.mv-toast.warn {{ background:var(--c-warn); }}
+.mv-toast.error {{ background:var(--c-danger); }}
+@keyframes toastIn {{ from {{ opacity:0; transform:translateY(10px); }} to {{ opacity:1; transform:none; }} }}
+
+/* ── Config overlay ──────────────────────────────────────────────── */
+.mv-cfg-panel {{ width:min(680px,calc(100% - 24px)); }}
+.mv-cfg-tabs-bar {{ display:flex; gap:3px; border-bottom:1px solid var(--c-border); padding:0 12px; background:rgba(240,246,255,.6); }}
+.mv-cfg-tab {{ appearance:none; border:none; background:none; padding:8px 14px; font-size:13px; font-weight:500; color:var(--c-text-soft); cursor:pointer; border-bottom:2px solid transparent; transition:color var(--trans), border-color var(--trans); }}
+.mv-cfg-tab.active {{ color:var(--c-accent); border-bottom-color:var(--c-accent); font-weight:600; }}
+.mv-cfg-pane {{ display:none; padding:14px; }}
+.mv-cfg-pane.active {{ display:block; }}
+.mv-proj-list {{ list-style:none; padding:0; margin:0 0 10px; max-height:200px; overflow:auto; }}
+.mv-proj-item {{ display:flex; align-items:center; justify-content:space-between; padding:7px 10px; border:1px solid var(--c-border); border-radius:7px; margin-bottom:5px; background:var(--c-bg); font-size:13px; }}
+.mv-proj-item span {{ font-weight:500; color:var(--c-text); }}
+.mv-proj-actions {{ display:flex; gap:4px; }}
+.mv-proj-btn {{ appearance:none; border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-text-soft); border-radius:5px; padding:3px 8px; font-size:11px; cursor:pointer; transition:background var(--trans); }}
+.mv-proj-btn:hover {{ background:var(--c-hover); }}
+.mv-proj-btn.danger:hover {{ background:var(--c-danger); color:#fff; border-color:var(--c-danger); }}
+
+/* ── Hierarchy update overlay ────────────────────────────────────── */
+.mv-hier-panel {{ width:min(460px,calc(100% - 24px)); }}
+
+/* ── AI train overlay ────────────────────────────────────────────── */
+.mv-train-panel {{ width:min(420px,calc(100% - 24px)); }}
+.mv-progress {{ width:100%; height:8px; border-radius:4px; background:var(--c-border); margin-top:10px; overflow:hidden; }}
+.mv-progress-bar {{ height:100%; width:0; background:var(--c-accent); border-radius:4px; transition:width .3s ease; animation:progressPulse 1.5s ease-in-out infinite; }}
+@keyframes progressPulse {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.65; }} }}
+
+/* ── Confirmation dialog ─────────────────────────────────────────── */
+.mv-confirm-panel {{ width:min(480px,calc(100% - 24px)); }}
   </style>
 </head>
 <body>
-  <div class='layout'>
-    <div class='main'>
-      <aside class='sidebar'>
-        <ul id='tree'></ul>
-        <div id='treeMenu' class='ctx-menu' role='menu' aria-hidden='true'>
-          <ul>
-            <li data-action='search' role='menuitem' title='Ctrl+Q'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
-            <li data-action='report' role='menuitem' title='Ctrl+P'>📄 Generate report… <span class='mv-search-hint'>(Ctrl+P)</span></li>
-            <li data-action='ask-ai' role='menuitem' title='Ctrl+M'>🤖 Ask Me… <span class='mv-search-hint'>(Ctrl+M)</span></li>
-          </ul>
-        </div>
-      </aside>
-      <div id='splitter' class='splitter' role='separator' aria-orientation='vertical' tabindex='0' title='Drag to resize'></div>
-      <section class='workspace'>
-        <div class='mv-tabs-bar'>
-          <button id='mv-tabPrev' class='mv-tab-scroll' title='Scroll left' aria-label='Scroll left'>&lsaquo;</button>
-          <div class='mv-tabs-viewport'><div id='mv-tabs'></div></div>
-          <button id='mv-tabNext' class='mv-tab-scroll' title='Scroll right' aria-label='Scroll right'>&rsaquo;</button>
-        </div>
-        <div id='mv-views'>
-          <div id='mv-home' class='mv-view active'>
-            <div class='home-splash'>
-              <img src='/static/images/MonoveraBackground.png' alt='Monovera' onerror=""this.outerHTML='<div style=\'color:#b00;font:14px Segoe UI\'>Missing images/MonoveraBackground.png</div>'"" />
-            </div>
+<div id='mv-toast-area'></div>
+
+<div class='layout'>
+  <div class='main'>
+    <!-- Sidebar -->
+    <aside class='sidebar'>
+      <div class='sidebar-toolbar'>
+        <button class='sb-btn' id='btn-search' title='Search (Ctrl+Q)'><span class='sb-btn-icon'>🔎</span></button>
+        <button class='sb-btn' id='btn-recent' title='Recent Updates'><span class='sb-btn-icon'>🕒</span></button>
+        <button class='sb-btn' id='btn-ai' title='Ask Me AI (Ctrl+M)'><span class='sb-btn-icon'>🤖</span></button>
+        <button class='sb-btn' id='btn-config' title='Configuration'><span class='sb-btn-icon'>⚙️</span></button>
+        <button class='sb-btn' id='btn-update' title='Update Hierarchy'><span class='sb-btn-icon'>🔄</span></button>
+        <button class='sb-btn mv-btn-primary' id='btn-report' title='Generate Report (Ctrl+P)' style='margin-left:auto;'><span class='sb-btn-icon'>📄</span></button>
+      </div>
+      <ul id='tree'></ul>
+      <div id='treeMenu' class='ctx-menu' role='menu' aria-hidden='true'>
+        <ul>
+          <li data-action='search'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
+          <li data-action='report'>📄 Generate Report… <span class='mv-search-hint'>(Ctrl+P)</span></li>
+          <li data-action='ask-ai'>🤖 Ask Me… <span class='mv-search-hint'>(Ctrl+M)</span></li>
+          <li data-action='recent'>🕒 Recent Updates…</li>
+          <li data-action='folder-structure'>📁 Create Folder Structure…</li>
+          <li class='ctx-sep'></li>
+          <li data-action='edit' id='ctx-edit'>✏️ Edit…</li>
+          <li data-action='link-related' id='ctx-link'>🔗 Link Related…</li>
+          <li data-action='change-parent' id='ctx-chparent'>🌳 Change Parent…</li>
+          <li class='ctx-sep'></li>
+          <li data-action='add-child' id='ctx-add-child'>🌱 Add Child…</li>
+          <li data-action='add-sibling' id='ctx-add-sibling'>🌳 Add Sibling…</li>
+          <li class='ctx-sep'></li>
+          <li data-action='move-up' id='ctx-move-up'>🔼 Move Up</li>
+          <li data-action='move-down' id='ctx-move-down'>🔽 Move Down</li>
+          <li class='ctx-sep'></li>
+          <li data-action='config'>⚙️ Configuration…</li>
+          <li data-action='update-hierarchy'>🔄 Update Hierarchy…</li>
+          <li data-action='train-ai'>🧠 Train AI Index…</li>
+        </ul>
+      </div>
+    </aside>
+
+    <div id='splitter' class='splitter' role='separator' aria-orientation='vertical' tabindex='0'></div>
+
+    <!-- Workspace -->
+    <section class='workspace'>
+      <div class='mv-tabs-bar'>
+        <button id='mv-tabPrev' class='mv-tab-scroll' title='Scroll left'>&lsaquo;</button>
+        <div class='mv-tabs-viewport'><div id='mv-tabs'></div></div>
+        <button id='mv-tabNext' class='mv-tab-scroll' title='Scroll right'>&rsaquo;</button>
+      </div>
+      <div id='mv-views'>
+        <div id='mv-home' class='mv-view active'>
+          <div class='home-splash'>
+            <img src='/static/images/MonoveraBackground.png' alt='Monovera' onerror=""this.style.display='none'"" />
           </div>
         </div>
-      </section>
+      </div>
+    </section>
+  </div>
+
+  <footer class='status'>
+    <span id='statusUpdated'>🕒 Last Synced: —</span>
+    <span id='statusSync' class='sync-indicator'>
+      <span id='syncDot' class='sync-dot sync-dot-offline'></span>
+      <span id='syncText'>Checking…</span>
+    </span>
+    <span id='statusUser' style='display:none'></span>
+    <span style='margin-left:auto;font-size:11px;opacity:.6;'>Monovera</span>
+  </footer>
+</div>
+
+<!-- Tab context menu -->
+<div id='tabMenu' class='ctx-menu' role='menu' aria-hidden='true'>
+  <ul>
+    <li data-action='close'>Close Tab</li>
+    <li data-action='close-others'>Close Other Tabs</li>
+    <li data-action='close-left'>Close Tabs on Left</li>
+    <li data-action='close-right'>Close Tabs on Right</li>
+    <li class='ctx-sep'></li>
+    <li data-action='close-all'>Close All Tabs</li>
+  </ul>
+</div>
+
+<!-- Search overlay -->
+<div id='mv-search' aria-hidden='true'>
+  <div class='mv-search-panel' role='dialog' aria-modal='true'>
+    <div class='mv-search-header'>
+      <div class='mv-search-title'>🔎 Search</div>
+      <button id='mv-search-close' class='mv-search-close' aria-label='Close'>✕</button>
     </div>
-    <footer class='status'>
-      <!--<span id='statusUser'>👤 Connected as: -</span>
-      <span id='statusMode'>🌐 Mode: -</span> -->
-      <span id='statusUpdated'>🕒 DB Updated: -</span>
-      <span style='margin-left:auto;'>Monovera</span>
-    </footer>
-  </div>
-
-  <!-- Tab context menu -->
-  <div id='tabMenu' class='ctx-menu' role='menu' aria-hidden='true'>
-    <ul>
-      <li data-action='close'>Close Tab</li>
-      <li data-action='close-others'>Close Other Tabs</li>
-      <li data-action='close-left'>Close Tabs on Left</li>
-      <li data-action='close-right'>Close Tabs on Right</li>
-      <li data-action='close-all'>Close All Tabs</li>
-    </ul>
-  </div>
-
-  <div id='mv-search' class='mv-search' aria-hidden='true'>
-    <div class='mv-search-panel' role='dialog' aria-modal='true' aria-labelledby='mv-search-title'>
-      <div class='mv-search-header'>
-        <div id='mv-search-title' class='mv-search-title'>Search</div>
-        <button id='mv-search-close' class='mv-search-close' aria-label='Close'>Close</button>
+    <div class='mv-search-body'>
+      <div class='mv-search-row'>
+        <label style='display:flex;align-items:center;gap:6px;'><input type='checkbox' id='mv-search-jql' style='accent-color:var(--c-accent)'/> JQL mode</label>
+        <span class='mv-search-hint'>Toggle to type raw Jira queries</span>
       </div>
-      <div class='mv-search-body'>
-        <div class='mv-search-row'>
-          <label><input type='checkbox' id='mv-search-jql' /> JQL</label>
-          <span class='mv-search-hint'>Toggle JQL to type raw Jira queries</span>
-        </div>
-        <div id='mv-search-filters' class='mv-search-row'>
-          <label for='mv-search-project'>Project</label>
-          <select id='mv-search-project'></select>
-          <label for='mv-search-type'>Type</label>
-          <select id='mv-search-type'></select>
-          <label for='mv-search-status'>Status</label>
-          <select id='mv-search-status'></select>
-        </div>
-        <div class='mv-search-row'>
-          <label for='mv-search-text'>Query</label>
-          <input id='mv-search-text' type='text' placeholder='Enter issue key or search text...' />
-        </div>
-        <div class='mv-search-actions'>
-          <button id='mv-search-run' class='mv-search-btn'>Search</button>
-        </div>
+      <div id='mv-search-filters' class='mv-search-row'>
+        <label for='mv-search-project'>Project</label><select id='mv-search-project'></select>
+        <label for='mv-search-type'>Type</label><select id='mv-search-type'></select>
+        <label for='mv-search-status'>Status</label><select id='mv-search-status'></select>
       </div>
-      <div class='mv-search-results'>
-        <iframe id='mv-search-results'></iframe>
+      <div class='mv-search-row'>
+        <label for='mv-search-text'>Query</label>
+        <input id='mv-search-text' type='text' placeholder='Issue key or search text…' />
+      </div>
+      <div class='mv-search-actions'>
+        <button id='mv-search-run' class='mv-search-btn'>Search</button>
       </div>
     </div>
+    <div class='mv-search-results'><iframe id='mv-search-results' title='Search results'></iframe></div>
   </div>
+</div>
 
-  <script src='monovera.web.js'></script>
+<script src='monovera.web.js'></script>
 </body>
 </html>";
 
@@ -2184,7 +2917,50 @@ body {{ overflow: hidden; }}
   const ddlStatus = document.getElementById('mv-search-status');
   const resultsFrame = document.getElementById('mv-search-results');
 
-  // Resizer
+  // Sidebar toolbar buttons
+  const btnSearch = document.getElementById('btn-search');
+  const btnRecent = document.getElementById('btn-recent');
+  const btnAI    = document.getElementById('btn-ai');
+  const btnConfig = document.getElementById('btn-config');
+  const btnUpdate = document.getElementById('btn-update');
+  const btnReport = document.getElementById('btn-report');
+
+  // ── Toast notifications ─────────────────────────────────────────
+  function showToast(msg, type = '') {
+    const area = document.getElementById('mv-toast-area');
+    if (!area) return;
+    const t = document.createElement('div');
+    t.className = 'mv-toast' + (type ? ' ' + type : '');
+    t.textContent = msg;
+    area.appendChild(t);
+    setTimeout(() => { t.style.transition = 'opacity .35s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 380); }, 2800);
+  }
+
+  // ── Generic overlay builder ──────────────────────────────────────
+  function buildOverlay({ id, titleText, bodyHtml, footerHtml, panelClass = '' }) {
+    const ov = document.createElement('div');
+    ov.className = 'mv-overlay'; ov.id = id;
+    ov.setAttribute('aria-hidden', 'false');
+    const panel = document.createElement('div');
+    panel.className = 'mv-overlay-panel' + (panelClass ? ' ' + panelClass : '');
+    panel.innerHTML = `
+      <div class='mv-overlay-header'>
+        <span class='mv-overlay-title'>${titleText}</span>
+        <button class='mv-overlay-close' aria-label='Close'>✕</button>
+      </div>
+      <div class='mv-overlay-body'>${bodyHtml}</div>
+      ${footerHtml ? `<div class='mv-overlay-footer'>${footerHtml}</div>` : ''}`;
+    ov.appendChild(panel);
+    document.body.appendChild(ov);
+    panel.querySelector('.mv-overlay-close').addEventListener('click', () => ov.remove());
+    ov.addEventListener('click', (e) => { if (!panel.contains(e.target)) ov.remove(); });
+    window.addEventListener('keydown', function onKey(e) {
+      if (e.key === 'Escape') { window.removeEventListener('keydown', onKey); ov.remove(); }
+    });
+    return { ov, panel };
+  }
+
+  // ── Resizer ──────────────────────────────────────────────────────
   const MIN_LEFT = 220, MIN_RIGHT = 360;
   function setLeftWidth(px){ mainEl.style.setProperty('--left', px + 'px'); splitter.setAttribute('aria-valuenow', String(px)); }
   function clampWidth(px){ const r = mainEl.getBoundingClientRect(); const max = Math.max(MIN_LEFT, r.width - MIN_RIGHT); return Math.max(MIN_LEFT, Math.min(px, max)); }
@@ -2197,15 +2973,42 @@ body {{ overflow: hidden; }}
   splitter.addEventListener('touchstart', startDrag, { passive:false });
 
   // Status
+  const syncDot  = document.getElementById('syncDot');
+  const syncText = document.getElementById('syncText');
+  function setSyncUI(code, pending) {
+    syncDot.className = 'sync-dot';
+    if (code === 'ok') {
+      syncDot.classList.add('sync-dot-ok');
+      syncText.textContent = '✅ Up to date';
+      syncText.style.color = 'var(--c-ok, #2ecc71)';
+    } else if (code === 'updates') {
+      syncDot.classList.add('sync-dot-updates');
+      syncText.textContent = pending > 0
+        ? `⚠ ${pending} update${pending !== 1 ? 's' : ''} available`
+        : '⚠ Updates available';
+      syncText.style.color = 'var(--c-danger, #e74c3c)';
+    } else if (code === 'offline') {
+      syncDot.classList.add('sync-dot-offline');
+      syncText.textContent = '⏸ Offline';
+      syncText.style.color = 'var(--c-text-soft)';
+    } else {
+      syncDot.classList.add('sync-dot-checking');
+      syncText.textContent = 'Checking…';
+      syncText.style.color = 'var(--c-text-soft)';
+    }
+  }
   async function refreshStatus(){
+    setSyncUI('checking', 0);
     try {
       const s = await (await fetch('/api/status')).json();
-      //document.getElementById('statusUser').textContent = '👤 Connected as: ' + (s.connectedUser || '-');
-      //document.getElementById('statusMode').textContent = '🌐 Mode: ' + (s.offline ? 'Offline' : 'Online');
-      document.getElementById('statusUpdated').textContent = '🕒 Last Synced : ' + (s.lastDbUpdated || 'N/A');
-    } catch {}
+      document.getElementById('statusUpdated').textContent =
+        '🕒 Last Synced: ' + (s.lastDbUpdated || 'N/A');
+      setSyncUI(s.syncStatus || (s.offline ? 'offline' : 'ok'), s.pendingUpdates || 0);
+    } catch {
+      setSyncUI('offline', 0);
+    }
   }
-  refreshStatus(); setInterval(refreshStatus, 10000);
+  refreshStatus(); setInterval(refreshStatus, 15000);
 
   // Tree selection
   let selectedAnchor = null;
@@ -2394,11 +3197,11 @@ body {{ overflow: hidden; }}
       viewsEl.appendChild(view);
 
       try {
-        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading...</div></body></html>`;
+        iframe.srcdoc = `<html><body style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Inter,sans-serif;color:#7c5cbf;background:#f7f4fb;'>Loading…</body></html>`;
         const html = await (await fetch(`/api/issue/${encodeURIComponent(key)}/html`)).text();
         iframe.srcdoc = html;
       } catch {
-        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load ${key}</div></body></html>`;
+        iframe.srcdoc = `<html><body style='padding:20px;color:#c94040;font:13px Inter,sans-serif;'>Failed to load ${key}</body></html>`;
       }
 
       // Make the newly added tab visible
@@ -2433,11 +3236,11 @@ body {{ overflow: hidden; }}
       viewsEl.appendChild(view);
 
       try {
-        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading Recent Updates...</div></body></html>`;
+        iframe.srcdoc = `<html><body style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Inter,sans-serif;color:#7c5cbf;background:#f7f4fb;'>Loading Recent Updates…</body></html>`;
         const html = await (await fetch(`/api/recent/updated/html?days=${encodeURIComponent(days)}`)).text();
         iframe.srcdoc = html;
       } catch {
-        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load Recent Updates</div></body></html>`;
+        iframe.srcdoc = `<html><body style='padding:20px;color:#c94040;font:13px Inter,sans-serif;'>Failed to load Recent Updates</body></html>`;
       }
 
       ensureTabVisible(tab);
@@ -2471,11 +3274,11 @@ body {{ overflow: hidden; }}
       viewsEl.appendChild(view);
 
       try {
-        iframe.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Loading AI Chat...</div></body></html>`;
+        iframe.srcdoc = `<html><body style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Inter,sans-serif;color:#7c5cbf;background:#f7f4fb;'>Loading AI Chat…</body></html>`;
         const html = await (await fetch('/api/ai/chat')).text();
         iframe.srcdoc = html;
       } catch {
-        iframe.srcdoc = `<html><body><div style='padding: 20px; color:#b00;'>Failed to load AI Chat</div></body></html>`;
+        iframe.srcdoc = `<html><body style='padding:20px;color:#c94040;font:13px Inter,sans-serif;'>Failed to load AI Chat</body></html>`;
       }
 
       ensureTabVisible(tab);
@@ -2499,18 +3302,43 @@ body {{ overflow: hidden; }}
   // Tree context menu
   function hideTreeMenu(){ treeMenu.style.display='none'; treeMenu.setAttribute('aria-hidden','true'); }
   function showTreeMenu(x, y){
+    // Show immediately — no blocking fetch
     treeMenu.style.display='block';
     treeMenu.style.left = Math.max(2, Math.min(x, window.innerWidth - treeMenu.offsetWidth - 2)) + 'px';
-    treeMenu.style.top = Math.max(2, Math.min(y, window.innerHeight - treeMenu.offsetHeight - 2)) + 'px';
+    treeMenu.style.top  = Math.max(2, Math.min(y, window.innerHeight - treeMenu.offsetHeight - 2)) + 'px';
     treeMenu.setAttribute('aria-hidden','false');
+    // Make sure all items are visible first (reset any previous state)
+    treeMenu.querySelectorAll('li[data-action]').forEach(li => { li.style.display=''; li.style.opacity='1'; li.style.pointerEvents=''; });
+    // Non-blocking permission refinement
+    getEditorInfo().then(info => {
+      if (!treeMenu.style.display || treeMenu.style.display === 'none') return; // menu closed already
+      const key = window.__ctxKey;
+      const prefix = key ? key.split('-')[0] : '';
+      const proj = (info.projects || []).find(p => p.projectKey === prefix);
+      // Default to true when project not matched (avoids incorrectly locking out the user)
+      const canCreate = proj ? (proj.canCreate ?? true) : true;
+      const canEdit   = proj ? (proj.canEdit   ?? true) : true;
+      const dim = (id, allowed) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.opacity = allowed ? '1' : '0.45';
+        el.style.pointerEvents = allowed ? '' : 'none';
+      };
+      dim('ctx-add-child',   canCreate);
+      dim('ctx-add-sibling', canCreate);
+      dim('ctx-edit',        canEdit);
+      dim('ctx-link',        canEdit);
+      dim('ctx-chparent',    canEdit);
+      dim('ctx-move-up',     canEdit);
+      dim('ctx-move-down',   canEdit);
+    }).catch(() => {});
   }
   treeEl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const a = e.target && e.target.closest ? e.target.closest('a[data-key]') : null;
     if (a) { setSelected(a); window.__ctxKey = a.dataset.key; }
     showTreeMenu(e.clientX, e.clientY);
-  });
-  document.addEventListener('click', (e) => {
+  });  document.addEventListener('click', (e) => {
     if (!treeMenu.contains(e.target)) { hideTreeMenu(); window.__ctxKey = null; }
   });
   treeMenu.addEventListener('click', (e) => {
@@ -2518,9 +3346,21 @@ body {{ overflow: hidden; }}
     if (!li) return;
     const action = li.getAttribute('data-action');
     hideTreeMenu();
-    if (action === 'search') openSearchDialog();
-    if (action === 'report') generateReport();
-    if (action === 'ask-ai') openAIChatTab();
+    if (action === 'search')           openSearchDialog();
+    if (action === 'report')           generateReport();
+    if (action === 'ask-ai')           openAIChatTab();
+    if (action === 'recent')           openRecentUpdatesTab();
+    if (action === 'config')           openConfigOverlay();
+    if (action === 'update-hierarchy') openHierarchyUpdateOverlay();
+    if (action === 'edit')             { const k = window.__ctxKey || selectedAnchor?.dataset?.key; if (k) openEditIssue(k); }
+    if (action === 'add-child')        openAddIssueOverlay('Child');
+    if (action === 'add-sibling')      openAddIssueOverlay('Sibling');
+    if (action === 'link-related')     openLinkRelatedOverlay();
+    if (action === 'change-parent')    openChangeParentOverlay();
+    if (action === 'move-up')          moveNode(-1);
+    if (action === 'move-down')        moveNode(1);
+    if (action === 'folder-structure') openCreateFolderOverlay();
+    if (action === 'train-ai')         openAITrainOverlay();
   });
 
   // Tab context menu
@@ -2572,70 +3412,38 @@ body {{ overflow: hidden; }}
     }
   });
 
-  // Centered confirmation like history alerts
-  function mvConfirm(message) {
+  // ── Pastel confirm dialog ────────────────────────────────────────
+  function mvConfirm(message, { confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
     return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'mv-confirm';
-      overlay.style.display = 'flex';
-      overlay.setAttribute('aria-hidden', 'false');
-
-      const panel = document.createElement('div');
-      panel.className = 'mv-confirm-panel';
-
-      const body = document.createElement('div');
-      body.className = 'mv-confirm-body';
-
-      const alertBox = document.createElement('div');
-      alertBox.className = 'mv-alert';
-      alertBox.textContent = message;
-
-      const actions = document.createElement('div');
-      actions.className = 'mv-confirm-actions';
-
-      const btnCancel = document.createElement('button');
-      btnCancel.className = 'mv-btn';
-      btnCancel.textContent = 'Cancel';
-
-      const btnOk = document.createElement('button');
-      btnOk.className = 'mv-btn mv-btn-primary';
-      btnOk.textContent = 'OK';
-
-      actions.appendChild(btnCancel);
-      actions.appendChild(btnOk);
-      body.appendChild(alertBox);
-      panel.appendChild(body);
-      panel.appendChild(actions);
-      overlay.appendChild(panel);
-      document.body.appendChild(overlay);
-
-      const cleanup = (val) => { overlay.remove(); resolve(val); };
-      btnOk.addEventListener('click', () => cleanup(true));
-      btnCancel.addEventListener('click', () => cleanup(false));
-      overlay.addEventListener('click', (e) => { if (!panel.contains(e.target)) cleanup(false); });
-      window.addEventListener('keydown', function onKey(e) {
-        if (e.key === 'Escape') { window.removeEventListener('keydown', onKey); cleanup(false); }
-        if (e.key === 'Enter') { window.removeEventListener('keydown', onKey); cleanup(true); }
-      }, { once: true });
+      const { ov, panel } = buildOverlay({
+        id: 'mv-confirm-ov',
+        titleText: '⚠️ Confirm',
+        panelClass: 'mv-confirm-panel',
+        bodyHtml: `<div style='font-size:13px;line-height:1.6;color:var(--c-text);'>${message}</div>`,
+        footerHtml: `<button id='mv-conf-cancel' class='mv-btn'>${cancelLabel}</button>
+                     <button id='mv-conf-ok' class='mv-btn ${danger ? 'mv-btn-danger' : 'mv-btn-primary'}'>${confirmLabel}</button>`
+      });
+      const cleanup = (val) => { ov.remove(); resolve(val); };
+      panel.querySelector('#mv-conf-ok').addEventListener('click', () => cleanup(true));
+      panel.querySelector('#mv-conf-cancel').addEventListener('click', () => cleanup(false));
     });
   }
 
-  // Report generation: open new tab and navigate with absolute URL
+  // ── Report generation ────────────────────────────────────────────
   async function generateReport() {
     const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key) || null;
-    if (!key) { alert('Please select an item in the tree.'); return; }
+    if (!key) { showToast('Please select an item in the tree.', 'warn'); return; }
 
-    const ok = await mvConfirm('Generate hierarchical HTML report for ' + key + ' and its children?');
+    const ok = await mvConfirm('Generate hierarchical HTML report for <strong>' + key + '</strong> and its children?', { confirmLabel: 'Generate' });
     if (!ok) return;
 
-    // Pre-open a tab and show a placeholder so it never stays blank
     let popup = null;
     try {
       popup = window.open('about:blank', '_blank');
       if (popup && !popup.closed) {
-        popup.document.write(`<html><head><title>Generating report…</title></head>
-          <body style='font:14px Segoe UI;display:flex;align-items:center;justify-content:center;height:100vh;color:#1565c0;'>
-            Generating report for ${key}…</body></html>`);
+        popup.document.write(`<html><head><title>Generating report\u2026</title></head>
+          <body style='font:14px Inter,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;color:var(--c-accent,#7c5cbf);'>
+            Generating report for ${key}\u2026</body></html>`);
         popup.document.close();
         try { popup.focus(); } catch {}
       }
@@ -2646,24 +3454,757 @@ body {{ overflow: hidden; }}
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
       const targetUrl = data && data.url ? new URL(data.url, window.location.origin).href : null;
-
       if (targetUrl) {
-        if (popup && !popup.closed) {
-          popup.location.replace(targetUrl);
-        } else {
-          window.open(targetUrl, '_blank');
-        }
+        if (popup && !popup.closed) popup.location.replace(targetUrl);
+        else window.open(targetUrl, '_blank');
       } else {
-        if (popup && !popup.closed) {
-          popup.document.body.innerHTML = `<div style='padding:12px;color:#b00;'>Report generated but no URL was returned.</div>`;
-        } else {
-          alert('Report generated but no URL was returned.');
-        }
+        if (popup && !popup.closed) popup.document.body.innerHTML = `<div style='padding:12px;color:var(--c-danger,#c94040);'>Report generated but no URL was returned.</div>`;
       }
     } catch (err) {
-      if (popup && !popup.closed) popup.document.body.innerHTML = `<div style='padding:12px;color:#b00;'>Failed to generate report: ${String(err?.message || err)}</div>`;
+      showToast('Failed to generate report: ' + String(err?.message || err), 'error');
+      if (popup && !popup.closed) popup.document.body.innerHTML = `<div style='padding:12px;color:var(--c-danger,#c94040);'>Failed: ${String(err?.message || err)}</div>`;
     }
   }
+
+  // ── Configuration overlay ────────────────────────────────────────
+  async function openConfigOverlay() {
+    let cfg = { Jira: {}, Projects: [] };
+    try { cfg = await (await fetch('/api/config')).json(); } catch {}
+    const jira     = cfg.Jira     || cfg.jira     || {};
+    const projects = cfg.Projects || cfg.projects || [];
+
+    // safe: escape single-quotes for inline HTML attribute values
+    function esc(v) { return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,'&#39;'); }
+
+    function projRowHtml(p, i) {
+      return '<tr data-pidx=' + i + '>' +
+        '<td style=\'padding:4px 6px;font-weight:500;color:var(--c-accent);\'>' + esc(p.Project||p.project) + '</td>' +
+        '<td style=\'padding:4px 6px;font-size:12px;color:var(--c-text-soft);\'>' + esc(p.Root||p.root) + '</td>' +
+        '<td style=\'padding:4px 6px;font-size:12px;\'>' + esc(p.LinkTypeName||p.linkTypeName) + '</td>' +
+        '<td style=\'padding:4px 6px;font-size:12px;\'>' + esc(p.SortingField||p.sortingField) + '</td>' +
+        '<td style=\'padding:4px 6px;text-align:center;\'>' +
+          '<button class=\'mv-proj-btn\' data-edit=' + i + ' title=\'Edit\'>✏️</button> ' +
+          '<button class=\'mv-proj-btn danger\' data-del=' + i + ' title=\'Delete\'>✕</button>' +
+        '</td></tr>';
+    }
+
+    function mapRowHtml(name, icon) {
+      return '<tr>' +
+        '<td><input style=\'width:100%;padding:3px 5px;border:1px solid var(--c-border);border-radius:5px;font-size:12px;\' value=\'' + esc(name) + '\' data-col=\'k\'/></td>' +
+        '<td><input style=\'width:100%;padding:3px 5px;border:1px solid var(--c-border);border-radius:5px;font-size:12px;\' value=\'' + esc(icon) + '\' data-col=\'v\'/></td>' +
+        '<td><button class=\'mv-proj-btn danger\' data-del-row=\'1\' style=\'padding:2px 6px;\'>✕</button></td></tr>';
+    }
+
+    const connHtml =
+      '<div class=\'mv-field\'><label>Jira Base URL</label>' +
+        '<input id=\'cfg-url\' value=\'' + esc(jira.Url||jira.url) + '\' placeholder=\'https://yourorg.atlassian.net\' /></div>' +
+      '<div class=\'mv-field\'><label>Email / Username</label>' +
+        '<input id=\'cfg-email\' value=\'' + esc(jira.Email||jira.email) + '\' placeholder=\'user@example.com\' /></div>' +
+      '<div class=\'mv-field\'><label>API Token</label>' +
+        '<input id=\'cfg-token\' type=\'password\' value=\'' + esc(jira.Token||jira.token) + '\' placeholder=\'Jira API token\' /></div>' +
+      '<div style=\'display:flex;align-items:center;gap:8px;margin-top:4px;\'>' +
+        '<input type=\'checkbox\' id=\'cfg-offline\' style=\'accent-color:var(--c-accent);width:16px;height:16px;\' ' + ((jira.OfflineMode||jira.offlineMode) ? 'checked' : '') + ' />' +
+        '<label for=\'cfg-offline\' style=\'font-size:13px;cursor:pointer;\'>Offline mode (skip live Jira sync)</label>' +
+      '</div>';
+
+    const projTabHtml =
+      '<div style=\'overflow:auto;max-height:220px;border:1px solid var(--c-border);border-radius:7px;margin-bottom:10px;\'>' +
+        '<table id=\'cfg-proj-table\' style=\'width:100%;border-collapse:collapse;font-size:12px;\'>' +
+          '<thead style=\'background:var(--c-sidebar);position:sticky;top:0;\'><tr>' +
+            '<th style=\'padding:6px 8px;text-align:left;color:var(--c-text-soft);font-weight:600;\'>Project Key</th>' +
+            '<th style=\'padding:6px 8px;text-align:left;color:var(--c-text-soft);font-weight:600;\'>Root Issue</th>' +
+            '<th style=\'padding:6px 8px;text-align:left;color:var(--c-text-soft);font-weight:600;\'>Link Type</th>' +
+            '<th style=\'padding:6px 8px;text-align:left;color:var(--c-text-soft);font-weight:600;\'>Sort Field</th>' +
+            '<th style=\'padding:6px 8px;text-align:center;color:var(--c-text-soft);font-weight:600;\'>Actions</th>' +
+          '</tr></thead>' +
+          '<tbody id=\'cfg-proj-tbody\'>' + projects.map(projRowHtml).join('') + '</tbody>' +
+        '</table>' +
+      '</div>' +
+      '<button class=\'mv-btn mv-btn-primary\' id=\'cfg-add-proj\' style=\'width:100%;\'>+ Add Project</button>' +
+      '<div id=\'cfg-proj-editor\' style=\'display:none;margin-top:10px;border:1px solid var(--c-accent2);border-radius:8px;padding:10px;background:var(--c-bg);\'>' +
+        '<div style=\'font-weight:600;font-size:13px;color:var(--c-accent);margin-bottom:8px;\' id=\'cfg-proj-editor-title\'>New Project</div>' +
+        '<div style=\'display:grid;grid-template-columns:1fr 1fr;gap:8px;\'>' +
+          '<div class=\'mv-field\' style=\'margin:0\'><label>Project Key</label><input id=\'ped-key\' placeholder=\'e.g. ABC\' style=\'text-transform:uppercase\'/></div>' +
+          '<div class=\'mv-field\' style=\'margin:0\'><label>Root Issue Key</label><input id=\'ped-root\' placeholder=\'e.g. ABC-1\'/></div>' +
+          '<div class=\'mv-field\' style=\'margin:0\'><label>Link Type Name</label><input id=\'ped-link\' placeholder=\'e.g. Blocks\'/></div>' +
+          '<div class=\'mv-field\' style=\'margin:0\'><label>Sorting Field</label><input id=\'ped-sort\' placeholder=\'e.g. Priority\'/></div>' +
+        '</div>' +
+        '<div style=\'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;\'>' +
+          '<div>' +
+            '<div style=\'font-size:12px;font-weight:600;color:var(--c-text-soft);margin-bottom:4px;\'>Issue Types (Name \u2192 Icon file)</div>' +
+            '<div style=\'overflow:auto;max-height:120px;border:1px solid var(--c-border);border-radius:6px;\'>' +
+              '<table style=\'width:100%;border-collapse:collapse;font-size:12px;\'>' +
+                '<thead style=\'background:var(--c-sidebar);\'><tr>' +
+                  '<th style=\'padding:4px 6px;text-align:left;\'>Type Name</th>' +
+                  '<th style=\'padding:4px 6px;text-align:left;\'>Icon File</th>' +
+                  '<th style=\'padding:4px 6px;\'></th>' +
+                '</tr></thead>' +
+                '<tbody id=\'ped-types-body\'></tbody>' +
+              '</table>' +
+            '</div>' +
+            '<button class=\'mv-proj-btn\' id=\'ped-add-type\' style=\'margin-top:4px;width:100%;\'>+ Add Type</button>' +
+          '</div>' +
+          '<div>' +
+            '<div style=\'font-size:12px;font-weight:600;color:var(--c-text-soft);margin-bottom:4px;\'>Statuses (Name \u2192 Icon file)</div>' +
+            '<div style=\'overflow:auto;max-height:120px;border:1px solid var(--c-border);border-radius:6px;\'>' +
+              '<table style=\'width:100%;border-collapse:collapse;font-size:12px;\'>' +
+                '<thead style=\'background:var(--c-sidebar);\'><tr>' +
+                  '<th style=\'padding:4px 6px;text-align:left;\'>Status Name</th>' +
+                  '<th style=\'padding:4px 6px;text-align:left;\'>Icon File</th>' +
+                  '<th style=\'padding:4px 6px;\'></th>' +
+                '</tr></thead>' +
+                '<tbody id=\'ped-status-body\'></tbody>' +
+              '</table>' +
+            '</div>' +
+            '<button class=\'mv-proj-btn\' id=\'ped-add-status\' style=\'margin-top:4px;width:100%;\'>+ Add Status</button>' +
+          '</div>' +
+        '</div>' +
+        '<div style=\'display:flex;gap:8px;justify-content:flex-end;margin-top:10px;\'>' +
+          '<button class=\'mv-btn\' id=\'ped-cancel\'>Cancel</button>' +
+          '<button class=\'mv-btn mv-btn-primary\' id=\'ped-save\'>\uD83D\uDCBE Save Project</button>' +
+        '</div>' +
+      '</div>';
+
+    const { ov, panel } = buildOverlay({
+      id: 'mv-config-ov',
+      titleText: '\u2699\uFE0F Configuration',
+      panelClass: 'mv-cfg-panel',
+      bodyHtml:
+        '<div class=\'mv-cfg-tabs-bar\'>' +
+          '<button class=\'mv-cfg-tab active\' data-tab=\'conn\'>\uD83D\uDD0C Connection</button>' +
+          '<button class=\'mv-cfg-tab\' data-tab=\'projects\'>\uD83D\uDCC1 Projects</button>' +
+        '</div>' +
+        '<div class=\'mv-cfg-pane active\' id=\'cfgpane-conn\'>' + connHtml + '</div>' +
+        '<div class=\'mv-cfg-pane\' id=\'cfgpane-projects\'>' + projTabHtml + '</div>',
+      footerHtml:
+        '<button id=\'cfg-cancel\' class=\'mv-btn\'>Cancel</button>' +
+        '<button id=\'cfg-save\' class=\'mv-btn mv-btn-primary\'>\uD83D\uDCBE Save Configuration</button>'
+    });
+
+    let localProjects = projects.map(p => ({
+      Project:      p.Project      || p.project      || '',
+      Root:         p.Root         || p.root         || '',
+      LinkTypeName: p.LinkTypeName || p.linkTypeName || '',
+      SortingField: p.SortingField || p.sortingField || '',
+      Types:        p.Types        || p.types        || {},
+      Status:       p.Status       || p.status       || {}
+    }));
+    let editingIdx = -1;
+
+    const tbody = panel.querySelector('#cfg-proj-tbody');
+    const editor = panel.querySelector('#cfg-proj-editor');
+
+    function readMapFromTable(tbodyEl) {
+      const dict = {};
+      tbodyEl.querySelectorAll('tr').forEach(tr => {
+        const k = (tr.querySelector('[data-col=\'k\']')?.value || '').trim();
+        const v = (tr.querySelector('[data-col=\'v\']')?.value || '').trim();
+        if (k) dict[k] = v;
+      });
+      return dict;
+    }
+
+    function bindDelRows(tbodyEl) {
+      tbodyEl.querySelectorAll('[data-del-row]').forEach(btn => {
+        btn.addEventListener('click', () => btn.closest('tr').remove());
+      });
+    }
+
+    function openEditor(idx) {
+      editingIdx = idx;
+      const isNew = idx < 0;
+      const p = isNew ? { Project:'', Root:'', LinkTypeName:'', SortingField:'', Types:{}, Status:{} } : localProjects[idx];
+      panel.querySelector('#cfg-proj-editor-title').textContent = isNew ? 'New Project' : 'Edit: ' + p.Project;
+      panel.querySelector('#ped-key').value   = p.Project;
+      panel.querySelector('#ped-root').value  = p.Root;
+      panel.querySelector('#ped-link').value  = p.LinkTypeName;
+      panel.querySelector('#ped-sort').value  = p.SortingField;
+      const typesTbody  = panel.querySelector('#ped-types-body');
+      const statusTbody = panel.querySelector('#ped-status-body');
+      typesTbody.innerHTML  = Object.entries(p.Types  || {}).map(([k,v]) => mapRowHtml(k,v)).join('');
+      statusTbody.innerHTML = Object.entries(p.Status || {}).map(([k,v]) => mapRowHtml(k,v)).join('');
+      bindDelRows(typesTbody); bindDelRows(statusTbody);
+      editor.style.display = 'block';
+      panel.querySelector('#ped-key').focus();
+    }
+
+    function refreshProjTable() {
+      tbody.innerHTML = localProjects.map(projRowHtml).join('');
+      tbody.querySelectorAll('[data-edit]').forEach(btn => {
+        btn.addEventListener('click', () => openEditor(Number(btn.dataset.edit)));
+      });
+      tbody.querySelectorAll('[data-del]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const nm = localProjects[Number(btn.dataset.del)]?.Project || '';
+          if (await mvConfirm('Delete project <strong>' + nm + '</strong>?', { confirmLabel:'Delete', danger:true }))
+            { localProjects.splice(Number(btn.dataset.del), 1); refreshProjTable(); }
+        });
+      });
+    }
+    refreshProjTable();
+
+    panel.querySelector('#ped-add-type').addEventListener('click', () => {
+      const tb = panel.querySelector('#ped-types-body');
+      tb.insertAdjacentHTML('beforeend', mapRowHtml('',''));
+      bindDelRows(tb);
+    });
+    panel.querySelector('#ped-add-status').addEventListener('click', () => {
+      const tb = panel.querySelector('#ped-status-body');
+      tb.insertAdjacentHTML('beforeend', mapRowHtml('',''));
+      bindDelRows(tb);
+    });
+
+    panel.querySelector('#cfg-add-proj').addEventListener('click', () => openEditor(-1));
+    panel.querySelector('#ped-cancel').addEventListener('click', () => { editor.style.display = 'none'; });
+    panel.querySelector('#ped-save').addEventListener('click', () => {
+      const key = (panel.querySelector('#ped-key').value || '').trim().toUpperCase();
+      if (!key) { showToast('Project Key is required.', 'warn'); return; }
+      const proj = {
+        Project:      key,
+        Root:         (panel.querySelector('#ped-root').value || '').trim(),
+        LinkTypeName: (panel.querySelector('#ped-link').value || '').trim(),
+        SortingField: (panel.querySelector('#ped-sort').value || '').trim(),
+        Types:        readMapFromTable(panel.querySelector('#ped-types-body')),
+        Status:       readMapFromTable(panel.querySelector('#ped-status-body'))
+      };
+      if (editingIdx < 0) localProjects.push(proj);
+      else localProjects[editingIdx] = proj;
+      editor.style.display = 'none';
+      refreshProjTable();
+    });
+
+    panel.querySelectorAll('.mv-cfg-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        panel.querySelectorAll('.mv-cfg-tab').forEach(t => t.classList.remove('active'));
+        panel.querySelectorAll('.mv-cfg-pane').forEach(p => p.classList.remove('active'));
+        tab.classList.add('active');
+        panel.querySelector('#cfgpane-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    panel.querySelector('#cfg-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#cfg-save').addEventListener('click', async () => {
+      const payload = {
+        Jira: {
+          Url:         (panel.querySelector('#cfg-url').value   || '').trim(),
+          Email:       (panel.querySelector('#cfg-email').value || '').trim(),
+          Token:       (panel.querySelector('#cfg-token').value || '').trim(),
+          OfflineMode: panel.querySelector('#cfg-offline').checked
+        },
+        Projects: localProjects
+      };
+      const btn = panel.querySelector('#cfg-save');
+      btn.disabled = true; btn.textContent = 'Saving\u2026';
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        showToast('Configuration saved. Restart may be needed for full effect.', 'success');
+        editorInfo = null;
+        ov.remove();
+      } catch (err) {
+        showToast('Failed to save: ' + String(err?.message || err), 'error');
+        btn.disabled = false; btn.textContent = '\uD83D\uDCBE Save Configuration';
+      }
+    });
+  }
+
+  // ── Hierarchy Update overlay ─────────────────────────────────────
+  async function openHierarchyUpdateOverlay() {
+    let projectList = [];
+    let lastUpdated = 'N/A';
+    try {
+      const data = await (await fetch('/api/projects')).json();
+      projectList = data?.projects || data || [];
+    } catch {}
+    try {
+      const st = await (await fetch('/api/status')).json();
+      lastUpdated = st.lastDbUpdated || 'N/A';
+    } catch {}
+
+    const projOptions = projectList.map(p =>
+      `<option value='${p.projectKey || p}'>${p.projectKey || p}${p.projectName ? ' \u2014 ' + p.projectName : ''}</option>`
+    ).join('');
+
+    const { ov, panel } = buildOverlay({
+      id: 'mv-hier-ov',
+      titleText: '\uD83D\uDD04 Update Hierarchy',
+      panelClass: 'mv-hier-panel',
+      bodyHtml: `
+        <div style='text-align:center;margin-bottom:10px;color:var(--c-text-soft);font-size:12px;'>
+          Last updated: <strong style='color:var(--c-accent);'>${lastUpdated}</strong>
+        </div>
+        <div class='mv-field'>
+          <label>Update Type</label>
+          <select id='hier-type'>
+            <option value='Difference' selected>Difference (recent changes)</option>
+            <option value='Complete'>Complete (full refresh)</option>
+          </select>
+        </div>
+        <div class='mv-field'>
+          <label>Project (optional)</label>
+          <select id='hier-project'><option value=''>All projects</option>${projOptions}</select>
+        </div>
+        <div class='mv-field mv-hint' style='color:var(--c-text-soft);font-size:12px;'>
+          <em>Difference</em> fetches only recent Jira changes. <em>Complete</em> re-syncs everything.
+        </div>
+        <div id='hier-progress-area' style='display:none;margin-top:12px;'>
+          <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
+            <span id='hier-progress-project' style='font-size:12px;font-weight:600;color:var(--c-accent);'></span>
+            <span id='hier-progress-count' style='font-size:12px;color:var(--c-text-soft);'></span>
+          </div>
+          <div class='mv-progress' style='height:10px;border-radius:6px;overflow:hidden;background:var(--c-border);'>
+            <div class='mv-progress-bar' id='hier-progress-bar' style='width:0%;transition:width .4s ease;'></div>
+          </div>
+          <div style='display:flex;justify-content:space-between;margin-top:4px;'>
+            <span id='hier-progress-msg' style='font-size:11px;color:var(--c-text-soft);'>Preparing\u2026</span>
+            <span id='hier-progress-pct' style='font-size:11px;color:var(--c-text-soft);'></span>
+          </div>
+        </div>`,
+      footerHtml: `<button id='hier-cancel' class='mv-btn'>Cancel</button>
+                   <button id='hier-run' class='mv-btn mv-btn-primary'>Start Update</button>`
+    });
+
+    panel.querySelector('#hier-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#hier-run').addEventListener('click', async () => {
+      const updateType = panel.querySelector('#hier-type').value;
+      const project    = panel.querySelector('#hier-project').value || null;
+      panel.querySelector('#hier-run').disabled    = true;
+      panel.querySelector('#hier-cancel').disabled = true;
+      panel.querySelector('#hier-progress-area').style.display = 'block';
+
+      const bar      = panel.querySelector('#hier-progress-bar');
+      const msgEl    = panel.querySelector('#hier-progress-msg');
+      const projEl   = panel.querySelector('#hier-progress-project');
+      const countEl  = panel.querySelector('#hier-progress-count');
+      const pctEl    = panel.querySelector('#hier-progress-pct');
+
+      msgEl.textContent = 'Starting update\u2026';
+
+      // ── Polling loop ──────────────────────────────────────────────
+      let pollTimer = null;
+      let lastProject = '';
+      async function pollProgress() {
+        try {
+          const p = await (await fetch('/api/hierarchy/progress')).json();
+          if (p.inProgress) {
+            if (p.project && p.project !== lastProject) {
+              lastProject = p.project;
+              projEl.textContent = '\uD83D\uDCC2 ' + p.project;
+            }
+            const pct = Math.min(100, p.percent || 0);
+            bar.style.width = pct + '%';
+            pctEl.textContent = pct.toFixed(1) + '%';
+            if (p.total > 0) {
+              countEl.textContent = p.completed + ' / ' + p.total + ' issues';
+              msgEl.textContent   = 'Syncing issues\u2026';
+            } else {
+              countEl.textContent = '';
+              msgEl.textContent   = 'Fetching from Jira\u2026';
+            }
+          }
+        } catch { /* ignore mid-update errors */ }
+      }
+      pollTimer = setInterval(pollProgress, 600);
+
+      // ── POST the actual update ────────────────────────────────────
+      try {
+        const res = await fetch('/api/hierarchy/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ updateType, project, forceSync: true })
+        });
+        clearInterval(pollTimer);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        bar.style.width         = '100%';
+        pctEl.textContent       = '100%';
+        msgEl.textContent       = 'Update complete!';
+        countEl.textContent     = '';
+        projEl.textContent      = '';
+        showToast('Hierarchy updated successfully.', 'success');
+        await refreshStatus();
+        setTimeout(() => ov.remove(), 1200);
+        await loadRoots();
+        await expandRootLevelOnce();
+      } catch (err) {
+        clearInterval(pollTimer);
+        panel.querySelector('#hier-progress-area').style.display = 'none';
+        panel.querySelector('#hier-run').disabled    = false;
+        panel.querySelector('#hier-cancel').disabled = false;
+        showToast('Update failed: ' + String(err?.message || err), 'error');
+      }
+    });
+  }
+
+  // ── AI Train overlay ─────────────────────────────────────────────
+  async function openAITrainOverlay() {
+    const { ov, panel } = buildOverlay({
+      id: 'mv-train-ov',
+      titleText: '🧠 Train AI Index',
+      panelClass: 'mv-train-panel',
+      bodyHtml: `
+        <p style='font-size:13px;line-height:1.6;color:var(--c-text);margin:0 0 10px;'>
+          This will build the local AI knowledge index from your cached Jira data.
+          Depending on the number of issues, this may take a few minutes.
+        </p>
+        <div id='train-progress-area' style='display:none;'>
+          <div style='font-size:12px;color:var(--c-text-soft);margin-bottom:4px;' id='train-progress-msg'>Indexing\u2026</div>
+          <div class='mv-progress'><div class='mv-progress-bar' id='train-progress-bar' style='width:70%'></div></div>
+        </div>`,
+      footerHtml: `<button id='train-cancel' class='mv-btn'>Cancel</button>
+                   <button id='train-run' class='mv-btn mv-btn-primary'>🧠 Start Training</button>`
+    });
+
+    panel.querySelector('#train-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#train-run').addEventListener('click', async () => {
+      panel.querySelector('#train-run').disabled = true;
+      panel.querySelector('#train-cancel').disabled = true;
+      panel.querySelector('#train-progress-area').style.display = 'block';
+      try {
+        const res = await fetch('/api/ai/train', { method: 'POST' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        panel.querySelector('#train-progress-bar').style.width = '100%';
+        panel.querySelector('#train-progress-msg').textContent = 'Training complete!';
+        showToast('AI index trained successfully.', 'success');
+        setTimeout(() => ov.remove(), 900);
+      } catch (err) {
+        panel.querySelector('#train-progress-area').style.display = 'none';
+        panel.querySelector('#train-run').disabled = false;
+        panel.querySelector('#train-cancel').disabled = false;
+        showToast('Training failed: ' + String(err?.message || err), 'error');
+      }
+    });
+  }
+
+  // ── Edit issue (open Jira browse in new tab) ────────────────────
+  function openEditIssue(key) {
+    const url = `${window.__jiraBaseUrl || ''}/browse/${encodeURIComponent(key)}`;
+    window.open(url, '_blank');
+  }
+
+  // ── Fetch editor mode / project config ──────────────────────────
+  let editorInfo = null;
+  async function getEditorInfo() {
+    if (editorInfo) return editorInfo;
+    try { editorInfo = await (await fetch('/api/editor/mode')).json(); } catch { editorInfo = { editorMode: false, projects: [] }; }
+    return editorInfo;
+  }
+
+  // ── Autocomplete helper (issue keys) ────────────────────────────
+  let issueKeysCache = null;
+  async function getIssueKeys() {
+    if (issueKeysCache) return issueKeysCache;
+    try { issueKeysCache = await (await fetch('/api/issue/keys')).json(); } catch { issueKeysCache = []; }
+    return issueKeysCache;
+  }
+  function buildAutocompleteInput(id, placeholder, keys) {
+    const wrap = document.createElement('div'); wrap.style.position = 'relative'; wrap.style.flex = '1 1 auto';
+    const inp = document.createElement('input');
+    inp.id = id; inp.type = 'text'; inp.placeholder = placeholder;
+    inp.style.cssText = 'width:100%;padding:7px 10px;border:1px solid var(--c-border);border-radius:7px;font-size:13px;color:var(--c-text);background:var(--c-bg);outline:none;';
+    const list = document.createElement('ul');
+    list.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:var(--c-surface);border:1px solid var(--c-border);border-radius:7px;max-height:180px;overflow-y:auto;z-index:100;list-style:none;margin:2px 0 0;padding:4px;box-shadow:0 4px 16px rgba(90,60,160,.12);display:none;';
+    inp.addEventListener('input', () => {
+      const q = inp.value.trim().toUpperCase();
+      list.innerHTML = '';
+      if (!q) { list.style.display = 'none'; return; }
+      const matches = keys.filter(k => k.key.includes(q) || k.summary.toUpperCase().includes(q)).slice(0, 12);
+      if (!matches.length) { list.style.display = 'none'; return; }
+      matches.forEach(m => {
+        const li = document.createElement('li');
+        li.style.cssText = 'padding:5px 10px;cursor:pointer;border-radius:5px;font-size:12px;color:var(--c-accent);';
+        li.textContent = m.key + (m.summary ? '  —  ' + m.summary.substring(0, 60) : '');
+        li.addEventListener('mousedown', (e) => { e.preventDefault(); inp.value = m.key; list.style.display = 'none'; });
+        li.addEventListener('mouseover', () => li.style.background = 'var(--c-hover)');
+        li.addEventListener('mouseout',  () => li.style.background = '');
+        list.appendChild(li);
+      });
+      list.style.display = 'block';
+    });
+    inp.addEventListener('blur', () => setTimeout(() => list.style.display = 'none', 150));
+    wrap.appendChild(inp); wrap.appendChild(list);
+    return { wrap, inp };
+  }
+
+  // ── Add Child / Sibling overlay ──────────────────────────────────
+  async function openAddIssueOverlay(mode) {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key);
+    if (!key) { showToast('Please select a node first.', 'warn'); return; }
+    const info = await getEditorInfo();
+    const prefix = key.split('-')[0];
+    const proj = (info.projects || []).find(p => p.projectKey === prefix || (p.projectKey && key.startsWith(p.projectKey)));
+    const types = proj?.issueTypes || [];
+    if (!types.length) { showToast('No issue types found for this project.', 'warn'); return; }
+    const typeOptions = types.map(t => `<option value='${t}'>${t}</option>`).join('');
+
+    const { ov, panel } = buildOverlay({
+      id: 'mv-add-issue-ov',
+      titleText: mode === 'Child' ? `🌱 Add Child to ${key}` : `🌳 Add Sibling of ${key}`,
+      panelClass: 'mv-hier-panel',
+      bodyHtml: `
+        <div class='mv-field'><label>Issue Type</label><select id='add-issue-type'>${typeOptions}</select></div>
+        <div class='mv-field'><label>Summary</label><input id='add-issue-summary' maxlength='250' placeholder='Enter issue summary…' /></div>`,
+      footerHtml: `<button id='add-issue-cancel' class='mv-btn'>Cancel</button>
+                   <button id='add-issue-create' class='mv-btn mv-btn-primary'>Create</button>`
+    });
+
+    panel.querySelector('#add-issue-cancel').addEventListener('click', () => ov.remove());
+    const createBtn = panel.querySelector('#add-issue-create');
+    createBtn.addEventListener('click', async () => {
+      const issueType = panel.querySelector('#add-issue-type').value;
+      const summary   = (panel.querySelector('#add-issue-summary').value || '').trim();
+      if (!summary) { showToast('Summary is required.', 'warn'); return; }
+      createBtn.disabled = true; createBtn.textContent = 'Creating…';
+      try {
+        const res = await fetch('/api/issue/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseKey: key, mode, issueType, summary })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        showToast(`Created ${data.newKey || 'issue'} successfully. Update hierarchy to see it in the tree.`, 'success');
+        issueKeysCache = null; // invalidate cache
+        ov.remove();
+        if (data.newKey) openEditIssue(data.newKey);
+      } catch (err) {
+        showToast('Create failed: ' + String(err?.message || err), 'error');
+        createBtn.disabled = false; createBtn.textContent = 'Create';
+      }
+    });
+    setTimeout(() => panel.querySelector('#add-issue-summary').focus(), 60);
+  }
+
+  // ── Link Related overlay ─────────────────────────────────────────
+  async function openLinkRelatedOverlay() {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key);
+    if (!key) { showToast('Please select a node first.', 'warn'); return; }
+    const allKeys = await getIssueKeys();
+
+    const { ov, panel } = buildOverlay({
+      id: 'mv-link-ov',
+      titleText: `🔗 Link Related to ${key}`,
+      panelClass: 'mv-cfg-panel',
+      bodyHtml: `
+        <div style='display:flex;gap:6px;align-items:flex-end;margin-bottom:8px;'>
+          <div id='link-inp-wrap' style='flex:1 1 auto;'></div>
+          <button id='link-add-btn' class='mv-btn mv-btn-primary' style='flex-shrink:0;'>+ Add</button>
+        </div>
+        <ul id='link-list' style='list-style:none;padding:0;margin:0;max-height:220px;overflow:auto;'></ul>`,
+      footerHtml: `<button id='link-cancel' class='mv-btn'>Cancel</button>
+                   <button id='link-submit' class='mv-btn mv-btn-primary'>Link</button>`
+    });
+
+    const { wrap, inp } = buildAutocompleteInput('link-key-inp', 'Issue key e.g. ABC-123', allKeys);
+    panel.querySelector('#link-inp-wrap').replaceWith(wrap);
+
+    let linkedKeys = [];
+    const listEl = panel.querySelector('#link-list');
+    function refreshLinkList() {
+      listEl.innerHTML = linkedKeys.map((k, i) => {
+        const s = (allKeys.find(x => x.key === k)?.summary || '').substring(0, 70);
+        return `<li style='display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border:1px solid var(--c-border);border-radius:7px;margin-bottom:4px;font-size:12px;'>
+          <span style='color:var(--c-accent);font-weight:500;'>${k}</span><span style='color:var(--c-text-soft);margin:0 8px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>${s}</span>
+          <button data-rm='${i}' style='appearance:none;border:none;background:none;cursor:pointer;color:var(--c-danger);font-size:14px;'>✕</button></li>`;
+      }).join('');
+      listEl.querySelectorAll('[data-rm]').forEach(btn => {
+        btn.addEventListener('click', () => { linkedKeys.splice(Number(btn.dataset.rm), 1); refreshLinkList(); });
+      });
+    }
+
+    function addKey(raw) {
+      (raw || '').split(/[\s,]+/).map(k => k.trim().toUpperCase()).filter(Boolean).forEach(k => {
+        if (k === key.toUpperCase()) { showToast('Cannot link issue to itself.', 'warn'); return; }
+        if (!allKeys.find(x => x.key === k)) { showToast(`Key ${k} not found — skipped.`, 'warn'); return; }
+        if (!linkedKeys.includes(k)) linkedKeys.push(k);
+      });
+      refreshLinkList();
+    }
+
+    panel.querySelector('#link-add-btn').addEventListener('click', () => { addKey(inp.value); inp.value = ''; inp.focus(); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addKey(inp.value); inp.value = ''; } });
+
+    panel.querySelector('#link-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#link-submit').addEventListener('click', async () => {
+      if (!linkedKeys.length) { showToast('No keys to link.', 'warn'); return; }
+      const btn = panel.querySelector('#link-submit');
+      btn.disabled = true; btn.textContent = 'Linking…';
+      try {
+        const res = await fetch('/api/issue/link-related', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseKey: key, keys: linkedKeys })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        showToast('Related issues linked successfully.', 'success');
+        ov.remove();
+      } catch (err) {
+        showToast('Link failed: ' + String(err?.message || err), 'error');
+        btn.disabled = false; btn.textContent = 'Link';
+      }
+    });
+    setTimeout(() => inp.focus(), 60);
+  }
+
+  // ── Change Parent overlay ────────────────────────────────────────
+  async function openChangeParentOverlay() {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key);
+    if (!key) { showToast('Please select a node first.', 'warn'); return; }
+    const allKeys = await getIssueKeys();
+
+    const { ov, panel } = buildOverlay({
+      id: 'mv-chparent-ov',
+      titleText: `🌳 Change Parent of ${key}`,
+      panelClass: 'mv-hier-panel',
+      bodyHtml: `
+        <div class='mv-field'>
+          <label>New Parent Key</label>
+          <div id='chp-inp-wrap'></div>
+        </div>`,
+      footerHtml: `<button id='chp-cancel' class='mv-btn'>Cancel</button>
+                   <button id='chp-ok' class='mv-btn mv-btn-primary'>Change</button>`
+    });
+
+    const { wrap, inp } = buildAutocompleteInput('chp-key-inp', 'e.g. ABC-10', allKeys);
+    panel.querySelector('#chp-inp-wrap').replaceWith(wrap);
+
+    panel.querySelector('#chp-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#chp-ok').addEventListener('click', async () => {
+      const newParent = (inp.value || '').trim().toUpperCase();
+      if (!newParent) { showToast('Please enter a parent key.', 'warn'); return; }
+      const btn = panel.querySelector('#chp-ok');
+      btn.disabled = true; btn.textContent = 'Changing…';
+      try {
+        const res = await fetch('/api/issue/change-parent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ childKey: key, newParentKey: newParent })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        showToast(`Parent of ${key} changed to ${newParent}. Update hierarchy to reflect.`, 'success');
+        ov.remove();
+      } catch (err) {
+        showToast('Change parent failed: ' + String(err?.message || err), 'error');
+        btn.disabled = false; btn.textContent = 'Change';
+      }
+    });
+    setTimeout(() => inp.focus(), 60);
+  }
+
+  // ── Move Up / Down ───────────────────────────────────────────────
+  async function moveNode(direction) {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key);
+    if (!key) { showToast('Please select a node first.', 'warn'); return; }
+    const label = direction < 0 ? 'up' : 'down';
+    const ok = await mvConfirm(`Move <strong>${key}</strong> ${label}?`, { confirmLabel: `Move ${label}` });
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/issue/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, direction })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      showToast(`${key} moved ${label}.`, 'success');
+      // Refresh tree to reflect new order
+      await loadRoots(); await expandRootLevelOnce();
+    } catch (err) {
+      showToast('Move failed: ' + String(err?.message || err), 'error');
+    }
+  }
+
+  // ── Create folder structure overlay ─────────────────────────────
+  async function openCreateFolderOverlay() {
+    const key = window.__ctxKey || (selectedAnchor && selectedAnchor.dataset.key);
+    if (!key) { showToast('Please select a node first.', 'warn'); return; }
+
+    // ── Show overlay with loading state while fetching preview ──────
+    const { ov, panel } = buildOverlay({
+      id: 'mv-folder-ov',
+      titleText: `\uD83D\uDCC1 Create Folder Structure — ${key}`,
+      panelClass: 'mv-hier-panel',
+      bodyHtml: `
+        <p style='font-size:12px;color:var(--c-text-soft);margin:0 0 10px;'>
+          Paths to be created under <code style='background:var(--c-bg);padding:1px 5px;border-radius:4px;'>C:\\manual\\Release</code>
+        </p>
+        <div id='folder-preview-area' style='min-height:80px;display:flex;align-items:center;justify-content:center;'>
+          <span style='color:var(--c-text-soft);font-size:12px;'>Loading paths\u2026</span>
+        </div>`,
+      footerHtml: `<button id='folder-cancel' class='mv-btn'>Cancel</button>
+                   <button id='folder-ok' class='mv-btn mv-btn-primary' disabled>Create</button>`
+    });
+
+    panel.querySelector('#folder-cancel').addEventListener('click', () => ov.remove());
+    const okBtn = panel.querySelector('#folder-ok');
+    const previewArea = panel.querySelector('#folder-preview-area');
+
+    // ── Fetch preview ────────────────────────────────────────────────
+    let previewItems = [];
+    try {
+      const res = await fetch('/api/folder/preview?key=' + encodeURIComponent(key));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      previewItems = data.items || [];
+      if (!previewItems.length) {
+        previewArea.innerHTML = `<span style='color:var(--c-text-soft);font-size:12px;'>No paths to create.</span>`;
+      } else {
+        const rows = previewItems.map(item =>
+          `<tr>
+             <td style='padding:3px 8px 3px 0;white-space:nowrap;'>
+               <span style='display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;
+                 background:${item.type === 'Folder' ? 'rgba(26,107,191,.12)' : 'rgba(46,204,113,.12)'};
+                 color:${item.type === 'Folder' ? 'var(--c-accent)' : '#2ecc71'};'>
+                 ${item.type}
+               </span>
+             </td>
+             <td style='font-size:11px;color:var(--c-text);word-break:break-all;'>${item.path}</td>
+           </tr>`
+        ).join('');
+        previewArea.innerHTML =
+          `<div style='max-height:280px;overflow-y:auto;width:100%;'>
+             <table style='border-collapse:collapse;width:100%;'>${rows}</table>
+           </div>
+           <p style='font-size:11px;color:var(--c-text-soft);margin:8px 0 0;'>
+             ${previewItems.length} path${previewItems.length !== 1 ? 's' : ''} will be created (existing paths are skipped).
+           </p>`;
+        okBtn.disabled = false;
+      }
+    } catch (err) {
+      previewArea.innerHTML = `<span style='color:var(--c-danger);font-size:12px;'>Preview failed: ${err?.message || err}</span>`;
+    }
+
+    // ── Create on confirm ────────────────────────────────────────────
+    okBtn.addEventListener('click', async () => {
+      okBtn.disabled = true; okBtn.textContent = 'Creating\u2026';
+      try {
+        const res = await fetch('/api/folder/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        showToast(`Created ${data.created} path${data.created !== 1 ? 's' : ''} successfully.`, 'success');
+        ov.remove();
+      } catch (err) {
+        showToast('Create failed: ' + String(err?.message || err), 'error');
+        okBtn.disabled = false; okBtn.textContent = 'Create';
+      }
+    });
+  }
+
+  // ── Sidebar toolbar buttons ──────────────────────────────────────
+  if (btnRecent) btnRecent.addEventListener('click', () => openRecentUpdatesTab());
+  if (btnAI)     btnAI.addEventListener('click',     () => openAIChatTab());
+  if (btnConfig) btnConfig.addEventListener('click', () => openConfigOverlay());
+  if (btnUpdate) btnUpdate.addEventListener('click', () => openHierarchyUpdateOverlay());
+  if (btnReport) btnReport.addEventListener('click', () => generateReport());
 
   // Search dialog
   let searchOptions = null;
@@ -2707,7 +4248,7 @@ body {{ overflow: hidden; }}
     searchText.placeholder = jqlMode ? 'Enter JQL...' : 'Enter issue key or search text...';
   }
   function showSearchLoading(){
-    resultsFrame.srcdoc = `<html><body><div style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Segoe UI;color:#1565c0;'>Searching...</div></body></html>`;
+    resultsFrame.srcdoc = `<html><body style='display:flex;align-items:center;justify-content:center;height:100%;font:14px Inter,sans-serif;color:#7c5cbf;background:#f7f4fb;'>Searching…</body></html>`;
   }
 
   // Build normal JQL (unchanged)
@@ -2754,7 +4295,7 @@ body {{ overflow: hidden; }}
       const html = await (await fetch(`/api/search/html?jql=${encodeURIComponent(jql)}`)).text();
       resultsFrame.srcdoc = html;
     } catch {
-      resultsFrame.srcdoc = `<html><body><div style='padding:12px;color:#b00;font:14px Segoe UI;'>Failed to run search.</div></body></html>`;
+      resultsFrame.srcdoc = `<html><body style='padding:20px;color:#c94040;font:13px Inter,sans-serif;'>Failed to run search.</body></html>`;
     }
   });
   searchText.addEventListener('keydown', (e) => {
@@ -2785,11 +4326,11 @@ body {{ overflow: hidden; }}
       }
     }
     if (e.key === 'Escape') {
-      hideTreeMenu(); 
-      hideTabMenu(); 
-      if (searchOverlay.style.display !== 'none') {
-        hideSearchDialog();
-      }
+      hideTreeMenu();
+      hideTabMenu();
+      if (searchOverlay.style.display !== 'none') hideSearchDialog();
+      // Close any open overlay panels
+      document.querySelectorAll('.mv-overlay').forEach(o => o.remove());
     }
   });
 

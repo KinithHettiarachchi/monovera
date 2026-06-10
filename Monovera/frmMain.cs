@@ -53,6 +53,18 @@ namespace Monovera
         public static string SUMMARY_MISSING = "SUMMARY MISSING!";
         private System.Threading.Timer syncStatusTimer;
 
+        // ── Thread-marshal helper (replaces the old WinForms control Invoke patterns) ──
+        private Task InvokeAsync(Func<Task> asyncAction)
+        {
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.Invoke(async () =>
+            {
+                try { await asyncAction(); tcs.TrySetResult(true); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+            return tcs.Task;
+        }
+
         /// <summary>
         /// Represents a service for interacting with Jira.
         /// </summary>
@@ -77,6 +89,22 @@ namespace Monovera
 
         public static string jiraUserName = "System";
 
+        /// <summary>Latest sync status text exposed to the web API ("ok", "updates", "offline").</summary>
+        public static string syncStatusCode = "offline";
+        /// <summary>Number of pending Jira updates detected by the last sync check.</summary>
+        public static int pendingUpdateCount = 0;
+
+        /// <summary>True while a hierarchy update is in progress (web polling).</summary>
+        public static bool updateInProgress = false;
+        /// <summary>Name of the project currently being synced.</summary>
+        public static string updateProgressProject = "";
+        /// <summary>Issues processed so far in the current project sync.</summary>
+        public static int updateProgressCompleted = 0;
+        /// <summary>Total issues expected in the current project sync.</summary>
+        public static int updateProgressTotal = 0;
+        /// <summary>Percent complete (0-100) of the current project sync.</summary>
+        public static double updateProgressPercent = 0;
+
         /// <summary>Maps parent issue keys to their child issues.</summary>
         public static Dictionary<string, List<JiraIssue>> childrenByParent = new();
         /// <summary>Maps issue keys to JiraIssue objects for quick lookup.</summary>
@@ -99,9 +127,6 @@ namespace Monovera
         public static JiraConfigRoot config;
         /// <summary>Comma-separated link type names used for hierarchy (e.g. "Blocks").</summary>
         public static string hierarchyLinkTypeName = "";
-
-        /// <summary>Tab control for displaying issue details and other pages.</summary>
-        private TabControl tabDetails;
 
         /// <summary>Application directory path.</summary>
         string appDir = "";
@@ -458,99 +483,30 @@ namespace Monovera
         }
 
         /// <summary>
-        /// Initializes the main form, sets up UI controls, event handlers, and directories.
+        /// Initializes the main form. All UI is served via WebView2 → localhost:8088.
         /// </summary>
         public frmMain()
         {
-            // Set up application and temp directories
             appDir = AppDomain.CurrentDomain.BaseDirectory;
             tempFolder = Path.Combine(appDir, "temp");
 
             EnsureDataLayout();
-
             Directory.CreateDirectory(tempFolder);
+
             cssPath = Path.Combine(appDir, "monovera.css");
-            cssHref = new Uri(cssPath).AbsoluteUri;
+            cssHref = File.Exists(cssPath)
+                ? new Uri(cssPath).AbsoluteUri
+                : "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
 
-            if (!File.Exists(cssPath))
-            {
-                cssHref = "https://raw.githubusercontent.com/monovera/monovera/main/monovera.css";
-            }
-            else
-            {
-
-            }
             InitializeComponent();
             InitializeNotifyIcon();
-
-            // Create Robot and Wheel icons if they don't exist
             EnsureMonoveraBotIcons();
-
             StartJiraUpdateQueueWorker();
 
-            // Initialize context menu for tree
-            InitializeContextMenu();
-            SetupSpinMessages();
-
-            //Set menu icons
-            mnuSettings.Image = GetImageFromImagesFolder("Settings.png");
-            mnuUpdateHierarchy.Image = GetImageFromImagesFolder("Update.png");
-            mnuConfiguration.Image = GetImageFromImagesFolder("Configuration.png");
-
-            mnuActions.Image = GetImageFromImagesFolder("Actions.png");
-            mnuSearch.Image = GetImageFromImagesFolder("Search.png");
-            mnuReport.Image = GetImageFromImagesFolder("GenerateReport.png");
-            mnuRead.Image = GetImageFromImagesFolder("Read.png");
-            mnuRecentUpdates.Image = GetImageFromImagesFolder("Monovera.png");
-
-            mnuAI.Image = GetImageFromImagesFolder("AI.png");
-            mnuAITestCases.Image = GetImageFromImagesFolder("AITestCases.png");
-            mnuPutMeInContext.Image = GetImageFromImagesFolder("PutMeInContext.png");
-            mnuTrain.Image = GetImageFromImagesFolder("Wheel.png");
-            mnuAsk.Image = GetImageFromImagesFolder("Robot.png");
-
-            // Set up tab control for details panel
-            tabDetails = new TabControl
-            {
-                Dock = DockStyle.Fill,
-                Name = "tabDetails",
-                BackColor = Color.Red
-            };
-            tabDetails.SelectedIndexChanged += TabDetails_SelectedIndexChanged;
-            tabDetails.ShowToolTips = true;
-            tabDetails.DrawMode = TabDrawMode.OwnerDrawFixed;
-            tabDetails.DrawItem += TabDetails_DrawItem;
-            tabDetails.MouseDown += tabDetails_MouseDown;
-            tabDetails.ItemSize = new Size(200, 30);
-            tabDetails.Padding = new Point(40, 5);
-            panelTabs.Controls.Add(tabDetails);
-
-            InitializeTabContextMenu();
-            EnableTabDragDrop();
-
-
-            tree.BackColor = GetCSSColor_Tree_Background(cssPath);
-            tree.ForeColor = GetCSSColor_Tree_Foreground(cssPath);
-            tree.DrawMode = TreeViewDrawMode.OwnerDrawText;
-            tree.DrawNode += Tree_DrawNode;
+            // Keep the in-memory tree functional (BeforeExpand is used to lazy-load children)
             tree.BeforeExpand += tree_BeforeExpand;
 
-            // Tree mouse event for context menu
-            if (editorMode)
-            {
-                tree.AllowDrop = true;
-                tree.ItemDrag += tree_ItemDrag;
-                tree.DragEnter += tree_DragEnter;
-                tree.DragOver += tree_DragOver;
-                tree.DragDrop += tree_DragDrop;
-                tree.MouseUp += tree_MouseUp;
-            }
-
-            // Enable keyboard shortcuts
-            this.KeyPreview = true;
-            this.KeyDown += frmMain_KeyDown;
-
-            //Kill web server
+            // Graceful shutdown of web host
             Application.ApplicationExit += (s, e) =>
             {
                 try { webHost?.StopAsync().GetAwaiter().GetResult(); } catch { }
@@ -748,6 +704,8 @@ namespace Monovera
                         lblSyncStatus.Text = "⏸ Offline mode";
                         lblSyncStatus.ForeColor = Color.Gray;
                     });
+                    syncStatusCode = "offline";
+                    pendingUpdateCount = 0;
                     return;
                 }
 
@@ -779,6 +737,8 @@ namespace Monovera
                         lblSyncStatus.Text = "✅ You are in sync!";
                         lblSyncStatus.ForeColor = Color.Green;
                     });
+                    syncStatusCode = "ok";
+                    pendingUpdateCount = 0;
                     return;
                 }
 
@@ -944,6 +904,8 @@ namespace Monovera
                         lblSyncStatus.ForeColor = Color.Green;
                     }
                 });
+                syncStatusCode = totalUpdates > 0 ? "updates" : "ok";
+                pendingUpdateCount = totalUpdates;
             }
             catch
             {
@@ -3147,72 +3109,84 @@ namespace Monovera
         /// <param name="e">Event arguments.</param>
         private async void frmMain_Load(object sender, EventArgs e)
         {
-            // Example: Set TreeView background to match CSS section background
-            tree.BackColor = GetCSSColor_Tree_Background(cssPath);
-            splitContainer1.BackColor = GetCSSColor_Tree_Background(cssPath);
+            HTML_LOADINGPAGE = BuildSpinnerHtml();
 
-
-            HTML_LOADINGPAGE = $@"
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset='UTF-8'>
-  <link rel='stylesheet' href='{cssHref}' />
-  <style>
-    body {{
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      margin: 0;
-    }}
-  </style>
-</head>
-<body>
-  <div class='spinner'></div>
-</body>
-</html>
-";
-
-
-
-            //Load home page
-            AddHomeTabAsync(tabDetails);
-
-            // Load configuration from file and validate
-            LoadConfigurationFromJsonAsync();
-
-            // Initialize icons for issue types and statuses
-            InitializeIcons();
-
-            // Load all Jira projects and their issues into the tree view
-            await LoadAllProjectsToTreeAsync(false);
-
-            // After tree loading, start sync status timer
-            syncStatusTimer = new System.Threading.Timer(CheckSyncStatusAsync, null, TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
-
-
-            // Show a tab with recently updated issuesup
-            ShowRecentlyUpdatedIssuesAsync(tabDetails);
-
-            // Start the self-hosted web server
+            // 1. Start the self-hosted web server first
             try
             {
                 webHost = new WebSelfHost(8088);
                 await webHost.StartAsync();
-
-                //System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                //{
-                //    FileName = webHost.BaseUrl,
-                //    UseShellExecute = true
-                //});
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
             }
 
+            // 2. Initialise WebView2 and point it at the SPA
+            await mainWebView.EnsureCoreWebView2Async();
+            mainWebView.CoreWebView2.WebMessageReceived += MainWebView_WebMessageReceived;
+            mainWebView.CoreWebView2.NavigateToString(BuildSplashHtml());   // immediate feedback
+
+            // 3. Background: load config + data, then navigate to the real SPA
+            _ = Task.Run(async () =>
+            {
+                // Load configuration
+                await this.InvokeAsync(async () => await LoadConfigurationFromJsonAsync());
+
+                // Initialise icons (needed by tree-node creation)
+                this.Invoke(InitializeIcons);
+
+                // Load hierarchy into in-memory dictionaries
+                await this.InvokeAsync(async () => await LoadAllProjectsToTreeAsync(false));
+
+                // Start sync timer
+                this.Invoke(() =>
+                {
+                    syncStatusTimer = new System.Threading.Timer(
+                        CheckSyncStatusAsync, null,
+                        TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
+                });
+
+                // Navigate the WebView2 shell to the SPA
+                this.Invoke(() => mainWebView.CoreWebView2.Navigate("http://localhost:8088/"));
+            });
         }
+
+        /// <summary>
+        /// Handles messages posted from any page loaded in the main shell WebView2.
+        /// Routes to the same handlers used by the old per-tab WebView2 controls.
+        /// </summary>
+        private void MainWebView_WebMessageReceived(object sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try
+            {
+                string msg = e.TryGetWebMessageAsString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(msg))
+                    SelectAndLoadTreeNode(msg);
+            }
+            catch { }
+        }
+
+        private static string BuildSpinnerHtml() => @"<!DOCTYPE html>
+<html>
+<head><meta charset='UTF-8'>
+<style>
+  html,body{height:100%;margin:0;background:#f8f4ff;}
+  .splash{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:24px;font-family:'Segoe UI',sans-serif;}
+  .ring{width:64px;height:64px;border:5px solid #e2d9f3;border-top-color:#a78bfa;border-radius:50%;animation:spin 0.9s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .msg{color:#7c6fa0;font-size:1rem;letter-spacing:.03em;}
+</style>
+</head>
+<body>
+  <div class='splash'>
+    <div class='ring'></div>
+    <div class='msg'>Starting Monovera…</div>
+  </div>
+</body>
+</html>";
+
+        private static string BuildSplashHtml() => BuildSpinnerHtml();
 
         // Add inside the frmMain class
         public static void SelectFromSpaInvoke(string key)
@@ -3258,7 +3232,7 @@ namespace Monovera
         /// Optionally forces a fresh sync from the server, bypassing cache.
         /// </summary>
         /// <param name="forceSync">If true, ignores cache and fetches from Jira.</param>
-        private async Task LoadAllProjectsToTreeAsync(bool forceSync, string? updateType = "Complete", string? project = null)
+        public async Task LoadAllProjectsToTreeAsync(bool forceSync, string? updateType = "Complete", string? project = null)
         {
             if (updateRepoSemaphore.CurrentCount == 0)
             {
@@ -3271,6 +3245,12 @@ namespace Monovera
             await updateRepoSemaphore.WaitAsync();
             try
             {
+                updateInProgress = true;
+                updateProgressProject = "";
+                updateProgressCompleted = 0;
+                updateProgressTotal = 0;
+                updateProgressPercent = 0;
+
                 await Task.Run(async () =>
                 {
                     this.Invoke(() =>
@@ -3334,6 +3314,11 @@ namespace Monovera
                                     int remainingMinutes = (int)Math.Round(remainingSeconds / 60.0);
                                     int elapsedMinutes = (int)Math.Round(elapsed.TotalSeconds / 60.0);
 
+                                    updateProgressProject   = projectName;
+                                    updateProgressCompleted = completed;
+                                    updateProgressTotal     = total;
+                                    updateProgressPercent   = percent;
+
                                     this.Invoke(() =>
                                     {
                                         pbProgress.Value = Math.Min(100, (int)Math.Round(percent));
@@ -3359,6 +3344,11 @@ namespace Monovera
                                 double remainingSeconds = Math.Max(estimatedTotalSeconds - elapsed.TotalSeconds, 0);
                                 int remainingMinutes = (int)Math.Round(remainingSeconds / 60.0);
                                 int elapsedMinutes = (int)Math.Round(elapsed.TotalSeconds / 60.0);
+
+                                updateProgressProject   = projectName;
+                                updateProgressCompleted = completed;
+                                updateProgressTotal     = total;
+                                updateProgressPercent   = percent;
 
                                 this.Invoke(() =>
                                 {
@@ -3433,6 +3423,11 @@ namespace Monovera
             finally
             {
                 updateRepoSemaphore.Release();
+                updateInProgress = false;
+                updateProgressProject = "";
+                updateProgressCompleted = 0;
+                updateProgressTotal = 0;
+                updateProgressPercent = 0;
                 // Run sync status check after hierarchy update
                 CheckSyncStatusAsync(null);
             }
