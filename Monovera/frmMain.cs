@@ -94,6 +94,9 @@ namespace Monovera
         /// <summary>Number of pending Jira updates detected by the last sync check.</summary>
         public static int pendingUpdateCount = 0;
 
+        /// <summary>True once the initial LoadAllProjectsToTreeAsync completes and issueDict is populated.</summary>
+        public static bool dataReady = false;
+
         /// <summary>True while a hierarchy update is in progress (web polling).</summary>
         public static bool updateInProgress = false;
         /// <summary>Name of the project currently being synced.</summary>
@@ -127,6 +130,15 @@ namespace Monovera
         public static JiraConfigRoot config;
         /// <summary>Comma-separated link type names used for hierarchy (e.g. "Blocks").</summary>
         public static string hierarchyLinkTypeName = "";
+        /// <summary>Port the self-hosted web server listens on (read from config.json WebPort, default 8090).</summary>
+        public static int webPort = 8090;
+        /// <summary>Secret token stamped into the embedded WebView2 User-Agent so /api/mode can distinguish it from an external browser.</summary>
+        public static readonly string webToken = "MV-" + Guid.NewGuid().ToString("N").Substring(0, 16);
+
+        /// <summary>True when the application is in locked (read-only) mode. Shared by both the embedded WebView2 shell and any external browser session — unlocking or locking from either surface applies globally. Defaults to true so the app always starts locked.</summary>
+        public static bool isLocked = true;
+        /// <summary>Computes the current time-based unlock key: "MoN" + yyyyMMddHH (24-hour) using local server time.</summary>
+        public static string ComputeUnlockKey() => "MoN" + DateTime.Now.ToString("yyyyMMddHH", CultureInfo.InvariantCulture);
 
         /// <summary>Application directory path.</summary>
         string appDir = "";
@@ -244,6 +256,9 @@ namespace Monovera
             public string Token { get; set; }
 
             public bool OfflineMode { get; set; }
+
+            /// <summary>Port for the external read-only web browser view (default 8090).</summary>
+            public int WebPort { get; set; } = 8090;
         }
 
         /// <summary>
@@ -2717,6 +2732,8 @@ namespace Monovera
             jiraToken = config.Jira.Token;
             // Load offline mode
             OFFLINE_MODE = config.Jira.OfflineMode;
+            // Load web port (for external browser access)
+            webPort = config.Jira.WebPort > 0 ? config.Jira.WebPort : 8090;
 
             // Load other config data
             projectList = config.Projects.Select(p => p.Project).ToList();
@@ -3111,27 +3128,30 @@ namespace Monovera
         {
             HTML_LOADINGPAGE = BuildSpinnerHtml();
 
-            // 1. Start the self-hosted web server first
-            try
-            {
-                webHost = new WebSelfHost(8088);
-                await webHost.StartAsync();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
-            }
-
-            // 2. Initialise WebView2 and point it at the SPA
+            // 1. Initialise WebView2 and show splash immediately
             await mainWebView.EnsureCoreWebView2Async();
+            // Stamp secret token so /api/mode can distinguish embedded shell from external browser
+            var ua = mainWebView.CoreWebView2.Settings.UserAgent;
+            mainWebView.CoreWebView2.Settings.UserAgent = ua + " " + frmMain.webToken;
             mainWebView.CoreWebView2.WebMessageReceived += MainWebView_WebMessageReceived;
-            mainWebView.CoreWebView2.NavigateToString(BuildSplashHtml());   // immediate feedback
+            mainWebView.CoreWebView2.NavigateToString(BuildSplashHtml());
 
-            // 3. Background: load config + data, then navigate to the real SPA
+            // 2. Background: load config, start server on configured port, then load data
             _ = Task.Run(async () =>
             {
-                // Load configuration
+                // Load configuration first so webPort is populated
                 await this.InvokeAsync(async () => await LoadConfigurationFromJsonAsync());
+
+                // Start the self-hosted web server using the port from config
+                try
+                {
+                    webHost = new WebSelfHost(frmMain.webPort);
+                    await webHost.StartAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine("WebSelfHost start failed: " + ex.Message);
+                }
 
                 // Initialise icons (needed by tree-node creation)
                 this.Invoke(InitializeIcons);
@@ -3147,8 +3167,8 @@ namespace Monovera
                         TimeSpan.FromMinutes(0), TimeSpan.FromMinutes(5));
                 });
 
-                // Navigate the WebView2 shell to the SPA
-                this.Invoke(() => mainWebView.CoreWebView2.Navigate("http://localhost:8088/"));
+                // Navigate the WebView2 shell to the SPA (loopback — always full UI)
+                this.Invoke(() => mainWebView.CoreWebView2.Navigate($"http://localhost:{frmMain.webPort}/"));
             });
         }
 
@@ -3428,6 +3448,7 @@ namespace Monovera
                 updateProgressCompleted = 0;
                 updateProgressTotal = 0;
                 updateProgressPercent = 0;
+                dataReady = true;  // signal external browsers that data is available
                 // Run sync status check after hierarchy update
                 CheckSyncStatusAsync(null);
             }

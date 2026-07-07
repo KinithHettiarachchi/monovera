@@ -46,6 +46,12 @@ namespace Monovera
         public string Token { get; set; }
 
         public bool OfflineMode { get; set; }
+
+        /// <summary>
+        /// Port for the read-only web server accessible from a browser (e.g. 8090).
+        /// Defaults to 8090 if not specified.
+        /// </summary>
+        public int WebPort { get; set; } = 8090;
     }
 
     /// <summary>

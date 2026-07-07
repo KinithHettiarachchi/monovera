@@ -151,6 +151,59 @@ namespace Monovera
                             await context.Response.WriteAsync(JsonSerializer.Serialize(payload));
                         });
 
+                        // ── Mode (global lock state) ──────────────────────────────────────────
+                        // The application starts locked (read-only) by default. Locking/unlocking
+                        // is a single shared in-memory flag, so the embedded WebView2 shell and any
+                        // external browser session always agree on the current editable state.
+                        endpoints.MapGet("/api/mode", async context =>
+                        {
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new { readOnly = frmMain.isLocked }));
+                        });
+
+                        // ── Lock / Unlock ──────────────────────────────────────────────────────
+                        // Unlocking requires the current time-based key ("MoN" + yyyyMMddHH, local
+                        // time, 24-hour hour). Locking back never requires a key.
+                        endpoints.MapPost("/api/lock/unlock", async context =>
+                        {
+                            try
+                            {
+                                var body = await JsonSerializer.DeserializeAsync<JsonElement>(context.Request.Body);
+                                string key = body.TryGetProperty("key", out var keyEl) ? (keyEl.GetString() ?? "") : "";
+                                bool success = string.Equals(key.Trim(), frmMain.ComputeUnlockKey(), StringComparison.Ordinal);
+                                if (success) frmMain.isLocked = false;
+                                context.Response.ContentType = "application/json; charset=utf-8";
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { success, locked = frmMain.isLocked }));
+                            }
+                            catch (Exception ex)
+                            {
+                                context.Response.StatusCode = 500;
+                                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                            }
+                        });
+
+                        endpoints.MapPost("/api/lock/lock", async context =>
+                        {
+                            frmMain.isLocked = true;
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new { success = true, locked = true }));
+                        });
+
+                        // ── Data-ready probe (polled by external browsers before loading tree) ──
+                        endpoints.MapGet("/api/ready", async context =>
+                        {
+                            context.Response.ContentType = "application/json; charset=utf-8";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new
+                            {
+                                ready = frmMain.dataReady,
+                                inProgress = frmMain.updateInProgress,
+                                project = frmMain.updateProgressProject,
+                                completed = frmMain.updateProgressCompleted,
+                                total = frmMain.updateProgressTotal,
+                                percent = Math.Round(frmMain.updateProgressPercent, 1)
+                            }));
+                        });
+
                         // Recent updates HTML (for the SPA Recent Updates tab)
                         endpoints.MapGet("/api/recent/updated/html", async context =>
                         {
@@ -1305,6 +1358,13 @@ No recent updates: Jira configuration is missing (projects/base URL/credentials)
                 .OrderBy(t => t, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
+            var allProjectsGlobal = rows
+                .Select(r => r.Key.Contains('-') ? r.Key.Split('-')[0] : r.Key)
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
             // Filter panel
             sb.Append($@"
 <button id='show-filter-btn'>Apply Filter</button>
@@ -1328,6 +1388,16 @@ No recent updates: Jira configuration is missing (projects/base URL/credentials)
         <label><input type='checkbox' class='change-type-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
         {string.Join("\n", allChangeTypesGlobal.Select(t =>
                             $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='change-type-checkbox' value='{WebUtility.HtmlEncode(t)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(t)}</span></label>"))}
+      </div>
+    </div>")}
+
+    {(allProjectsGlobal.Count <= 1 ? "" : $@"
+    <div class='filter-panel' style='display:inline-block; padding:8px; border:1px solid #b3d4f6; background:#f9fcff; border-radius:6px;'>
+      <div class='filter-panel-title' style='font-weight:600;color:#1565c0;margin-bottom:6px;'>Projects</div>
+      <div id='project-checkboxes' class='checkbox-container' style='display:flex;gap:10px;flex-wrap:wrap;max-height:140px;overflow:auto;'>
+        <label><input type='checkbox' class='project-checkbox-all' checked /> <span style='margin-left:6px;'>All</span></label>
+        {string.Join("\n", allProjectsGlobal.Select(p =>
+                            $"<label style='display:inline-flex;align-items:center;'><input type='checkbox' class='project-checkbox' value='{WebUtility.HtmlEncode(p)}' checked /> <span style='margin-left:6px;'>{WebUtility.HtmlEncode(p)}</span></label>"))}
       </div>
     </div>")}
 
@@ -1400,9 +1470,11 @@ No recent updates: Jira configuration is missing (projects/base URL/credentials)
                         : "data-changetypes=''";
 
                     string issueTypeAttr = $"data-issuetype='{WebUtility.HtmlEncode(item.Type ?? "")}'";
+                    string projectKey = item.Key.Contains('-') ? item.Key.Split('-')[0] : item.Key;
+                    string projectAttr = $"data-project='{WebUtility.HtmlEncode(projectKey)}'";
 
                     sb.Append($@"
-<tr {issueTypeAttr} {changeTypeAttr}>
+<tr {issueTypeAttr} {changeTypeAttr} {projectAttr}>
   <td class='confluenceTd'>{iconHtml}</td>
   <td class='confluenceTd'>
     <a href='#' data-key='{WebUtility.HtmlEncode(item.Key)}' class='recent-link'>
@@ -1431,10 +1503,13 @@ function applyGlobalFilter() {
   var checkedIssueTypes = typeBoxes.filter(x => x.checked).map(x => x.value);
   var changeTypeBoxes = Array.from(document.querySelectorAll('#change-type-checkboxes .change-type-checkbox'));
   var checkedChangeTypes = changeTypeBoxes.filter(x => x.checked).map(x => x.value);
+  var projectBoxes = Array.from(document.querySelectorAll('#project-checkboxes .project-checkbox'));
+  var checkedProjects = projectBoxes.filter(x => x.checked).map(x => x.value);
 
   document.querySelectorAll('table.confluenceTable tbody tr').forEach(function(row) {
     var rowIssueType = row.getAttribute('data-issuetype') || '';
     var rowChangeTypes = (row.getAttribute('data-changetypes') || '').split(',').filter(Boolean);
+    var rowProject = row.getAttribute('data-project') || '';
 
     var show = true;
     if (typeBoxes.length > 0 && checkedIssueTypes.length > 0 && !checkedIssueTypes.includes(rowIssueType)) show = false;
@@ -1443,6 +1518,8 @@ function applyGlobalFilter() {
       var anyMatch = rowChangeTypes.some(t => checkedChangeTypes.includes(t));
       if (!anyMatch) show = false;
     }
+
+    if (projectBoxes.length > 0 && checkedProjects.length > 0 && !checkedProjects.includes(rowProject)) show = false;
 
     row.style.display = show ? '' : 'none';
   });
@@ -1474,6 +1551,20 @@ function applyGlobalFilter() {
   changeBoxes.forEach(cb => {
     cb.addEventListener('change', function () {
       if (changeAll) changeAll.checked = Array.from(changeBoxes).every(x => x.checked);
+      applyGlobalFilter();
+    });
+  });
+
+  const projAll = document.querySelector('#project-checkboxes .project-checkbox-all');
+  const projBoxes = document.querySelectorAll('#project-checkboxes .project-checkbox');
+  if (projAll) {
+    projAll.addEventListener('change', function () {
+      const checked = this.checked; projBoxes.forEach(cb => cb.checked = checked); applyGlobalFilter();
+    });
+  }
+  projBoxes.forEach(cb => {
+    cb.addEventListener('change', function () {
+      if (projAll) projAll.checked = Array.from(projBoxes).every(x => x.checked);
       applyGlobalFilter();
     });
   });
@@ -2393,22 +2484,75 @@ What would you like to know?`, 'welcome');
 {css}
 /* ── Professional White + Light-Blue palette ────────────────────── */
 :root {{
-  --c-bg:        #f0f6ff;
-  --c-sidebar:   #e8f0fc;
-  --c-border:    #c2d8f5;
-  --c-accent:    #1a6bbf;
-  --c-accent2:   #3d8fd6;
-  --c-text:      #0d2340;
-  --c-text-soft: #4a6a8a;
+
+  /* ==========================================================
+     PROFESSIONAL BLUE ENTERPRISE THEME
+     ========================================================== */
+
+  /* Main backgrounds */
+  --c - bg:        #f4f8fc;
+  --c-sidebar:   #f8fbff;
   --c-surface:   #ffffff;
-  --c-hover:     #dceeff;
-  --c-active:    #c5e0fa;
-  --c-danger:    #c0392b;
-  --c-success:   #1e8449;
-  --c-warn:      #b7770d;
-  --radius:      10px;
-  --shadow:      0 2px 16px rgba(26,107,191,.10);
-  --trans:       0.18s ease;
+
+  /* Borders */
+  --c-border:    #d9e6f2;
+
+  /* Primary blue palette */
+  --c-accent:    #2f6da5;
+  --c-accent2:   #4d8bc7;
+
+  /* Text */
+  --c-text:      #253748;
+  --c-text-soft: #637385;
+
+  /* Interactive states */
+  --c-hover:     #eef6ff;
+  --c-active:    #dceafb;
+
+  /* Semantic colors */
+  --c-danger:    #d9534f;
+  --c-success:   #41a36d;
+  --c-warn:      #d39a33;
+
+  /* Layout */
+  --radius:      12px;
+
+  /* Shadows */
+  --shadow:
+      0 2px 8px rgba(13,39,68,.06),
+      0 6px 18px rgba(13,39,68,.08);
+
+  /* Animation */
+  --trans:       .18s ease;
+
+  /* Gradients */
+  --grad-surface:
+      linear-gradient(
+          180deg,
+          #ffffff 0%,
+          #f3f8fd 100%
+      );
+
+  --grad-header:
+      linear-gradient(
+          135deg,
+          #eef6ff 0%,
+          #f8fbff 100%
+      );
+
+  --grad-primary:
+      linear-gradient(
+          180deg,
+          #4d8bc7 0%,
+          #2f6da5 100%
+      );
+
+  --grad-hover:
+      linear-gradient(
+          180deg,
+          #f8fbff 0%,
+          #e8f3fd 100%
+      );
 }}
 *, *::before, *::after {{ box-sizing: border-box; }}
 html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:var(--c-bg); color:var(--c-text); overflow:hidden; }}
@@ -2455,13 +2599,13 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   gap:4px;
   padding:6px 8px;
   border-bottom:1px solid var(--c-border);
-  background:rgba(255,255,255,.7);
+  background:var(--grad-surface);
   flex-shrink:0;
 }}
 .sb-btn {{
   appearance:none;
   border:1px solid var(--c-border);
-  background:var(--c-surface);
+  background:var(--grad-surface);
   color:var(--c-accent);
   border-radius:6px;
   padding:4px 8px;
@@ -2476,6 +2620,8 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 .sb-btn:hover {{ background:var(--c-hover); border-color:var(--c-accent2); box-shadow:0 2px 8px rgba(26,107,191,.14); }}
 .sb-btn:active {{ background:var(--c-active); }}
 .sb-btn-icon {{ font-size:14px; }}
+#btn-lock.mv-locked {{ color:var(--c-danger); border-color:var(--c-danger); }}
+#btn-lock.mv-unlocked {{ color:var(--c-success); border-color:var(--c-success); }}
 
 /* ── Tree ────────────────────────────────────────────────────────── */
 #tree, #tree ul, #tree li {{ list-style:none!important; list-style-type:none!important; list-style-image:none!important; margin:0; padding-left:14px; }}
@@ -2511,7 +2657,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   min-width:0;
   min-height:0;
   overflow:hidden;
-  background:var(--c-surface);
+  background:var(--grad-surface);
   border:1px solid var(--c-border);
   border-radius:var(--radius);
   box-shadow:var(--shadow);
@@ -2524,7 +2670,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   align-items:center;
   gap:4px;
   border-bottom:1px solid var(--c-border);
-  background:rgba(240,246,255,.9);
+  background:var(--grad-header);
   padding:5px 6px 0;
   flex-shrink:0;
 }}
@@ -2537,7 +2683,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   white-space:nowrap;
 }}
 .mv-tab {{
-  background:rgba(255,255,255,.7);
+  background:var(--grad-surface);
   border:1px solid var(--c-border); border-bottom:none;
   border-radius:7px 7px 0 0;
   padding:5px 8px;
@@ -2551,7 +2697,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 .mv-tab:hover {{ background:var(--c-hover); }}
 .mv-tab .mv-tab-label {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; font-size:12px; }}
 .mv-tab.active {{
-  background:var(--c-surface);
+  background:var(--grad-surface);
   border-bottom:2px solid var(--c-accent);
   font-weight:600; color:var(--c-accent);
 }}
@@ -2567,7 +2713,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 .mv-tab-close:hover {{ background:var(--c-danger); color:#fff; }}
 .mv-tab-scroll {{
   appearance:none; -webkit-appearance:none;
-  border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-accent);
+  border:1px solid var(--c-border); background:var(--grad-surface); color:var(--c-accent);
   width:26px; height:22px; border-radius:5px; display:none;
   align-items:center; justify-content:center; cursor:pointer;
   transition:background var(--trans);
@@ -2577,17 +2723,17 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 
 /* ── Views ───────────────────────────────────────────────────────── */
 #mv-views {{ flex:1 1 auto; position:relative; min-height:0; overflow:hidden; }}
-.mv-view {{ position:absolute; inset:0; display:none; background:var(--c-surface); animation:fadeIn .15s ease; }}
+.mv-view {{ position:absolute; inset:0; display:none; background:var(--grad-surface); animation:fadeIn .15s ease; }}
 .mv-view.active {{ display:block; }}
-.mv-view iframe {{ width:100%; height:100%; border:none; background:var(--c-surface); }}
-.home-splash {{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:var(--c-surface); }}
+.mv-view iframe {{ width:100%; height:100%; border:none; background:var(--grad-surface); }}
+.home-splash {{ width:100%; height:100%; display:flex; align-items:center; justify-content:center; background:var(--grad-surface); }}
 .home-splash img {{ max-width:100%; max-height:100%; object-fit:contain; opacity:.85; }}
 @keyframes fadeIn {{ from {{ opacity:0; transform:translateY(4px); }} to {{ opacity:1; transform:none; }} }}
 
 /* ── Status bar ──────────────────────────────────────────────────── */
 .status {{
   display:flex; align-items:center; padding:0 14px;
-  border-top:1px solid var(--c-border); background:rgba(232,240,252,.95);
+  border-top:1px solid var(--c-border); background:var(--grad-header);
   color:var(--c-text-soft); font-size:12px; gap:16px;
 }}
 .sync-indicator {{ display:flex; align-items:center; gap:5px; }}
@@ -2605,7 +2751,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 /* ── Overlay backdrop ────────────────────────────────────────────── */
 .mv-overlay {{
   position:fixed; inset:0;
-  background:rgba(30,20,60,.25);
+  background:rgba(13,39,68,.20);
   backdrop-filter:blur(4px) saturate(1.2);
   z-index:9000;
   display:flex; align-items:center; justify-content:center;
@@ -2613,7 +2759,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 }}
 @keyframes ovFadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
 .mv-overlay-panel {{
-  background:var(--c-surface);
+  background:var(--grad-surface);
   border:1px solid var(--c-border);
   border-radius:14px;
   box-shadow:0 12px 48px rgba(26,107,191,.18);
@@ -2629,7 +2775,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 }}
 .mv-overlay-title {{ font-weight:600; font-size:14px; color:var(--c-text); }}
 .mv-overlay-close {{
-  appearance:none; border:1px solid var(--c-border); background:var(--c-surface);
+  appearance:none; border:1px solid var(--c-border); background:var(--grad-surface);
   color:var(--c-text-soft); border-radius:6px;
   width:28px; height:28px; display:flex; align-items:center; justify-content:center;
   cursor:pointer; font-size:16px; line-height:1;
@@ -2647,7 +2793,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 /* ── Buttons ─────────────────────────────────────────────────────── */
 .mv-btn {{
   appearance:none;
-  border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-accent);
+  border:1px solid var(--c-border); background:var(--grad-surface); color:var(--c-accent);
   border-radius:7px; padding:7px 14px; font-size:13px; font-weight:500;
   cursor:pointer; transition:background var(--trans),border-color var(--trans),box-shadow var(--trans);
 }}
@@ -2678,7 +2824,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 /* ── Context menu ────────────────────────────────────────────────── */
 .ctx-menu {{
   position:fixed; display:none; z-index:10000; min-width:210px;
-  background:var(--c-surface);
+  background:var(--grad-surface);
   border:1px solid var(--c-border); border-radius:var(--radius);
   box-shadow:0 8px 28px rgba(26,107,191,.16);
   font-size:12px; padding:4px;
@@ -2697,13 +2843,13 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 /* ── Search overlay ──────────────────────────────────────────────── */
 #mv-search {{
   position:fixed; inset:0; z-index:9100;
-  background:rgba(30,20,60,.25); backdrop-filter:blur(4px);
+  background:rgba(13,39,68,.20); backdrop-filter:blur(4px);
   display:none;
 }}
 .mv-search-panel {{
   position:absolute; top:48px; left:50%; transform:translateX(-50%);
   width:min(1040px,calc(100% - 20px));
-  background:var(--c-surface);
+  background:var(--grad-surface);
   border:1px solid var(--c-border);
   border-radius:14px;
   box-shadow:0 12px 48px rgba(26,107,191,.18);
@@ -2717,7 +2863,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   border-bottom:1px solid var(--c-border);
 }}
 .mv-search-title {{ font-weight:600; color:var(--c-text); }}
-.mv-search-close {{ appearance:none; border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-text-soft); border-radius:6px; padding:4px 9px; cursor:pointer; transition:background var(--trans); }}
+.mv-search-close {{ appearance:none; border:1px solid var(--c-border); background:var(--grad-surface); color:var(--c-text-soft); border-radius:6px; padding:4px 9px; cursor:pointer; transition:background var(--trans); }}
 .mv-search-close:hover {{ background:var(--c-danger); color:#fff; }}
 .mv-search-body {{ padding:10px 14px; display:flex; flex-direction:column; gap:8px; }}
 .mv-search-row {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
@@ -2729,7 +2875,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 .mv-search-btn {{ appearance:none; border:1px solid var(--c-border); background:var(--c-accent); color:#fff; border-radius:7px; padding:6px 16px; font-size:13px; cursor:pointer; transition:background var(--trans); }}
 .mv-search-btn:hover {{ background:var(--c-accent2); }}
 .mv-search-results {{ height:420px; border-top:1px solid var(--c-border); }}
-.mv-search-results iframe {{ width:100%; height:100%; border:none; background:var(--c-surface); }}
+.mv-search-results iframe {{ width:100%; height:100%; border:none; background:var(--grad-surface); }}
 
 /* ── Toast notifications ─────────────────────────────────────────── */
 #mv-toast-area {{ position:fixed; bottom:40px; left:50%; transform:translateX(-50%); z-index:11000; display:flex; flex-direction:column; gap:8px; pointer-events:none; }}
@@ -2755,7 +2901,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 .mv-proj-item {{ display:flex; align-items:center; justify-content:space-between; padding:7px 10px; border:1px solid var(--c-border); border-radius:7px; margin-bottom:5px; background:var(--c-bg); font-size:13px; }}
 .mv-proj-item span {{ font-weight:500; color:var(--c-text); }}
 .mv-proj-actions {{ display:flex; gap:4px; }}
-.mv-proj-btn {{ appearance:none; border:1px solid var(--c-border); background:var(--c-surface); color:var(--c-text-soft); border-radius:5px; padding:3px 8px; font-size:11px; cursor:pointer; transition:background var(--trans); }}
+.mv-proj-btn {{ appearance:none; border:1px solid var(--c-border); background:var(--grad-surface); color:var(--c-text-soft); border-radius:5px; padding:3px 8px; font-size:11px; cursor:pointer; transition:background var(--trans); }}
 .mv-proj-btn:hover {{ background:var(--c-hover); }}
 .mv-proj-btn.danger:hover {{ background:var(--c-danger); color:#fff; border-color:var(--c-danger); }}
 
@@ -2770,6 +2916,16 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
 
 /* ── Confirmation dialog ─────────────────────────────────────────── */
 .mv-confirm-panel {{ width:min(480px,calc(100% - 24px)); }}
+
+/* ── Locked mode: hide write-only items (shared by desktop + browser) ── */
+body.mv-readonly .mv-write-only {{ display:none !important; }}
+body.mv-readonly #btn-ai,
+body.mv-readonly #btn-config,
+body.mv-readonly #btn-update {{ display:none !important; }}
+
+/* ── Unlock dialog ───────────────────────────────────────────────── */
+.mv-unlock-panel {{ width:min(360px,calc(100% - 24px)); }}
+#mv-unlock-key {{ letter-spacing:1px; text-align:center; font-family:'Consolas',monospace; font-size:15px; }}
   </style>
 </head>
 <body>
@@ -2780,6 +2936,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
     <!-- Sidebar -->
     <aside class='sidebar'>
       <div class='sidebar-toolbar'>
+        <button class='sb-btn' id='btn-lock' title='Locked (click to unlock)'><span class='sb-btn-icon' id='btn-lock-icon'>🔒</span></button>
         <button class='sb-btn' id='btn-search' title='Search (Ctrl+Q)'><span class='sb-btn-icon'>🔎</span></button>
         <button class='sb-btn' id='btn-recent' title='Recent Updates'><span class='sb-btn-icon'>🕒</span></button>
         <button class='sb-btn' id='btn-ai' title='Ask Me AI (Ctrl+M)'><span class='sb-btn-icon'>🤖</span></button>
@@ -2792,23 +2949,23 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
         <ul>
           <li data-action='search'>🔎 Search… <span class='mv-search-hint'>(Ctrl+Q)</span></li>
           <li data-action='report'>📄 Generate Report… <span class='mv-search-hint'>(Ctrl+P)</span></li>
-          <li data-action='ask-ai'>🤖 Ask Me… <span class='mv-search-hint'>(Ctrl+M)</span></li>
+          <li data-action='ask-ai' class='mv-write-only'>🤖 Ask Me… <span class='mv-search-hint'>(Ctrl+M)</span></li>
           <li data-action='recent'>🕒 Recent Updates…</li>
-          <li data-action='folder-structure'>📁 Create Folder Structure…</li>
-          <li class='ctx-sep'></li>
-          <li data-action='edit' id='ctx-edit'>✏️ Edit…</li>
-          <li data-action='link-related' id='ctx-link'>🔗 Link Related…</li>
-          <li data-action='change-parent' id='ctx-chparent'>🌳 Change Parent…</li>
-          <li class='ctx-sep'></li>
-          <li data-action='add-child' id='ctx-add-child'>🌱 Add Child…</li>
-          <li data-action='add-sibling' id='ctx-add-sibling'>🌳 Add Sibling…</li>
-          <li class='ctx-sep'></li>
-          <li data-action='move-up' id='ctx-move-up'>🔼 Move Up</li>
-          <li data-action='move-down' id='ctx-move-down'>🔽 Move Down</li>
-          <li class='ctx-sep'></li>
-          <li data-action='config'>⚙️ Configuration…</li>
-          <li data-action='update-hierarchy'>🔄 Update Hierarchy…</li>
-          <li data-action='train-ai'>🧠 Train AI Index…</li>
+          <li data-action='folder-structure' class='mv-write-only'>📁 Create Folder Structure…</li>
+          <li class='ctx-sep mv-write-only'></li>
+          <li data-action='edit' id='ctx-edit' class='mv-write-only'>✏️ Edit…</li>
+          <li data-action='link-related' id='ctx-link' class='mv-write-only'>🔗 Link Related…</li>
+          <li data-action='change-parent' id='ctx-chparent' class='mv-write-only'>🌳 Change Parent…</li>
+          <li class='ctx-sep mv-write-only'></li>
+          <li data-action='add-child' id='ctx-add-child' class='mv-write-only'>🌱 Add Child…</li>
+          <li data-action='add-sibling' id='ctx-add-sibling' class='mv-write-only'>🌳 Add Sibling…</li>
+          <li class='ctx-sep mv-write-only'></li>
+          <li data-action='move-up' id='ctx-move-up' class='mv-write-only'>🔼 Move Up</li>
+          <li data-action='move-down' id='ctx-move-down' class='mv-write-only'>🔽 Move Down</li>
+          <li class='ctx-sep mv-write-only'></li>
+          <li data-action='config' class='mv-write-only'>⚙️ Configuration…</li>
+          <li data-action='update-hierarchy' class='mv-write-only'>🔄 Update Hierarchy…</li>
+          <li data-action='train-ai' class='mv-write-only'>🧠 Train AI Index…</li>
         </ul>
       </div>
     </aside>
@@ -2918,6 +3075,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   const resultsFrame = document.getElementById('mv-search-results');
 
   // Sidebar toolbar buttons
+  const btnLock = document.getElementById('btn-lock');
   const btnSearch = document.getElementById('btn-search');
   const btnRecent = document.getElementById('btn-recent');
   const btnAI    = document.getElementById('btn-ai');
@@ -2959,6 +3117,81 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
     });
     return { ov, panel };
   }
+
+  // ── Lock / Unlock (locked mode is a single shared flag: desktop + every
+  //    browser session always agree on the current editable state) ────────
+  let isLockedState = true;
+  function applyLockUI(locked) {
+    isLockedState = locked;
+    document.body.classList.toggle('mv-readonly', locked);
+    if (btnLock) {
+      btnLock.classList.toggle('mv-locked', locked);
+      btnLock.classList.toggle('mv-unlocked', !locked);
+      btnLock.title = locked ? 'Locked (click to unlock)' : 'Unlocked (click to lock)';
+      const icon = document.getElementById('btn-lock-icon');
+      if (icon) icon.textContent = locked ? '\uD83D\uDD12' : '\uD83D\uDD13';
+    }
+  }
+  async function refreshLockState() {
+    try {
+      const res = await fetch('/api/mode');
+      if (res.ok) {
+        const data = await res.json();
+        applyLockUI(!!data.readOnly);
+      }
+    } catch { /* ignore */ }
+  }
+  function openUnlockDialog() {
+    const { ov, panel } = buildOverlay({
+      id: 'mv-unlock-ov',
+      titleText: '\uD83D\uDD12 Unlock Application',
+      panelClass: 'mv-unlock-panel',
+      bodyHtml: `
+        <div class='mv-field'>
+          <label>Enter Unlock Key</label>
+          <input id='mv-unlock-key' type='password' placeholder='Enter key…' autocomplete='off' />
+        </div>`,
+      footerHtml: `<button id='mv-unlock-cancel' class='mv-btn'>Cancel</button>
+                   <button id='mv-unlock-ok' class='mv-btn mv-btn-primary'>Unlock</button>`
+    });
+    const inp = panel.querySelector('#mv-unlock-key');
+    const doUnlock = async () => {
+      const key = (inp.value || '').trim();
+      if (!key) { showToast('Please enter the unlock key.', 'warn'); return; }
+      const btn = panel.querySelector('#mv-unlock-ok');
+      btn.disabled = true; btn.textContent = 'Unlocking…';
+      try {
+        const res = await fetch('/api/lock/unlock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+        const data = await res.json();
+        if (data.success) {
+          applyLockUI(false);
+          showToast('Application unlocked.', 'success');
+          ov.remove();
+        } else {
+          showToast('Incorrect unlock key.', 'error');
+          btn.disabled = false; btn.textContent = 'Unlock';
+          inp.value = ''; inp.focus();
+        }
+      } catch (err) {
+        showToast('Unlock failed: ' + String(err?.message || err), 'error');
+        btn.disabled = false; btn.textContent = 'Unlock';
+      }
+    };
+    panel.querySelector('#mv-unlock-cancel').addEventListener('click', () => ov.remove());
+    panel.querySelector('#mv-unlock-ok').addEventListener('click', doUnlock);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doUnlock(); } });
+    setTimeout(() => inp.focus(), 60);
+  }
+  async function doLock() {
+    try { await fetch('/api/lock/lock', { method: 'POST' }); } catch { /* ignore */ }
+    applyLockUI(true);
+    showToast('Application locked.', '');
+  }
+  if (btnLock) btnLock.addEventListener('click', () => { if (isLockedState) openUnlockDialog(); else doLock(); });
 
   // ── Resizer ──────────────────────────────────────────────────────
   const MIN_LEFT = 220, MIN_RIGHT = 360;
@@ -3906,7 +4139,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
     inp.id = id; inp.type = 'text'; inp.placeholder = placeholder;
     inp.style.cssText = 'width:100%;padding:7px 10px;border:1px solid var(--c-border);border-radius:7px;font-size:13px;color:var(--c-text);background:var(--c-bg);outline:none;';
     const list = document.createElement('ul');
-    list.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:var(--c-surface);border:1px solid var(--c-border);border-radius:7px;max-height:180px;overflow-y:auto;z-index:100;list-style:none;margin:2px 0 0;padding:4px;box-shadow:0 4px 16px rgba(90,60,160,.12);display:none;';
+    list.style.cssText = 'position:absolute;top:100%;left:0;right:0;background:var(--grad-surface);border:1px solid var(--c-border);border-radius:7px;max-height:180px;overflow-y:auto;z-index:100;list-style:none;margin:2px 0 0;padding:4px;box-shadow:0 4px 16px rgba(90,60,160,.12);display:none;';
     inp.addEventListener('input', () => {
       const q = inp.value.trim().toUpperCase();
       list.innerHTML = '';
@@ -4200,6 +4433,7 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
   }
 
   // ── Sidebar toolbar buttons ──────────────────────────────────────
+  if (btnSearch) btnSearch.addEventListener('click', () => openSearchDialog());
   if (btnRecent) btnRecent.addEventListener('click', () => openRecentUpdatesTab());
   if (btnAI)     btnAI.addEventListener('click',     () => openAIChatTab());
   if (btnConfig) btnConfig.addEventListener('click', () => openConfigOverlay());
@@ -4333,6 +4567,59 @@ html, body {{ height:100%; margin:0; font-family:'Inter',sans-serif; background:
       document.querySelectorAll('.mv-overlay').forEach(o => o.remove());
     }
   });
+
+  // ── Locked/unlocked mode: fetch initial state, then poll so the desktop
+  //    shell and every browser session stay in sync when locked/unlocked
+  //    from any surface ────────────────────────────────────────────────
+  await refreshLockState();
+  setInterval(refreshLockState, 5000);
+
+  // ── Wait for backend data to be ready before loading tree ────────
+  // The desktop app loads data after startup; an external browser may
+  // open before issueDict is populated, so we poll /api/ready until
+  // ready === true, showing a live progress indicator meanwhile.
+  async function waitForReady() {
+    const homeView = document.getElementById('mv-home');
+    let loadingEl = null;
+    const showLoading = (msg, pct) => {
+      if (!loadingEl) {
+        loadingEl = document.createElement('div');
+        loadingEl.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;font-family:inherit;';
+        loadingEl.innerHTML = '<div style=\'width:48px;height:48px;border:4px solid var(--c-border);border-top-color:var(--c-accent);border-radius:50%;animation:spin .9s linear infinite;\'></div>'
+          + '<div id=\'ready-msg\' style=\'font-size:13px;color:var(--c-text-soft);text-align:center;max-width:320px;\'></div>'
+          + '<div style=\'width:260px;height:8px;background:var(--c-border);border-radius:4px;overflow:hidden;\'>'
+          + '<div id=\'ready-bar\' style=\'height:100%;width:0%;background:var(--c-accent);border-radius:4px;transition:width .4s;\'></div></div>';
+        if (homeView) homeView.innerHTML = '';
+        if (homeView) homeView.appendChild(loadingEl);
+      }
+      const msgEl = document.getElementById('ready-msg');
+      const barEl = document.getElementById('ready-bar');
+      if (msgEl) msgEl.textContent = msg;
+      if (barEl) barEl.style.width = Math.min(100, pct || 0) + '%';
+    };
+
+    while (true) {
+      try {
+        const r = await fetch('/api/ready');
+        if (r.ok) {
+          const d = await r.json();
+          if (d.ready) { break; }
+          if (d.inProgress && d.project) {
+            const pct = d.percent || 0;
+            const cnt = d.total > 0 ? ' (' + d.completed + '/' + d.total + ')' : '';
+            showLoading('Loading ' + d.project + cnt + '\u2026', pct);
+          } else {
+            showLoading('Starting up\u2026 please wait.', 5);
+          }
+        }
+      } catch { /* server not yet up */ }
+      await new Promise(res => setTimeout(res, 800));
+    }
+
+    // Restore the home splash image now that data is ready
+    if (homeView) homeView.innerHTML = '<div class=\'home-splash\'><img src=\'/static/images/MonoveraBackground.png\' alt=\'Monovera\' /></div>';
+  }
+  await waitForReady();
 
   await loadRoots();
   await expandRootLevelOnce();
